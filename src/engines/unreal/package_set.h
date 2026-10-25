@@ -63,6 +63,8 @@ public:
     std::vector<std::string> mapNames() const;
     const std::vector<std::string>& searchPaths() const { return paths_; }
     std::filesystem::path iniFile() const { return ini_; }
+    // The game folder open() was given (empty for sets built by hand).
+    const std::filesystem::path& gameDir() const { return gameDir_; }
 
 private:
     struct Entry {
@@ -78,6 +80,7 @@ private:
     std::vector<std::string> paths_;
     std::vector<std::string> mapExtensions_{".unr"};
     std::filesystem::path ini_;
+    std::filesystem::path gameDir_;
 };
 
 } // namespace reluva::unreal

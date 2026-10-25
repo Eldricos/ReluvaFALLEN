@@ -83,6 +83,7 @@ Error PackageSet::open(const std::filesystem::path& gameDir, std::string_view in
     paths_.clear();
     mapExtensions_ = {".unr"};
     ini_.clear();
+    gameDir_ = gameDir;
     const auto systemDir = fs::findDirectory(gameDir, "System");
     if (!systemDir)
         return Error::fail("No System folder in " + gameDir.string());

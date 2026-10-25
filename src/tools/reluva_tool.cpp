@@ -4531,6 +4531,12 @@ int cmdUeExtract(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", err.message.c_str());
             return 1;
         }
+        if (f.isPlaceholder()) {
+            const auto mp3 = streamedFile(set, *pkg, index);
+            std::printf("%s holds no sound: it's a placeholder for %s\n", base.c_str(),
+                        mp3 ? mp3->string().c_str() : ("mp3/" + base + ".mp3, which isn't there").c_str());
+            return 0;
+        }
         const std::string name = base + "." + reluva::fs::toLower(f.format);
         std::ofstream(name, std::ios::binary).write(reinterpret_cast<const char*>(f.data.data()), std::streamsize(f.data.size()));
         std::printf("Wrote %s (%zu bytes)\n", name.c_str(), f.data.size());
@@ -4604,18 +4610,12 @@ int cmdUeCheck(int argc, char** argv) {
                 else
                     record("textures", err);
             } else if (cls == "sound") {
-                EmbeddedFile f;
-                reluva::Error err = readEmbeddedFile(*pkg, int(i), f);
                 reluva::audio::Sound s;
-                if (!err && f.isPlaceholder()) {
-                    ++tallies["sounds (placeholders, nothing stored)"].ok;
-                    continue;
-                }
-                if (!err)
-                    err = decodeEmbeddedSound(f, s);
+                std::string from;
+                reluva::Error err = loadSound(set, *pkg, int(i), s, &from);
                 if (err)
                     err.message = pkg->path(int32_t(i) + 1) + ": " + err.message;
-                record("sounds", err);
+                record(from.empty() ? "sounds" : "sounds (streamed from mp3/)", err);
             } else if (cls == "music") {
                 EmbeddedFile f;
                 record("music", readEmbeddedFile(*pkg, int(i), f));

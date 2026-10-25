@@ -6,10 +6,13 @@
 #include "engines/unreal/properties.h"
 
 #include "common/audio/decode.h"
+#include "common/fs.h"
 
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 
 namespace reluva::unreal {
 
@@ -57,6 +60,33 @@ Error decodeEmbeddedSound(const EmbeddedFile& file, audio::Sound& out) {
         return Error::fail("format " + file.format + ", " + std::to_string(file.data.size()) + " bytes starting " +
                            head + " (\"" + text + "\"): " + err.message);
     }
+    return Error::success();
+}
+
+std::optional<std::filesystem::path> streamedFile(const PackageSet& packages, const Package& package, int index) {
+    if (packages.gameDir().empty() || index < 0 || size_t(index) >= package.exports().size())
+        return std::nullopt;
+    return fs::findFile(packages.gameDir(), "mp3/" + package.name(package.exports()[size_t(index)].objectName) + ".mp3");
+}
+
+Error loadSound(const PackageSet& packages, const Package& package, int index, audio::Sound& out, std::string* from) {
+    EmbeddedFile file;
+    if (Error err = readEmbeddedFile(package, index, file))
+        return err;
+    if (from)
+        from->clear();
+    if (!file.isPlaceholder())
+        return decodeEmbeddedSound(file, out);
+    const auto mp3 = streamedFile(packages, package, index);
+    if (!mp3)
+        return Error::fail("a placeholder with no sound in it, and no mp3/" +
+                           package.name(package.exports()[size_t(index)].objectName) + ".mp3");
+    std::ifstream in(*mp3, std::ios::binary);
+    const std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (Error err = audio::decodeSound(data, out))
+        return Error::fail(mp3->string() + ": " + err.message);
+    if (from)
+        *from = mp3->string();
     return Error::success();
 }
 

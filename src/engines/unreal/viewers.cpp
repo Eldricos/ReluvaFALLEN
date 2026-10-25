@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 
 namespace reluva::unreal {
 
@@ -358,20 +359,22 @@ void SoundViewer::play() {
     const Package* pkg = browser_.package();
     if (!pkg)
         return;
-    EmbeddedFile file;
     auto sound = std::make_shared<audio::Sound>();
-    if (Error err = readEmbeddedFile(*pkg, browser_.exportIndex(), file)) {
+    std::string from;
+    if (Error err = loadSound(ctx_.packages, *pkg, browser_.exportIndex(), *sound, &from)) {
         status_ = err.message;
-    } else if (Error derr = decodeEmbeddedSound(file, *sound)) {
-        status_ = derr.message;
     } else {
         char line[160];
-        std::snprintf(line, sizeof line, "%s %s, %d Hz, %d channel%s, %.2f s", file.format.c_str(),
-                      audio::formatName(sound->format), sound->rate, sound->channels, sound->channels == 1 ? "" : "s",
+        std::snprintf(line, sizeof line, "%s, %d Hz, %d channel%s, %.2f s", audio::formatName(sound->format),
+                      sound->rate, sound->channels, sound->channels == 1 ? "" : "s",
                       sound->rate ? double(sound->frames()) / sound->rate : 0.0);
         status_ = line;
+        if (!from.empty())
+            status_ += ", streamed from " + std::filesystem::path(from).filename().string();
+        // The Fallen's streamed sounds are its music.
+        const auto type = from.empty() ? audio::SoundType::Effects : audio::SoundType::Music;
         if (ctx_.mixer)
-            playing_ = ctx_.mixer->play(sound, audio::SoundType::Effects);
+            playing_ = ctx_.mixer->play(sound, type);
         else
             status_ += " (no audio output)";
     }
