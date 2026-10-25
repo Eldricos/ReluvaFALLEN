@@ -16,6 +16,7 @@
 #include "common/fs.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <map>
@@ -92,6 +93,11 @@ void MapViewer::load(int index) {
 
     start_ = {0, 0, 0};
     startYaw_ = 0;
+    using Clock = std::chrono::steady_clock;
+    const auto t0 = Clock::now();
+    auto ms = [](Clock::time_point a, Clock::time_point b) {
+        return std::chrono::duration<double, std::milli>(b - a).count();
+    };
     const Package* pkg = ctx_.packages.get(name);
     Model model;
     std::string modelError;
@@ -106,8 +112,11 @@ void MapViewer::load(int index) {
     }
 
     // The lightmaps, lit from the level's lights, as textures.
+    const auto tModel = Clock::now();
     const LevelLights lights = gatherLights(ctx_.packages, *pkg, model);
+    const auto tLights = Clock::now();
     const LightmapAtlas atlas = buildLightmaps(model, lights);
+    const auto tLightmaps = Clock::now();
     std::vector<gfx::TextureId> pages;
     for (const image::Image& page : atlas.pages) {
         gfx::TextureParams params;
@@ -212,6 +221,7 @@ void MapViewer::load(int index) {
     if (!indices.empty())
         if (Error err = renderer_->createMesh(vertices, indices, mesh_))
             error_ = err.message;
+    const auto tMesh = Clock::now();
 
     // Start at the first PlayerStart, or above the level's middle.
     for (int i = 0; i < 3; ++i)
@@ -252,6 +262,10 @@ void MapViewer::load(int index) {
                       st.lightmaps, st.lit, atlas.pages.size(), model.lights.size(), lights.unreadable, st.badFit);
         info_.push_back(line);
     }
+    std::snprintf(line, sizeof line,
+                  "loaded in %.0f ms: model %.0f, light actors %.0f, lightmaps %.0f, textures and mesh %.0f",
+                  ms(t0, tMesh), ms(t0, tModel), ms(tModel, tLights), ms(tLights, tLightmaps), ms(tLightmaps, tMesh));
+    info_.push_back(line);
     info_.push_back("Not drawn yet: movers, actors' meshes, the skybox, lights' effects (flicker, pulse...)");
 }
 

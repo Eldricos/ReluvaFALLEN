@@ -13,8 +13,12 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace reluva::unreal {
@@ -127,6 +131,8 @@ public:
     // The first export of that name (and class, unless empty), ignoring
     // case; -1 if none.
     int findExport(std::string_view objectName, std::string_view className = {}) const;
+    // Every export of that name, ignoring case, in table order.
+    const std::vector<int>& exportsNamed(std::string_view objectName) const;
     // Every export whose class has that name, ignoring case.
     std::vector<int> exportsOfClass(std::string_view className) const;
 
@@ -145,6 +151,10 @@ private:
     std::vector<NameEntry> names_;
     std::vector<Import> imports_;
     std::vector<Export> exports_;
+    std::unordered_map<std::string, std::vector<int>> byName_; // lower-case name -> exports
+    // The file, kept open for reading exports (opened on first use).
+    mutable std::unique_ptr<std::ifstream> stream_;
+    mutable std::mutex streamMutex_;
 };
 
 } // namespace reluva::unreal

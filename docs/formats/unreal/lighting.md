@@ -1,10 +1,11 @@
 # Unreal Engine 1: static lighting (lightmaps)
 
 Status: **implemented** (`src/engines/unreal/lighting.cpp`, drawn by the
-Maps page), tested on a level built by the unit tests. **Not yet checked
-on The Fallen's maps**: `reluva-tool ue-check` reports, per map, whether
-the lighting data reads and how the guesses below fitted; and how lit
-levels look has to be compared with the original running.
+Maps page). **Data checked on The Fallen** (`reluva-tool ue-check`,
+October 2026): every map's lighting reads, with no bytes left over after
+the model's last field; 345952 lightmaps over the 74 maps, every
+light actor's properties read. How lit levels look is still to be
+compared with the original running.
 
 Sources: public community documentation of the UE1 formats and of
 UnrealEd's light properties (as for [package.md](package.md)); the
@@ -45,8 +46,16 @@ page's info):
   grid, give or take a sample.
 - Grids no reading fits within two samples are counted `off fit`.
 
-When The Fallen's maps show which reading holds everywhere, the others
-can go.
+On The Fallen: the pan as offsets fits 345700 of the 345952 grids (pan
+as a point 3, bounds 249, none off fit), so that's the layout; the rest
+are likely degenerate surfaces. For the axes the first run counted
+322682 raw and 23270 unit, but a surface whose texture axes are unit
+length already counted as raw; `ue-check` now counts those apart
+("unit already"), to show which holds where they differ.
+
+The lights list holds each lightmap's lights in turn, so it repeats a
+light for every lightmap it reaches: up to 416997 entries (M01_KiraL1A)
+for a few hundred actors. Each actor is read once.
 
 ## Working out the light
 

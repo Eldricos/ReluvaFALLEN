@@ -217,10 +217,9 @@ ObjectRef PackageSet::resolve(const Package& from, int32_t ref) const {
     const std::string wanted = fs::toLower(from.name(imp.objectName));
     const std::string wantedClass = fs::toLower(from.name(imp.className));
     int fallback = -1;
-    for (size_t i = 0; i < target->exports().size(); ++i) {
-        const Export& e = target->exports()[i];
-        if (fs::toLower(target->name(e.objectName)) != wanted ||
-            fs::toLower(target->className(int32_t(i) + 1)) != wantedClass)
+    for (int i : target->exportsNamed(wanted)) {
+        const Export& e = target->exports()[size_t(i)];
+        if (fs::toLower(target->className(i + 1)) != wantedClass)
             continue;
         std::vector<std::string> outers;
         for (int32_t outer = e.package, depth = 0; isExport(outer) && size_t(exportIndex(outer)) < target->exports().size() && depth < 64; ++depth) {
@@ -229,9 +228,9 @@ ObjectRef PackageSet::resolve(const Package& from, int32_t ref) const {
             outer = o.package;
         }
         if (outers == groups)
-            return {target, int(i)};
+            return {target, i};
         if (fallback < 0)
-            fallback = int(i);
+            fallback = i;
     }
     return fallback >= 0 ? ObjectRef{target, fallback} : ObjectRef{};
 }

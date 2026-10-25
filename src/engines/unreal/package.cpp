@@ -140,6 +140,7 @@ Error Package::openMemory(std::vector<uint8_t> data, std::string name) {
 }
 
 Error Package::parse(const std::vector<uint8_t>& data) {
+    stream_.reset();
     names_.clear();
     imports_.clear();
     exports_.clear();
@@ -197,6 +198,9 @@ Error Package::parse(const std::vector<uint8_t>& data) {
     }
     if (!r.ok())
         return Error::fail("export table runs past the end or points outside the file");
+    byName_.clear();
+    for (size_t i = 0; i < exports_.size(); ++i)
+        byName_[fs::toLower(name(exports_[i].objectName))].push_back(int(i));
     return Error::success();
 }
 
@@ -252,14 +256,17 @@ std::string Package::importPackage(int index) const {
     return {};
 }
 
+const std::vector<int>& Package::exportsNamed(std::string_view objectName) const {
+    static const std::vector<int> none;
+    auto it = byName_.find(fs::toLower(objectName));
+    return it == byName_.end() ? none : it->second;
+}
+
 int Package::findExport(std::string_view objectName, std::string_view className) const {
-    const std::string wanted = fs::toLower(objectName), wantedClass = fs::toLower(className);
-    for (size_t i = 0; i < exports_.size(); ++i) {
-        if (fs::toLower(name(exports_[i].objectName)) != wanted)
-            continue;
-        if (wantedClass.empty() || fs::toLower(this->className(int32_t(i) + 1)) == wantedClass)
-            return int(i);
-    }
+    const std::string wantedClass = fs::toLower(className);
+    for (int i : exportsNamed(objectName))
+        if (wantedClass.empty() || fs::toLower(this->className(i + 1)) == wantedClass)
+            return i;
     return -1;
 }
 
@@ -283,9 +290,12 @@ Error Package::readExport(int index, std::vector<uint8_t>& out) const {
         std::memcpy(out.data(), memory_.data() + e.serialOffset, out.size());
         return Error::success();
     }
-    std::ifstream in(file_, std::ios::binary);
-    in.seekg(e.serialOffset);
-    if (!in.read(reinterpret_cast<char*>(out.data()), std::streamsize(out.size())))
+    std::lock_guard<std::mutex> lock(streamMutex_);
+    if (!stream_)
+        stream_ = std::make_unique<std::ifstream>(file_, std::ios::binary);
+    stream_->clear();
+    stream_->seekg(e.serialOffset);
+    if (!stream_->read(reinterpret_cast<char*>(out.data()), std::streamsize(out.size())))
         return Error::fail("Can't read " + name(e.objectName) + " from " + file_.string());
     return Error::success();
 }

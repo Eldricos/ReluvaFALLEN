@@ -41,6 +41,33 @@ bool readActor(const PackageSet& packages, const Package& package, int32_t ref, 
     return !beginObject(*obj.package, obj.exportIndex, r, props);
 }
 
+// A light actor's light; false if its properties don't read (it then
+// lights nothing).
+bool readLight(const PackageSet& packages, const Package& package, int32_t ref, LightSource& l) {
+    PropertyList props;
+    if (!readActor(packages, package, ref, props) || !props.vector("Location", l.position))
+        return false;
+    // Defaults as Engine.Light's: a steady white light of brightness 64
+    // and radius 64. Lights the level lists are lights, so a missing
+    // LightType counts as steady.
+    if (props.find("LightType") && props.byte("LightType") == 0)
+        return true;
+    l.color = lightColor(props.byte("LightHue"), props.byte("LightSaturation", 255), props.byte("LightBrightness", 64));
+    l.radius = kRadiusUnit * (float(props.byte("LightRadius", 64)) + 1);
+    const uint8_t effect = props.byte("LightEffect");
+    l.incidence = effect != kEffectNonIncidence;
+    if (effect == kEffectSpotlight || effect == kEffectStaticSpot) {
+        l.spot = true;
+        Rotator rot;
+        props.rotator("Rotation", rot);
+        const float pitch = float(rot.pitch) * 2 * kPi / 65536, yaw = float(rot.yaw) * 2 * kPi / 65536;
+        l.direction = {std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), std::sin(pitch)};
+        // LightCone 0-255 as 0-90 degrees off the axis.
+        l.cosCone = std::cos(float(props.byte("LightCone", 128)) / 256.0f * kPi / 2);
+    }
+    return true;
+}
+
 // The zone a surface is in: the zone on the front of its first node.
 std::vector<int> surfaceZones(const Model& model) {
     std::vector<int> zones(model.surfs.size(), 0);
@@ -87,40 +114,23 @@ LevelLights gatherLights(const PackageSet& packages, const Package& package, con
                                  props.byte("AmbientBrightness"));
         out.zoneAmbient.push_back(ambient);
     }
+    // The lights list repeats each light for every lightmap it reaches
+    // (hundreds of thousands of entries in a large level), so each actor
+    // is read once.
+    std::map<int32_t, LightSource> byRef;
     for (int32_t ref : model.lights) {
-        LightSource l;
-        PropertyList props;
         if (ref == 0) {
-            out.sources.push_back(l);
+            out.sources.push_back({});
             continue;
         }
-        if (!readActor(packages, package, ref, props) || !props.vector("Location", l.position)) {
-            ++out.unreadable;
-            out.sources.push_back(l);
-            continue;
+        auto it = byRef.find(ref);
+        if (it == byRef.end()) {
+            LightSource l;
+            if (!readLight(packages, package, ref, l))
+                ++out.unreadable;
+            it = byRef.emplace(ref, l).first;
         }
-        // Defaults as Engine.Light's: a steady white light of brightness
-        // 64 and radius 64. Lights the level lists are lights, so a
-        // missing LightType counts as steady.
-        if (props.find("LightType") && props.byte("LightType") == 0) {
-            out.sources.push_back(l);
-            continue;
-        }
-        l.color = lightColor(props.byte("LightHue"), props.byte("LightSaturation", 255),
-                             props.byte("LightBrightness", 64));
-        l.radius = kRadiusUnit * (float(props.byte("LightRadius", 64)) + 1);
-        const uint8_t effect = props.byte("LightEffect");
-        l.incidence = effect != kEffectNonIncidence;
-        if (effect == kEffectSpotlight || effect == kEffectStaticSpot) {
-            l.spot = true;
-            Rotator rot;
-            props.rotator("Rotation", rot);
-            const float pitch = float(rot.pitch) * 2 * kPi / 65536, yaw = float(rot.yaw) * 2 * kPi / 65536;
-            l.direction = {std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), std::sin(pitch)};
-            // LightCone 0-255 as 0-90 degrees off the axis.
-            l.cosCone = std::cos(float(props.byte("LightCone", 128)) / 256.0f * kPi / 2);
-        }
-        out.sources.push_back(l);
+        out.sources.push_back(it->second);
     }
     return out;
 }
@@ -214,7 +224,10 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
         const Fit unit = lu > 0 && lv > 0 ? fit(scale(tu, 1 / lu), scale(tv, 1 / lv)) : raw;
         const bool useUnit = unit.score < raw.score;
         const Fit& f = useUnit ? unit : raw;
-        ++(useUnit ? atlas.stats.unitAxes : atlas.stats.rawAxes);
+        if (std::fabs(lu - 1) < 1e-3f && std::fabs(lv - 1) < 1e-3f)
+            ++atlas.stats.sameAxes;
+        else
+            ++(useUnit ? atlas.stats.unitAxes : atlas.stats.rawAxes);
         if (f.score > 2 || m.uScale <= 0 || m.vScale <= 0)
             ++atlas.stats.badFit;
         const float us = m.uScale > 0 ? m.uScale : std::max(1.0f, (f.maxU - f.minU) / float(std::max(1, m.uClamp - 1)));

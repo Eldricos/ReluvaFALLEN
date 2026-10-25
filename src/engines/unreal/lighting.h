@@ -69,7 +69,9 @@ struct LightmapAtlas {
     // lighting.md), for checking the guesses against a game's data.
     struct Stats {
         int lightmaps = 0, lit = 0;      // surfaces with a lightmap; their samples some light reached
-        int rawAxes = 0, unitAxes = 0;   // grid along the texture axes as stored, or made unit length
+        // Grid along the texture axes as stored, or made unit length (only
+        // counted where they differ; sameAxes where they're unit already).
+        int rawAxes = 0, unitAxes = 0, sameAxes = 0;
         int panOffset = 0, panPoint = 0, fromBounds = 0; // where the grid starts
         int badFit = 0;                  // surfaces no guess fitted (drawn with the closest)
         int tooLarge = 0;                // lightmaps larger than a page (drawn with ambient light)
