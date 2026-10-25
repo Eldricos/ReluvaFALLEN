@@ -4597,11 +4597,20 @@ int cmdUeCheck(int argc, char** argv) {
             const std::string cls = reluva::fs::toLower(pkg->className(int32_t(i) + 1));
             if (isTextureClass(cls)) {
                 reluva::image::Image img;
-                record("textures", decodeTexture(set, *pkg, int(i), img));
+                TextureInfo info;
+                const reluva::Error err = decodeTexture(set, *pkg, int(i), img, &info);
+                if (!err && !info.standIn.empty())
+                    ++tallies["textures (procedural, stand-in shown)"].ok;
+                else
+                    record("textures", err);
             } else if (cls == "sound") {
                 EmbeddedFile f;
                 reluva::Error err = readEmbeddedFile(*pkg, int(i), f);
                 reluva::audio::Sound s;
+                if (!err && f.isPlaceholder()) {
+                    ++tallies["sounds (placeholders, nothing stored)"].ok;
+                    continue;
+                }
                 if (!err)
                     err = decodeEmbeddedSound(f, s);
                 if (err)

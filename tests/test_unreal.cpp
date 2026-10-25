@@ -503,9 +503,55 @@ static void testSoundErrors() {
     EmbeddedFile f;
     f.format = "OGG";
     f.data = {'O', 'g', 'g', 'S', 0, 2};
+    f.data.resize(20);
     audio::Sound s;
     const Error err = decodeEmbeddedSound(f, s);
-    CHECK(err && err.message.find("format OGG, 6 bytes starting 4f 67 67 53 00 02 (\"OggS\")") == 0);
+    CHECK(!f.isPlaceholder());
+    CHECK(err && err.message.find("format OGG, 20 bytes starting 4f 67 67 53 00 02 00 00 (\"OggS\")") == 0);
+    // The Fallen's empty sounds.
+    f.format = "wav";
+    f.data = {'X', ' ', '\r', '\n'};
+    CHECK(f.isPlaceholder() && decodeEmbeddedSound(f, s).message.find("placeholder") != std::string::npos);
+}
+
+static void testProceduralTextures() {
+    // A FireTexture and a WetTexture that store no pixels, over the
+    // masked P8 texture and palette of texturePackage().
+    PackageWriter w;
+    const int32_t walls = w.addImport("Core", "Package", 0, "Walls");
+    const int32_t brick = w.addImport("Engine", "Texture", walls, "Brick");
+    const int32_t pal = w.addImport("Engine", "Palette", walls, "BrickPal");
+    const int32_t fire = w.addImport("Fire", "Class", 0, "FireTexture");
+    const int32_t wet = w.addImport("Fire", "Class", 0, "WetTexture");
+    auto empty = [&](int32_t ref, const char* prop, int width, int height) {
+        Bytes o;
+        tag(o, w, prop, PropertyType::Object, 1);
+        o.index(ref);
+        endProps(o, w);
+        o.index(1);
+        o.i32(0), o.index(0), o.i32(width), o.i32(height), o.u8(0), o.u8(0);
+        return o.b;
+    };
+    w.addExport(fire, 0, "Flames", empty(pal, "Palette", 2, 4));
+    w.addExport(wet, 0, "Ripples", empty(brick, "SourceTexture", 8, 4));
+    w.addExport(fire, 0, "Nothing", empty(0, "Palette", 2, 2));
+    PackageSet set;
+    set.addMemory("Walls", ".utx", texturePackage());
+    set.addMemory("Fx", ".utx", w.build());
+    const Package* p = set.get("Fx");
+    CHECK(p != nullptr);
+    if (!p)
+        return;
+    image::Image img;
+    TextureInfo info;
+    CHECK(!decodeTexture(set, *p, 0, img, &info));
+    CHECK(img.w == 2 && img.h == 4 && info.standIn.find("FireTexture") == 0);
+    CHECK(img.pixel(0, 0)[0] == 0 && img.pixel(1, 3)[0] == 255 && img.pixel(1, 3)[3] == 255); // dark to bright
+    CHECK(!decodeTexture(set, *p, 1, img, &info));
+    CHECK(img.w == 8 && img.h == 4 && info.standIn.find("Walls.Brick") != std::string::npos);
+    CHECK(img.pixel(2, 0)[0] == 1 && img.pixel(7, 3)[0] == 7); // Brick's pixels, scaled up
+    const Error err = decodeTexture(set, *p, 2, img, &info);
+    CHECK(err && err.message.find("no stand-in") != std::string::npos);
 }
 
 static void testMapExtension() {
@@ -534,6 +580,7 @@ int main() {
     testSearchPathsAndDetection();
     testCompressedTexture();
     testSoundErrors();
+    testProceduralTextures();
     testMapExtension();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

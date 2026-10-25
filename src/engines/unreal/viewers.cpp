@@ -308,6 +308,8 @@ void TextureViewer::draw() {
                   info.mipCount, info.masked ? ", masked" : "", info.paletteName.empty() ? "" : ", palette ",
                   info.paletteName.c_str());
     text(4, 4 + lh, line, {150, 200, 255});
+    if (!info.standIn.empty())
+        text(4, 4 + 2 * lh, "Stored without pixels: " + info.standIn, {255, 200, 120});
 }
 
 // --- SoundViewer ------------------------------------------------------------------------

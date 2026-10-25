@@ -9,6 +9,7 @@
 
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 
 namespace reluva::unreal {
 
@@ -35,7 +36,13 @@ Error readEmbeddedFile(const Package& package, int index, EmbeddedFile& out) {
     return Error::success();
 }
 
+bool EmbeddedFile::isPlaceholder() const {
+    return data.size() < 16 && !(data.size() >= 4 && std::memcmp(data.data(), "RIFF", 4) == 0);
+}
+
 Error decodeEmbeddedSound(const EmbeddedFile& file, audio::Sound& out) {
+    if (file.isPlaceholder())
+        return Error::fail("a placeholder with no sound in it (" + std::to_string(file.data.size()) + " bytes)");
     if (Error err = audio::decodeSound(file.data, out)) {
         std::string head;
         for (size_t i = 0; i < file.data.size() && i < 8; ++i) {

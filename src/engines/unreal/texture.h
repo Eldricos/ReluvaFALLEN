@@ -51,10 +51,17 @@ struct TextureInfo {
     bool masked = false;     // palette index 0 is see-through
     uint32_t polyFlags = 0;  // how surfaces using it draw by default
     std::string paletteName; // the palette's path, for viewers
+    // Set when the texture stores no pixels (a procedural texture, made
+    // while the game runs) and a stand-in was decoded instead: what it is.
+    std::string standIn;
 };
 
 // Decodes a texture's first mipmap to RGBA. The palette is looked up
 // through `packages` (it can be in another package, though it rarely is).
+// Procedural textures that store no pixels get a still stand-in of their
+// size (see TextureInfo::standIn): Wet and Ice textures their source
+// texture, the others (Fire, Wave, Water) a gradient through their
+// palette, until their effects are worked out.
 Error decodeTexture(const PackageSet& packages, const Package& package, int exportIndex, image::Image& out,
                     TextureInfo* info = nullptr);
 

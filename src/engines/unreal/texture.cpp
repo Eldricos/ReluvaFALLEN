@@ -86,10 +86,16 @@ void decodeDxt1(const uint8_t* src, size_t size, int w, int h, image::Image& out
         }
 }
 
+// A stand-in for a procedural texture without pixels, `w` x `h`: the
+// texture it distorts (scaled to its size), or a gradient through its
+// palette, brightest at the bottom as flames rise.
+Error proceduralStandIn(const PackageSet& packages, const Package& package, const PropertyList& props, int w, int h,
+                        int depth, image::Image& out, std::string& what);
+
 } // namespace
 
-Error decodeTexture(const PackageSet& packages, const Package& package, int index, image::Image& out,
-                    TextureInfo* info) {
+static Error decodeAt(const PackageSet& packages, const Package& package, int index, image::Image& out,
+                      TextureInfo* info, int depth) {
     std::vector<uint8_t> data;
     if (Error err = package.readExport(index, data))
         return err;
@@ -157,10 +163,20 @@ Error decodeTexture(const PackageSet& packages, const Package& package, int inde
         return Error::fail(what + ": bad size " + std::to_string(ti.width) + "x" + std::to_string(ti.height));
     if (info)
         *info = ti;
-    if (mip->size == 0)
-        return Error::fail(what + " (" + package.className(index + 1) + ", " + formatName(ti.format) + " " +
-                           std::to_string(ti.width) + "x" + std::to_string(ti.height) +
-                           "): no pixels stored" + (props.find("bHasComp") ? "" : ", and no bHasComp"));
+    if (mip->size == 0) {
+        const std::string cls = package.className(index + 1);
+        const std::string described = what + " (" + cls + ", " + formatName(ti.format) + " " +
+                                      std::to_string(ti.width) + "x" + std::to_string(ti.height) + ")";
+        if (!isTextureClass(cls) || fs::toLower(cls) == "texture")
+            return Error::fail(described + ": no pixels stored" +
+                               (props.find("bHasComp") ? "" : ", and no bHasComp"));
+        std::string standIn;
+        if (Error err = proceduralStandIn(packages, package, props, ti.width, ti.height, depth, out, standIn))
+            return Error::fail(described + ": no pixels stored, and no stand-in: " + err.message);
+        if (info)
+            info->standIn = cls + " (procedural), shown as " + standIn;
+        return Error::success();
+    }
     const int32_t size = mip->size;
     const uint8_t* src = data.data() + (mip->dataAt - size_t(e.serialOffset));
     const size_t pixels = size_t(ti.width) * size_t(ti.height);
@@ -217,6 +233,51 @@ Error decodeTexture(const PackageSet& packages, const Package& package, int inde
     default:
         return Error::fail(what + ": format " + formatName(ti.format) + " isn't supported yet");
     }
+}
+
+namespace {
+
+Error proceduralStandIn(const PackageSet& packages, const Package& package, const PropertyList& props, int w, int h,
+                        int depth, image::Image& out, std::string& what) {
+    out.w = w;
+    out.h = h;
+    out.rgba.assign(size_t(w) * size_t(h) * 4, 0);
+    for (const char* name : {"SourceTexture", "GlassTexture"}) {
+        const int32_t ref = props.object(name);
+        const ObjectRef src = packages.resolve(package, ref);
+        image::Image img;
+        if (!src || depth > 4 || decodeAt(packages, *src.package, src.exportIndex, img, nullptr, depth + 1))
+            continue;
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                std::copy_n(img.pixel(x * img.w / w, y * img.h / h), 4, out.pixel(x, y));
+        what = "its " + std::string(name) + " " + package.path(ref);
+        return Error::success();
+    }
+    const int32_t paletteRef = props.object("Palette");
+    const ObjectRef pal = packages.resolve(package, paletteRef);
+    Palette palette;
+    if (!pal)
+        return Error::fail("no source texture or palette");
+    if (Error err = readPalette(*pal.package, pal.exportIndex, palette))
+        return err;
+    for (int y = 0; y < h; ++y) {
+        const int c = h > 1 ? y * 255 / (h - 1) : 255;
+        for (int x = 0; x < w; ++x) {
+            uint8_t* p = out.pixel(x, y);
+            std::copy_n(palette.rgba.data() + size_t(c) * 4, 3, p);
+            p[3] = 255;
+        }
+    }
+    what = "a gradient through its palette";
+    return Error::success();
+}
+
+} // namespace
+
+Error decodeTexture(const PackageSet& packages, const Package& package, int index, image::Image& out,
+                    TextureInfo* info) {
+    return decodeAt(packages, package, index, out, info, 0);
 }
 
 } // namespace reluva::unreal

@@ -1,10 +1,11 @@
 # Unreal Engine 1: textures and palettes
 
 Status: **implemented** (`src/engines/unreal/texture.cpp`) for P8, DXT1,
-RGB8 and RGBA8. On The Fallen every palette reads; some textures (cloak
-and turret effects, `JemCLoakFx04`, `LTurretLaser01`) have a first
-mipmap with no pixels, which led to the compressed list below being read.
-Sources as in [package.md](package.md).
+RGB8 and RGBA8. **Checked on The Fallen** (`reluva-tool ue-check`,
+October 2026): all 3801 palettes read and 4029 of 4211 textures decode.
+The other 182 were procedural textures (FireTexture, WetTexture...: force
+fields, cloaks, turret beams, explosion waves) that store no pixels at
+all; they now get a stand-in (below). Sources as in [package.md](package.md).
 
 ## Palette
 
@@ -37,5 +38,12 @@ A texture with neither (no pixels, no `bHasComp`) is reported as such:
 which of The Fallen's are like that, and why, is still to be checked.
 
 Procedural textures (FireTexture, WaterTexture, WetTexture, WaveTexture,
-IceTexture, ScriptedTexture) are laid out the same and decode to their
-stored first frame; animating them isn't done yet.
+IceTexture, ScriptedTexture) are laid out the same. In The Fallen they
+store a top mipmap of their size with no pixels: the engine makes them
+while the game runs. Until those effects are worked out (from watching
+the game: the flames' spread, the ripples), Reluva shows a still
+stand-in of the right size, so surfaces' texture coordinates come out
+right: for Wet and Ice textures the texture they distort (their
+`SourceTexture` or `GlassTexture` property), scaled to their size; for
+the others a gradient through their palette, colour 0 at the top to 255
+at the bottom. The Textures page says which it is.

@@ -1,11 +1,13 @@
 # Unreal Engine 1: sounds and music
 
 Status: **implemented** (`src/engines/unreal/sound.cpp`) for Sound; the
-same reader extracts Music. **On The Fallen** 2868 of 2930 sounds decode;
-62 (looping ones such as `Looping_Fear.moan_fear_lp`, and music cues such
-as `Trks_MagicBeaut.orb_thme`) hold something other than a WAVE file,
-still to be identified: `ue-check` now reports each one's format name and
-first bytes. Sources as in [package.md](package.md).
+same reader extracts Music. **Checked on The Fallen** (October 2026): 2868 of
+2930 sounds decode. The other 62 (looping ones such as
+`Looping_Fear.moan_fear_lp`, music cues such as `Trks_MagicBeaut.orb_thme`)
+are placeholders: format `wav` but only the 4 bytes `58 20 0d 0a`
+("X \r\n"), nothing to play. Reluva treats anything under 16 bytes that
+isn't RIFF as one. Whether the game plays something else in their place
+(another file, streamed music) is still to be found out. Sources as in [package.md](package.md).
 
 Sound and Music objects hold a whole file:
 

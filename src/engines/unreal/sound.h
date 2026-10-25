@@ -19,6 +19,9 @@ namespace reluva::unreal {
 struct EmbeddedFile {
     std::string format; // the object's Format name: "WAV", "IT", "S3M"...
     std::vector<uint8_t> data;
+    // A few bytes that aren't a sound: The Fallen keeps some sounds as
+    // the 4 bytes "X \r\n", with nothing to play.
+    bool isPlaceholder() const;
 };
 
 // The file a Sound or Music object holds.
