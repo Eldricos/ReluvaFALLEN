@@ -107,24 +107,62 @@ Error decodeTexture(const PackageSet& packages, const Package& package, int inde
     const int32_t paletteRef = props.object("Palette");
     ti.paletteName = paletteRef ? package.path(paletteRef) : std::string();
 
-    // The mipmaps, largest first; only the first is decoded.
-    ti.mipCount = r.index();
-    if (!r.ok() || ti.mipCount <= 0 || ti.mipCount > 16)
-        return Error::fail(what + ": " + std::to_string(ti.mipCount) + " mipmaps");
-    if (package.version() >= 63)
-        r.i32(); // where the data ends, to skip it
-    const int32_t size = r.index();
-    if (!r.ok() || size < 0 || size_t(size) > r.remaining())
-        return Error::fail(what + ": mipmap data runs past the end");
-    const size_t dataAt = r.pos();
-    r.skip(size_t(size));
-    ti.width = r.i32();
-    ti.height = r.i32();
-    if (!r.ok() || ti.width <= 0 || ti.height <= 0 || ti.width > 8192 || ti.height > 8192)
+    // The mipmaps, largest first; only the first is decoded. A texture
+    // with bHasComp set also keeps a second list, in CompFormat (DXT1),
+    // after the first; its first list's pixels may then be empty.
+    struct Mip {
+        size_t dataAt = 0;
+        int32_t size = 0;
+        int width = 0, height = 0;
+    };
+    auto readMips = [&](std::vector<Mip>& mips) -> Error {
+        const int32_t count = r.index();
+        if (!r.ok() || count < 0 || count > 16)
+            return Error::fail(what + ": " + std::to_string(count) + " mipmaps");
+        mips.resize(size_t(count));
+        for (Mip& m : mips) {
+            if (package.version() >= 63)
+                r.i32(); // where the data ends, to skip it
+            m.size = r.index();
+            if (!r.ok() || m.size < 0 || size_t(m.size) > r.remaining())
+                return Error::fail(what + ": mipmap data runs past the end");
+            m.dataAt = r.pos();
+            r.skip(size_t(m.size));
+            m.width = r.i32();
+            m.height = r.i32();
+            r.u8(); // log2 of the width and height
+            r.u8();
+            if (!r.ok())
+                return Error::fail(what + ": mipmaps run past the end");
+        }
+        return Error::success();
+    };
+    std::vector<Mip> mips, compMips;
+    if (Error err = readMips(mips))
+        return err;
+    if (props.boolean("bHasComp"))
+        if (Error err = readMips(compMips))
+            return err;
+    const Mip* mip = mips.empty() ? nullptr : &mips[0];
+    if ((!mip || mip->size == 0) && !compMips.empty()) {
+        mip = &compMips[0];
+        ti.format = props.byte("CompFormat", uint8_t(TextureFormat::DXT1));
+    }
+    ti.mipCount = int(mips.size());
+    if (!mip)
+        return Error::fail(what + ": no mipmaps");
+    ti.width = mip->width;
+    ti.height = mip->height;
+    if (ti.width <= 0 || ti.height <= 0 || ti.width > 8192 || ti.height > 8192)
         return Error::fail(what + ": bad size " + std::to_string(ti.width) + "x" + std::to_string(ti.height));
     if (info)
         *info = ti;
-    const uint8_t* src = data.data() + (dataAt - size_t(e.serialOffset));
+    if (mip->size == 0)
+        return Error::fail(what + " (" + package.className(index + 1) + ", " + formatName(ti.format) + " " +
+                           std::to_string(ti.width) + "x" + std::to_string(ti.height) +
+                           "): no pixels stored" + (props.find("bHasComp") ? "" : ", and no bHasComp"));
+    const int32_t size = mip->size;
+    const uint8_t* src = data.data() + (mip->dataAt - size_t(e.serialOffset));
     const size_t pixels = size_t(ti.width) * size_t(ti.height);
 
     out.w = ti.width;

@@ -156,15 +156,26 @@ void PackageViewer::draw() {
     }
 }
 
+namespace {
+
+// The packages of one kind (".utx"), then the maps, then the code
+// packages, which can carry their own textures and sounds too.
+std::vector<std::string> browsedPackages(const PackageSet& packages, const char* extension) {
+    std::vector<std::string> out = packages.names(extension);
+    for (std::string& n : packages.mapNames())
+        out.push_back(std::move(n));
+    for (std::string& n : packages.names(".u"))
+        out.push_back(std::move(n));
+    return out;
+}
+
+} // namespace
+
 // --- ObjectBrowser ----------------------------------------------------------------------
 
-ObjectBrowser::ObjectBrowser(const PackageSet& packages, std::vector<std::string> extensions,
+ObjectBrowser::ObjectBrowser(const PackageSet& packages, std::vector<std::string> names,
                              bool (*wanted)(std::string_view))
-    : packages_(packages), wanted_(wanted) {
-    for (const std::string& ext : extensions)
-        for (std::string& n : packages.names(ext))
-            names_.push_back(std::move(n));
-}
+    : packages_(packages), wanted_(wanted), names_(std::move(names)) {}
 
 bool ObjectBrowser::load(int package) {
     package_ = package;
@@ -227,7 +238,7 @@ std::string ObjectBrowser::where() const {
 // --- TextureViewer ----------------------------------------------------------------------
 
 TextureViewer::TextureViewer(ViewerContext& ctx)
-    : Page(ctx), browser_(ctx.packages, {".utx", ".unr", ".u"}, isTextureClass) {}
+    : Page(ctx), browser_(ctx.packages, browsedPackages(ctx.packages, ".utx"), isTextureClass) {}
 
 void TextureViewer::activate() {
     if (!started_) {
@@ -305,7 +316,7 @@ namespace {
 bool isSoundClass(std::string_view c) { return fs::toLower(c) == "sound"; }
 } // namespace
 
-SoundViewer::SoundViewer(ViewerContext& ctx) : Page(ctx), browser_(ctx.packages, {".uax", ".unr", ".u"}, isSoundClass) {}
+SoundViewer::SoundViewer(ViewerContext& ctx) : Page(ctx), browser_(ctx.packages, browsedPackages(ctx.packages, ".uax"), isSoundClass) {}
 
 SoundViewer::~SoundViewer() { deactivate(); }
 
@@ -349,8 +360,8 @@ void SoundViewer::play() {
     auto sound = std::make_shared<audio::Sound>();
     if (Error err = readEmbeddedFile(*pkg, browser_.exportIndex(), file)) {
         status_ = err.message;
-    } else if (Error derr = audio::decodeSound(file.data, *sound)) {
-        status_ = file.format + ": " + derr.message;
+    } else if (Error derr = decodeEmbeddedSound(file, *sound)) {
+        status_ = derr.message;
     } else {
         char line[160];
         std::snprintf(line, sizeof line, "%s %s, %d Hz, %d channel%s, %.2f s", file.format.c_str(),

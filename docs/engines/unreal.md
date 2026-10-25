@@ -29,7 +29,7 @@ they go in. Never use Epic's licensee source code (leaked or otherwise).
 
 | Part | State |
 |---|---|
-| Detection | The Fallen by file names (`System/DS9.ini` or `System/DS9.exe`, with `Core.u` and `Engine.u`), shown as "unknown release" until hashes from owned copies are added (`reluva --hash`); any other UE1 game as unidentified |
+| Detection | The Fallen: one Windows release by `DS9.exe` and `Engine.u`'s hashes; others by file names (`System/DS9.ini` or `System/DS9.exe`, with `Core.u` and `Engine.u`), shown as "unknown release"; any other UE1 game as unidentified |
 | Packages | header, name, import and export tables, any version 61-69 ([package.md](../formats/unreal/package.md)); found by name through the `.ini`'s `[Core.System] Paths` (`package_set.cpp`); imports resolved to the package that defines them |
 | Properties | tagged properties of every type, state frames ([package.md](../formats/unreal/package.md)) |
 | Textures | P8 with palettes (masked colour 0), DXT1, RGB8, RGBA8 ([texture.md](../formats/unreal/texture.md)) |
@@ -39,9 +39,12 @@ they go in. Never use Epic's licensee source code (leaked or otherwise).
 | Viewer | Maps (3D, fly camera from the PlayerStart), Textures, Sounds, Packages (tables and properties) |
 | Game | not started: UnrealScript bytecode VM, actors, collision, input, HUD/menus |
 
-**Not yet checked against the retail data.** Everything above is tested
-on packages built by `tests/test_unreal.cpp`, not on The Fallen's files.
-The first job with the game installed is:
+**First check against the retail data** (October 2026): all 175 packages
+open (versions 71-73), all 3801 palettes and 2868 of 2930 sounds decode.
+That run found The Fallen's maps are `.dsm`, which the level check then
+skipped, some textures keep their pixels elsewhere (see
+[texture.md](../formats/unreal/texture.md)) and 62 sounds aren't WAVE
+files; levels are still to be checked. To check again:
 
 ```sh
 ./build/reluva-tool ue-check "/path/to/DS9TheFallen"      # every package, texture, sound, level

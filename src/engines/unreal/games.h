@@ -15,7 +15,7 @@ namespace reluva::unreal {
 struct GameInfo {
     const char* gameId;  // stable id stored in the config
     const char* name;    // shown to the user
-    const char* iniName; // its settings in System/, which list where packages are
+    const char* iniName; // its settings in System/, which list where packages are (else Default.ini)
 };
 
 const std::vector<GameInfo>& games();

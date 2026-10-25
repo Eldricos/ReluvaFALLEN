@@ -5,6 +5,11 @@
 
 #include "engines/unreal/properties.h"
 
+#include "common/audio/decode.h"
+
+#include <cctype>
+#include <cstdio>
+
 namespace reluva::unreal {
 
 Error readEmbeddedFile(const Package& package, int index, EmbeddedFile& out) {
@@ -27,6 +32,24 @@ Error readEmbeddedFile(const Package& package, int index, EmbeddedFile& out) {
         return Error::fail(what + ": data runs past the end");
     out.data.resize(size_t(size));
     r.bytes(out.data.data(), out.data.size());
+    return Error::success();
+}
+
+Error decodeEmbeddedSound(const EmbeddedFile& file, audio::Sound& out) {
+    if (Error err = audio::decodeSound(file.data, out)) {
+        std::string head;
+        for (size_t i = 0; i < file.data.size() && i < 8; ++i) {
+            char hex[4];
+            std::snprintf(hex, sizeof hex, "%02x", file.data[i]);
+            head += hex;
+            head += i == 7 || i + 1 == file.data.size() ? "" : " ";
+        }
+        std::string text;
+        for (size_t i = 0; i < file.data.size() && i < 4; ++i)
+            text += std::isprint(file.data[i]) ? char(file.data[i]) : '.';
+        return Error::fail("format " + file.format + ", " + std::to_string(file.data.size()) + " bytes starting " +
+                           head + " (\"" + text + "\"): " + err.message);
+    }
     return Error::success();
 }
 

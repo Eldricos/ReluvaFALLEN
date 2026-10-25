@@ -27,15 +27,24 @@ namespace {
 // Built with `reluva --hash`: the size and the MD5 of the first
 // kDetectionHashBytes bytes of each file.
 //
-// TODO: add The Fallen's releases (retail 1.0, the patches, other
-// languages, Mac) from owned copies. Until then it's found by name below.
+// Detection keys on the executable and Engine.u, which a patch would
+// both replace.
+//
+// TODO: add The Fallen's other releases (other patch levels, languages,
+// Mac) from owned copies. Until then they're found by name below.
 const std::vector<GameVariant>& detectionTable() {
-    static const std::vector<GameVariant> table = {};
+    static const std::vector<GameVariant> table = {
+        // Windows install, packages of versions 71-73 (reported October 2026).
+        {"ds9fallen", "Star Trek: Deep Space Nine - The Fallen", "en", "windows",
+         {{"System/DS9.exe", "0bbf37d2d1b0d023fafb3f727f975507", 604291},
+          {"System/Engine.u", "4127f15b637f34af3a23efc7758b9d47", 4356401}}},
+    };
     return table;
 }
 
-// The Fallen's settings are System/DS9.ini (TrekCore's support pages tell
-// players to edit it); its executable is expected to be System/DS9.exe.
+// The Fallen's executable is System/DS9.exe; its settings are
+// System/DS9.ini (TrekCore's support pages tell players to edit it),
+// made from System/Default.ini when the game first runs.
 const std::vector<GameVariant>& fallbackTable() {
     static const std::vector<GameVariant> table = {
         {"ds9fallen", "Star Trek: Deep Space Nine - The Fallen (unknown release)", "", "windows",

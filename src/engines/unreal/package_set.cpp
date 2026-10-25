@@ -81,6 +81,7 @@ Error PackageSet::open(const std::filesystem::path& gameDir, std::string_view in
                        std::vector<std::string>* warnings) {
     entries_.clear();
     paths_.clear();
+    mapExtensions_ = {".unr"};
     ini_.clear();
     const auto systemDir = fs::findDirectory(gameDir, "System");
     if (!systemDir)
@@ -95,9 +96,11 @@ Error PackageSet::open(const std::filesystem::path& gameDir, std::string_view in
             ini_ = file;
         }
     };
-    if (!iniName.empty())
-        if (auto file = fs::findFile(*systemDir, iniName))
-            readIni(*file);
+    // The game's own settings, else the defaults it makes them from.
+    for (std::string_view name : {iniName, std::string_view("Default.ini")})
+        if (paths_.empty() && !name.empty())
+            if (auto file = fs::findFile(*systemDir, name))
+                readIni(*file);
     if (paths_.empty()) {
         std::error_code ec;
         std::vector<std::filesystem::path> inis;
@@ -127,6 +130,9 @@ Error PackageSet::open(const std::filesystem::path& gameDir, std::string_view in
             continue;
         }
         const std::string ext = pattern.substr(1);
+        const std::string lastFolder = fs::toLower(std::filesystem::path(folder).filename().string());
+        if (lastFolder == "maps" && std::find(mapExtensions_.begin(), mapExtensions_.end(), ext) == mapExtensions_.end())
+            mapExtensions_.push_back(ext);
         const auto dir = resolveFolder(*systemDir, folder);
         if (!dir) {
             if (warnings)
@@ -241,6 +247,19 @@ std::vector<std::string> PackageSet::names(std::string_view extension) const {
 std::string PackageSet::extension(std::string_view name) const {
     auto it = entries_.find(fs::toLower(name));
     return it == entries_.end() ? std::string() : it->second.extension;
+}
+
+bool PackageSet::isMap(std::string_view name) const {
+    const std::string ext = extension(name);
+    return !ext.empty() && std::find(mapExtensions_.begin(), mapExtensions_.end(), ext) != mapExtensions_.end();
+}
+
+std::vector<std::string> PackageSet::mapNames() const {
+    std::vector<std::string> out;
+    for (const auto& [key, e] : entries_)
+        if (isMap(key))
+            out.push_back(e.name);
+    return out;
 }
 
 } // namespace reluva::unreal

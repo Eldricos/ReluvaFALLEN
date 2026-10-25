@@ -7,6 +7,7 @@
 // almost always a RIFF WAVE, kept inside the object. Music (.umx) is stored
 // the same way, as tracker modules. See docs/formats/unreal/sound.md.
 
+#include "common/audio/sound.h"
 #include "engines/unreal/package.h"
 
 #include <cstdint>
@@ -22,5 +23,9 @@ struct EmbeddedFile {
 
 // The file a Sound or Music object holds.
 Error readEmbeddedFile(const Package& package, int exportIndex, EmbeddedFile& out);
+
+// Decodes a Sound's file; when it can't, the error says what the file is
+// (its format name, size and first bytes), to work out unknown kinds.
+Error decodeEmbeddedSound(const EmbeddedFile& file, audio::Sound& out);
 
 } // namespace reluva::unreal

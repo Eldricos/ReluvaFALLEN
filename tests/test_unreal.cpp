@@ -462,6 +462,68 @@ static void testSearchPathsAndDetection() {
     CHECK(findEngine("unreal") != nullptr);
 }
 
+static void testCompressedTexture() {
+    // An empty P8 mipmap, and the pixels in the bHasComp list as DXT1.
+    PackageWriter w;
+    const int32_t cls = w.addImport("Engine", "Class", 0, "Texture");
+    Bytes o;
+    tag(o, w, "bHasComp", PropertyType::Bool, 0);
+    o.b.back() |= 0x80;
+    tag(o, w, "CompFormat", PropertyType::Byte, 1);
+    o.u8(3);
+    endProps(o, w);
+    o.index(1);
+    o.i32(0), o.index(0), o.i32(4), o.i32(4), o.u8(2), o.u8(2);
+    o.index(1);
+    o.i32(0), o.index(8);
+    o.u16(0xf800), o.u16(0x001f), o.u32(0x55555555); // red and blue; every pixel index 1 (blue)
+    o.i32(4), o.i32(4), o.u8(2), o.u8(2);
+    w.addExport(cls, 0, "Shiny", o.b);
+    // One with no pixels at all.
+    Bytes empty;
+    endProps(empty, w);
+    empty.index(1);
+    empty.i32(0), empty.index(0), empty.i32(256), empty.i32(256), empty.u8(8), empty.u8(8);
+    w.addExport(cls, 0, "Blank", empty.b);
+    PackageSet set;
+    set.addMemory("Comp", ".utx", w.build());
+    const Package* p = set.get("Comp");
+    CHECK(p != nullptr);
+    if (!p)
+        return;
+    image::Image img;
+    TextureInfo info;
+    CHECK(!decodeTexture(set, *p, 0, img, &info));
+    CHECK(img.w == 4 && info.format == 3 && img.pixel(2, 3)[2] == 255 && img.pixel(2, 3)[0] == 0);
+    const Error err = decodeTexture(set, *p, 1, img);
+    CHECK(err && err.message.find("no pixels stored") != std::string::npos);
+}
+
+static void testSoundErrors() {
+    EmbeddedFile f;
+    f.format = "OGG";
+    f.data = {'O', 'g', 'g', 'S', 0, 2};
+    audio::Sound s;
+    const Error err = decodeEmbeddedSound(f, s);
+    CHECK(err && err.message.find("format OGG, 6 bytes starting 4f 67 67 53 00 02 (\"OggS\")") == 0);
+}
+
+static void testMapExtension() {
+    const auto tmp = std::filesystem::temp_directory_path() / "reluva_unreal_maps";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp / "System");
+    std::filesystem::create_directories(tmp / "Maps");
+    // No DS9.ini yet: the game makes it from Default.ini.
+    std::ofstream(tmp / "System" / "Default.ini") << "[Core.System]\nPaths=..\\Maps\\*.dsm\n";
+    std::ofstream(tmp / "Maps" / "Ops.dsm") << "x";
+    std::ofstream(tmp / "Maps" / "Other.unr") << "x";
+    PackageSet set;
+    CHECK(!set.open(tmp, "DS9.ini"));
+    CHECK(set.iniFile().filename() == "Default.ini");
+    CHECK(set.mapNames() == std::vector<std::string>{"Ops"} && set.isMap("ops") && !set.isMap("nothing"));
+    std::filesystem::remove_all(tmp);
+}
+
 int main() {
     testCompactIndex();
     testPackageTables();
@@ -470,6 +532,9 @@ int main() {
     testSounds();
     testModel();
     testSearchPathsAndDetection();
+    testCompressedTexture();
+    testSoundErrors();
+    testMapExtension();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

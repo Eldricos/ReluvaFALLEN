@@ -1,8 +1,11 @@
 # Unreal Engine 1: sounds and music
 
 Status: **implemented** (`src/engines/unreal/sound.cpp`) for Sound; the
-same reader extracts Music. Tested on packages built by the unit tests,
-**not yet on The Fallen's**. Sources as in [package.md](package.md).
+same reader extracts Music. **On The Fallen** 2868 of 2930 sounds decode;
+62 (looping ones such as `Looping_Fear.moan_fear_lp`, and music cues such
+as `Trks_MagicBeaut.orb_thme`) hold something other than a WAVE file,
+still to be identified: `ue-check` now reports each one's format name and
+first bytes. Sources as in [package.md](package.md).
 
 Sound and Music objects hold a whole file:
 

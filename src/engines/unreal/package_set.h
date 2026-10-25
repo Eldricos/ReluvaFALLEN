@@ -57,6 +57,10 @@ public:
     // extension (".utx").
     std::vector<std::string> names(std::string_view extension = {}) const;
     std::string extension(std::string_view name) const;
+    // Maps: packages with the extension the search path gives its Maps
+    // folder (The Fallen's are .dsm), or .unr.
+    bool isMap(std::string_view name) const;
+    std::vector<std::string> mapNames() const;
     const std::vector<std::string>& searchPaths() const { return paths_; }
     std::filesystem::path iniFile() const { return ini_; }
 
@@ -72,6 +76,7 @@ private:
     };
     std::map<std::string, Entry> entries_; // by lower-case name
     std::vector<std::string> paths_;
+    std::vector<std::string> mapExtensions_{".unr"};
     std::filesystem::path ini_;
 };
 

@@ -1,8 +1,10 @@
 # Unreal Engine 1: packages (`.u`, `.unr`, `.utx`, `.uax`, `.umx`)
 
 Status: **implemented** (`src/engines/unreal/package.cpp`,
-`properties.cpp`), tested on packages built by the unit tests. **Not yet
-checked on The Fallen's files**: run `reluva-tool ue-check` on a copy.
+`properties.cpp`). **Checked on The Fallen** (`reluva-tool ue-check`,
+October 2026): all 175 packages open (49 of version 71, 20 of 72, 106 of
+73, licensee 0), and every one of their 3801 palettes reads, so the
+tables, properties and object headers hold for versions 71-73.
 
 Sources: public community documentation of the UE1 package format (the
 format notes accompanying community package tools, and modding wikis).
@@ -25,7 +27,7 @@ variable-length signed integer of 1 to 5 bytes:
 | Offset | Type | Meaning |
 |---|---|---|
 | 0 | u32 | tag, `0x9E2A83C1` |
-| 4 | u16 | file version (61 in early Unreal, 68-69 in Unreal Tournament and later licensees) |
+| 4 | u16 | file version (61 in early Unreal, 68-69 in Unreal Tournament; The Fallen's are 71, 72 and 73) |
 | 6 | u16 | licensee version (0 for Epic's own games) |
 | 8 | u32 | package flags |
 | 12 | u32 × 2 | name count, name table offset |
@@ -103,6 +105,11 @@ defaults); not read yet.
 
 The engine finds a package by name, in the folders the game's `.ini`
 lists in its `[Core.System]` section, one `Paths=` line each, relative
-to `System/` (`..\Textures\*.utx`). The Fallen's is `System/DS9.ini`.
+to `System/` (`..\Textures\*.utx`). The Fallen's is `System/DS9.ini`,
+made from `System/Default.ini` on first run (Reluva reads `Default.ini`
+when there's no `DS9.ini`). Its maps are `.dsm` (`..\Maps\*.dsm`); a
+package is taken as a map when its extension is the one the `Maps`
+folder's line gives, or `.unr`. The Fallen's install has no `Music`
+folder although its `.ini` lists one.
 Without one Reluva uses `*.u`, `../Maps/*.unr`, `../Textures/*.utx`,
 `../Sounds/*.uax`, `../Music/*.umx`.

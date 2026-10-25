@@ -4603,7 +4603,7 @@ int cmdUeCheck(int argc, char** argv) {
                 reluva::Error err = readEmbeddedFile(*pkg, int(i), f);
                 reluva::audio::Sound s;
                 if (!err)
-                    err = reluva::audio::decodeSound(f.data, s);
+                    err = decodeEmbeddedSound(f, s);
                 if (err)
                     err.message = pkg->path(int32_t(i) + 1) + ": " + err.message;
                 record("sounds", err);
@@ -4615,7 +4615,7 @@ int cmdUeCheck(int argc, char** argv) {
                 record("palettes", readPalette(*pkg, int(i), p));
             }
         }
-        if (set.extension(name) == ".unr") {
+        if (set.isMap(name)) {
             Model model;
             std::string error;
             const int at = findLevelModel(*pkg, &model, &error);

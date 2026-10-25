@@ -12,7 +12,7 @@
 //           go faster, R back to the player start, I to show or hide the
 //           info, T for textures or plain shading.
 // Textures: Left/Right step through a package's textures, PageUp/PageDown
-//           pick the package (.utx, then maps' own).
+//           pick the package (.utx, then maps' own, then .u).
 // Sounds:   Left/Right step, PageUp/PageDown pick the package, Space plays.
 // Packages: every package on the search path. Left/Right pick one,
 //           Up/Down move through its exports (PageUp/PageDown, Home/End),
@@ -87,7 +87,8 @@ private:
 // Steps through the exports of some classes, package by package.
 class ObjectBrowser {
 public:
-    ObjectBrowser(const PackageSet& packages, std::vector<std::string> extensions, bool (*wanted)(std::string_view));
+    // Over the named packages, in order.
+    ObjectBrowser(const PackageSet& packages, std::vector<std::string> names, bool (*wanted)(std::string_view));
     size_t packageCount() const { return names_.size(); }
     // Moves within the package (by objects) or between packages (skipping
     // those with none); false if there's nothing.

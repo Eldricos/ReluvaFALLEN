@@ -44,7 +44,7 @@ bool blended(uint32_t flags) { return flags & (polyflag::Translucent | polyflag:
 
 } // namespace
 
-MapViewer::MapViewer(ViewerContext& ctx) : Page(ctx), names_(ctx.packages.names(".unr")) {}
+MapViewer::MapViewer(ViewerContext& ctx) : Page(ctx), names_(ctx.packages.mapNames()) {}
 
 MapViewer::~MapViewer() { deactivate(); }
 
@@ -87,7 +87,7 @@ void MapViewer::load(int index) {
     info_.clear();
     const std::string& name = names_[size_t(index)];
     setTitle(name + " (" + std::to_string(index + 1) + "/" + std::to_string(names_.size()) + ")");
-    info_.push_back(name + ".unr  " + std::to_string(index + 1) + "/" + std::to_string(names_.size()));
+    info_.push_back(name + ctx_.packages.extension(name) + "  " + std::to_string(index + 1) + "/" + std::to_string(names_.size()));
 
     start_ = {0, 0, 0};
     startYaw_ = 0;
