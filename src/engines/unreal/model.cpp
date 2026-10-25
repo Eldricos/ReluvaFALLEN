@@ -1,0 +1,198 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 The Reluva contributors
+
+#include "engines/unreal/model.h"
+
+#include "engines/unreal/properties.h"
+#include "engines/unreal/texture.h"
+
+#include <cmath>
+
+namespace reluva::unreal {
+
+namespace {
+
+Vec3f readVector(Reader& r) {
+    Vec3f v;
+    for (float& f : v)
+        f = r.f32();
+    return v;
+}
+
+// An array's count, checked against what's left (each element taking at
+// least `minSize` bytes) before anything is allocated for it.
+bool arrayCount(Reader& r, size_t minSize, size_t& count) {
+    const int32_t n = r.index();
+    if (!r.ok() || n < 0 || size_t(n) * minSize > r.remaining()) {
+        r.fail();
+        return false;
+    }
+    count = size_t(n);
+    return true;
+}
+
+Vec3f sub(const Vec3f& a, const Vec3f& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
+float dot(const Vec3f& a, const Vec3f& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+} // namespace
+
+Error readModel(const Package& package, int index, Model& out) {
+    out = Model{};
+    std::vector<uint8_t> data;
+    if (Error err = package.readExport(index, data))
+        return err;
+    const Export& e = package.exports()[size_t(index)];
+    const std::string what = package.path(index + 1);
+    Reader r(data, size_t(e.serialOffset));
+    PropertyList props;
+    if (Error err = beginObject(package, index, r, props))
+        return err;
+
+    // Bounds: a box (min, max, whether set) and a sphere (centre, and from
+    // version 62 its radius).
+    out.boundsMin = readVector(r);
+    out.boundsMax = readVector(r);
+    r.u8();
+    readVector(r);
+    if (package.version() > 61)
+        r.f32();
+
+    size_t n = 0;
+    if (arrayCount(r, 12, n)) {
+        out.vectors.resize(n);
+        for (Vec3f& v : out.vectors)
+            v = readVector(r);
+    }
+    if (arrayCount(r, 12, n)) {
+        out.points.resize(n);
+        for (Vec3f& v : out.points)
+            v = readVector(r);
+    }
+    if (!r.ok())
+        return Error::fail(what + ": vectors or points run past the end");
+
+    // Nodes: at least 16 (plane) + 8 (zone mask) + 1 + 7 compact indices
+    // + 3 bytes + 8 (leaves) bytes each.
+    if (arrayCount(r, 43, n)) {
+        out.nodes.resize(n);
+        for (BspNode& node : out.nodes) {
+            for (float& f : node.plane)
+                f = r.f32();
+            node.zoneMask = r.u64();
+            node.flags = r.u8();
+            node.vertPool = r.index();
+            node.surf = r.index();
+            node.back = r.index();
+            node.front = r.index();
+            node.planeNode = r.index();
+            node.collisionBound = r.index();
+            node.renderBound = r.index();
+            node.zone[0] = r.u8();
+            node.zone[1] = r.u8();
+            node.vertexCount = r.u8();
+            node.leaf[0] = r.i32();
+            node.leaf[1] = r.i32();
+        }
+    }
+    if (!r.ok())
+        return Error::fail(what + ": nodes run past the end");
+
+    if (arrayCount(r, 14, n)) {
+        out.surfs.resize(n);
+        for (BspSurf& s : out.surfs) {
+            s.texture = r.index();
+            s.polyFlags = r.u32();
+            s.base = r.index();
+            s.normal = r.index();
+            s.textureU = r.index();
+            s.textureV = r.index();
+            s.lightMap = r.index();
+            s.brushPoly = r.index();
+            s.panU = r.i16();
+            s.panV = r.i16();
+            s.actor = r.index();
+        }
+    }
+    if (!r.ok())
+        return Error::fail(what + ": surfaces run past the end");
+
+    if (arrayCount(r, 2, n)) {
+        out.verts.resize(n);
+        for (BspVert& v : out.verts) {
+            v.point = r.index();
+            v.side = r.index();
+        }
+    }
+    out.sharedSides = r.i32();
+    out.zoneCount = r.i32();
+    if (!r.ok())
+        return Error::fail(what + ": vertices run past the end");
+
+    // Check the indices hold together, which they won't if the layout
+    // above is off for this game's version.
+    const auto points = int32_t(out.points.size()), vectors = int32_t(out.vectors.size());
+    for (const BspNode& node : out.nodes) {
+        if (node.vertexCount == 0)
+            continue;
+        if (node.surf < 0 || size_t(node.surf) >= out.surfs.size() || node.vertPool < 0 ||
+            size_t(node.vertPool) + node.vertexCount > out.verts.size())
+            return Error::fail(what + ": a node's surface or vertices are out of range");
+        for (int k = 0; k < node.vertexCount; ++k) {
+            const int32_t p = out.verts[size_t(node.vertPool + k)].point;
+            if (p < 0 || p >= points)
+                return Error::fail(what + ": a vertex's point is out of range");
+        }
+    }
+    for (const BspSurf& s : out.surfs)
+        if (s.base < 0 || s.base >= points || s.normal < 0 || s.normal >= vectors || s.textureU < 0 ||
+            s.textureU >= vectors || s.textureV < 0 || s.textureV >= vectors)
+            return Error::fail(what + ": a surface's vectors are out of range");
+    return Error::success();
+}
+
+int findLevelModel(const Package& package, Model* out, std::string* error) {
+    int best = -1;
+    size_t bestNodes = 0;
+    Model model;
+    for (int i : package.exportsOfClass("Model")) {
+        if (Error err = readModel(package, i, model)) {
+            if (error && error->empty())
+                *error = err.message;
+            continue;
+        }
+        if (model.nodes.size() > bestNodes) {
+            best = i;
+            bestNodes = model.nodes.size();
+            if (out)
+                *out = std::move(model);
+        }
+    }
+    return best;
+}
+
+std::vector<Polygon> levelPolygons(const Model& model) {
+    std::vector<Polygon> polys;
+    for (const BspNode& node : model.nodes) {
+        if (node.vertexCount < 3)
+            continue;
+        const BspSurf& s = model.surfs[size_t(node.surf)];
+        if (s.polyFlags & (polyflag::Invisible | polyflag::Portal))
+            continue;
+        Polygon p;
+        p.surf = node.surf;
+        p.normal = model.vectors[size_t(s.normal)];
+        const Vec3f& base = model.points[size_t(s.base)];
+        const Vec3f& tu = model.vectors[size_t(s.textureU)];
+        const Vec3f& tv = model.vectors[size_t(s.textureV)];
+        for (int k = 0; k < node.vertexCount; ++k) {
+            const Vec3f& pt = model.points[size_t(model.verts[size_t(node.vertPool + k)].point)];
+            const Vec3f d = sub(pt, base);
+            p.points.push_back(pt);
+            p.texels.push_back({dot(d, tu) + float(s.panU), dot(d, tv) + float(s.panV)});
+        }
+        polys.push_back(std::move(p));
+    }
+    return polys;
+}
+
+} // namespace reluva::unreal

@@ -12,6 +12,7 @@ option(RELUVA_BUILD_TESTS "Build unit tests" ON)
 # than Visual Studio accepts (error C2026).
 option(RELUVA_ENGINE_NEWWORLDS "Build the Star Trek: New Worlds engine" OFF)
 option(RELUVA_ENGINE_IDTECH3 "Build the id Tech 3 engine (Star Trek: Voyager - Elite Force)" ON)
+option(RELUVA_ENGINE_UNREAL "Build the Unreal Engine 1 engine (Star Trek: Deep Space Nine - The Fallen)" ON)
 
 include(FetchContent)
 
@@ -162,6 +163,20 @@ if(RELUVA_ENGINE_IDTECH3)
         src/engines/idtech3/world_viewer.cpp)
     target_compile_definitions(reluva_engines PUBLIC RELUVA_ENGINE_IDTECH3)
 endif()
+if(RELUVA_ENGINE_UNREAL)
+    target_sources(reluva_engines PRIVATE
+        src/engines/unreal/unreal.cpp
+        src/engines/unreal/games.cpp
+        src/engines/unreal/package.cpp
+        src/engines/unreal/package_set.cpp
+        src/engines/unreal/properties.cpp
+        src/engines/unreal/texture.cpp
+        src/engines/unreal/sound.cpp
+        src/engines/unreal/model.cpp
+        src/engines/unreal/viewers.cpp
+        src/engines/unreal/map_viewer.cpp)
+    target_compile_definitions(reluva_engines PUBLIC RELUVA_ENGINE_UNREAL)
+endif()
 target_link_libraries(reluva_engines PUBLIC reluva_common PRIVATE reluva_warnings)
 
 # --- executable: SDL3 backend + ImGui launcher --------------------------------
@@ -195,5 +210,11 @@ if(RELUVA_BUILD_TESTS)
         target_link_libraries(reluva_idtech3_tests PRIVATE reluva_engines reluva_warnings)
         target_include_directories(reluva_idtech3_tests PRIVATE tests)
         add_test(NAME idtech3 COMMAND reluva_idtech3_tests)
+    endif()
+
+    if(RELUVA_ENGINE_UNREAL)
+        add_executable(reluva_unreal_tests tests/test_unreal.cpp)
+        target_link_libraries(reluva_unreal_tests PRIVATE reluva_engines reluva_warnings)
+        add_test(NAME unreal COMMAND reluva_unreal_tests)
     endif()
 endif()

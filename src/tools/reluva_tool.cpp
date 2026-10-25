@@ -91,6 +91,13 @@
 //   reluva-tool shader-check <game folder>         count the shader directives the engine doesn't know
 //   reluva-tool portal-check <game folder>         each map's portal and mirror surfaces and portal entities
 //                                                  or draw yet, with example shaders
+//   reluva-tool ue-check <game folder> [-v]        Unreal Engine 1: open every package on the search path,
+//                                                  decode every texture, sound and level; report failures
+//   reluva-tool ue-info <package>                  a package's header, exports by class, imports by package
+//   reluva-tool ue-exports <package> [filter]      list exports: class, path, size, offset, flags
+//   reluva-tool ue-props <package> <export>        an export's properties, and the bytes after them
+//   reluva-tool ue-extract <game folder> <package> <export>  write a texture as .tga, a sound or music
+//                                                  as the file it holds
 
 #include "common/audio/decode.h"
 #include "common/audio/wav.h"
@@ -123,6 +130,14 @@
 #include "engines/idtech3/shader.h"
 #endif
 
+#ifdef RELUVA_ENGINE_UNREAL
+#include "engines/unreal/games.h"
+#include "engines/unreal/model.h"
+#include "engines/unreal/package_set.h"
+#include "engines/unreal/properties.h"
+#include "engines/unreal/sound.h"
+#include "engines/unreal/texture.h"
+#endif
 #include <map>
 #include <memory>
 #include <set>
@@ -4350,6 +4365,284 @@ int cmdPk3List(int argc, char** argv) {
 
 #endif // RELUVA_ENGINE_IDTECH3
 
+#ifdef RELUVA_ENGINE_UNREAL
+
+// --- Unreal Engine 1 ----------------------------------------------------------------------
+
+bool openUnrealPackage(const char* file, reluva::unreal::Package& pkg) {
+    if (reluva::Error err = pkg.open(file)) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return false;
+    }
+    return true;
+}
+
+// An export by number, or by name (its own or its dotted path).
+int findUnrealExport(const reluva::unreal::Package& pkg, const std::string& which) {
+    if (!which.empty() && std::all_of(which.begin(), which.end(), [](char c) { return std::isdigit(uint8_t(c)); }))
+        return std::atoi(which.c_str()) < int(pkg.exports().size()) ? std::atoi(which.c_str()) : -1;
+    const std::string wanted = reluva::fs::toLower(which);
+    for (size_t i = 0; i < pkg.exports().size(); ++i)
+        if (reluva::fs::toLower(pkg.path(int32_t(i) + 1)) == wanted)
+            return int(i);
+    return pkg.findExport(which);
+}
+
+int cmdUeInfo(int argc, char** argv) {
+    if (argc != 3) {
+        std::fprintf(stderr, "usage: reluva-tool ue-info <package>\n");
+        return 2;
+    }
+    reluva::unreal::Package pkg;
+    if (!openUnrealPackage(argv[2], pkg))
+        return 1;
+    std::printf("%s: version %d, licensee %d, flags %08x, %llu bytes\n", argv[2], pkg.version(), pkg.licensee(),
+                pkg.flags(), static_cast<unsigned long long>(pkg.fileSize()));
+    std::printf("%zu names, %zu imports, %zu exports\n", pkg.names().size(), pkg.imports().size(),
+                pkg.exports().size());
+    std::map<std::string, std::pair<int, long long>> classes;
+    for (size_t i = 0; i < pkg.exports().size(); ++i) {
+        auto& c = classes[pkg.className(int32_t(i) + 1)];
+        ++c.first;
+        c.second += pkg.exports()[i].serialSize;
+    }
+    std::printf("\nExports by class:\n");
+    for (const auto& [cls, n] : classes)
+        std::printf("  %6d  %-28s %12lld bytes\n", n.first, cls.c_str(), n.second);
+    std::map<std::string, int> from;
+    for (size_t i = 0; i < pkg.imports().size(); ++i)
+        ++from[pkg.importPackage(int(i))];
+    std::printf("\nImports by package:\n");
+    for (const auto& [p, n] : from)
+        std::printf("  %6d  %s\n", n, p.c_str());
+    return 0;
+}
+
+int cmdUeExports(int argc, char** argv) {
+    if (argc < 3 || argc > 4) {
+        std::fprintf(stderr, "usage: reluva-tool ue-exports <package> [class or name filter]\n");
+        return 2;
+    }
+    reluva::unreal::Package pkg;
+    if (!openUnrealPackage(argv[2], pkg))
+        return 1;
+    const std::string filter = argc == 4 ? reluva::fs::toLower(argv[3]) : "";
+    for (size_t i = 0; i < pkg.exports().size(); ++i) {
+        const auto& e = pkg.exports()[i];
+        const std::string cls = pkg.className(int32_t(i) + 1), path = pkg.path(int32_t(i) + 1);
+        if (!filter.empty() && reluva::fs::toLower(cls + " " + path).find(filter) == std::string::npos)
+            continue;
+        std::printf("%6zu  %-24s %-48s %9d @ %-9d flags %08x\n", i, cls.c_str(), path.c_str(), e.serialSize,
+                    e.serialOffset, e.flags);
+    }
+    return 0;
+}
+
+int cmdUeProps(int argc, char** argv) {
+    if (argc != 4) {
+        std::fprintf(stderr, "usage: reluva-tool ue-props <package> <export number | name | Group.Name>\n");
+        return 2;
+    }
+    using namespace reluva::unreal;
+    Package pkg;
+    if (!openUnrealPackage(argv[2], pkg))
+        return 1;
+    const int index = findUnrealExport(pkg, argv[3]);
+    if (index < 0) {
+        std::fprintf(stderr, "No export %s\n", argv[3]);
+        return 1;
+    }
+    std::vector<uint8_t> data;
+    if (reluva::Error err = pkg.readExport(index, data)) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    const Export& e = pkg.exports()[size_t(index)];
+    std::printf("%d: %s %s, %d bytes at %d, flags %08x\n", index, pkg.className(index + 1).c_str(),
+                pkg.path(index + 1).c_str(), e.serialSize, e.serialOffset, e.flags);
+    Reader r(data, size_t(e.serialOffset));
+    PropertyList props;
+    if (reluva::Error err = beginObject(pkg, index, r, props))
+        std::printf("Properties: %s\n", err.message.c_str());
+    for (const Property& p : props.items)
+        std::printf("  %s%s (%s) = %s\n", p.name.c_str(),
+                    p.arrayIndex ? ("[" + std::to_string(p.arrayIndex) + "]").c_str() : "",
+                    p.structName.empty() ? typeName(p.type) : p.structName.c_str(), describe(pkg, p).c_str());
+    // The class's own data, from where the properties end.
+    const size_t start = r.pos() - size_t(e.serialOffset);
+    std::printf("Then %zu bytes of the class's own data, from file offset %zu:\n", data.size() - start, r.pos());
+    for (size_t row = start; row < data.size() && row < start + 128; row += 16) {
+        std::printf("  %08zx ", row + size_t(e.serialOffset));
+        for (size_t k = row; k < row + 16 && k < data.size(); ++k)
+            std::printf(" %02x", data[k]);
+        std::printf("\n");
+    }
+    return 0;
+}
+
+int cmdUeExtract(int argc, char** argv) {
+    if (argc != 5) {
+        std::fprintf(stderr, "usage: reluva-tool ue-extract <game folder> <package name> <export> (writes <export>.tga or .wav...)\n");
+        return 2;
+    }
+    using namespace reluva::unreal;
+    PackageSet set;
+    if (reluva::Error err = set.open(argv[2], "")) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    const Package* pkg = set.get(argv[3]);
+    if (!pkg) {
+        std::fprintf(stderr, "%s\n", set.error(argv[3]).c_str());
+        return 1;
+    }
+    const int index = findUnrealExport(*pkg, argv[4]);
+    if (index < 0) {
+        std::fprintf(stderr, "No export %s\n", argv[4]);
+        return 1;
+    }
+    const std::string cls = pkg->className(index + 1);
+    const std::string base = pkg->name(pkg->exports()[size_t(index)].objectName);
+    if (isTextureClass(cls)) {
+        reluva::image::Image img;
+        if (reluva::Error err = decodeTexture(set, *pkg, index, img)) {
+            std::fprintf(stderr, "%s\n", err.message.c_str());
+            return 1;
+        }
+        // An uncompressed 32-bit TGA, rows top to bottom.
+        std::vector<uint8_t> tga(18, 0);
+        tga[2] = 2;
+        tga[12] = uint8_t(img.w), tga[13] = uint8_t(img.w >> 8);
+        tga[14] = uint8_t(img.h), tga[15] = uint8_t(img.h >> 8);
+        tga[16] = 32, tga[17] = 0x28;
+        for (size_t i = 0; i < img.rgba.size(); i += 4) {
+            tga.push_back(img.rgba[i + 2]);
+            tga.push_back(img.rgba[i + 1]);
+            tga.push_back(img.rgba[i]);
+            tga.push_back(img.rgba[i + 3]);
+        }
+        std::ofstream(base + ".tga", std::ios::binary).write(reinterpret_cast<const char*>(tga.data()), std::streamsize(tga.size()));
+        std::printf("Wrote %s.tga (%dx%d)\n", base.c_str(), img.w, img.h);
+        return 0;
+    }
+    if (reluva::fs::toLower(cls) == "sound" || reluva::fs::toLower(cls) == "music") {
+        EmbeddedFile f;
+        if (reluva::Error err = readEmbeddedFile(*pkg, index, f)) {
+            std::fprintf(stderr, "%s\n", err.message.c_str());
+            return 1;
+        }
+        const std::string name = base + "." + reluva::fs::toLower(f.format);
+        std::ofstream(name, std::ios::binary).write(reinterpret_cast<const char*>(f.data.data()), std::streamsize(f.data.size()));
+        std::printf("Wrote %s (%zu bytes)\n", name.c_str(), f.data.size());
+        return 0;
+    }
+    std::fprintf(stderr, "Can't extract a %s yet\n", cls.c_str());
+    return 1;
+}
+
+// Opens every package on a game's search path and decodes every texture,
+// sound and level model, reporting what fails: the check to run on a new
+// game or release.
+int cmdUeCheck(int argc, char** argv) {
+    if (argc < 3 || argc > 4) {
+        std::fprintf(stderr, "usage: reluva-tool ue-check <game folder> [-v]\n");
+        return 2;
+    }
+    using namespace reluva::unreal;
+    const bool verbose = argc == 4 && std::strcmp(argv[3], "-v") == 0;
+    std::vector<std::string> warnings;
+    PackageSet set;
+    std::string ini;
+    for (const reluva::DetectedGame& g : detect("unreal", argv[2]))
+        if (const GameInfo* info = findGame(g.gameId)) {
+            ini = info->iniName;
+            std::printf("Detected: %s\n", g.description.c_str());
+        }
+    if (reluva::Error err = set.open(argv[2], ini, &warnings)) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    std::printf("Search paths from %s:\n", set.iniFile().empty() ? "(defaults)" : set.iniFile().string().c_str());
+    for (const std::string& p : set.searchPaths())
+        std::printf("  %s\n", p.c_str());
+    for (const std::string& w : warnings)
+        std::printf("warning: %s\n", w.c_str());
+
+    std::map<std::string, int> versions;
+    struct Tally {
+        int ok = 0, failed = 0;
+        std::vector<std::string> examples;
+    };
+    std::map<std::string, Tally> tallies;
+    auto record = [&](const std::string& what, const reluva::Error& err) {
+        Tally& t = tallies[what];
+        if (!err) {
+            ++t.ok;
+            return;
+        }
+        ++t.failed;
+        if (verbose || t.examples.size() < 5)
+            t.examples.push_back(err.message);
+    };
+    int unopened = 0;
+    for (const std::string& name : set.names()) {
+        const Package* pkg = set.get(name);
+        if (!pkg) {
+            ++unopened;
+            std::printf("can't open %s: %s\n", name.c_str(), set.error(name).c_str());
+            continue;
+        }
+        ++versions[std::to_string(pkg->version()) + "/" + std::to_string(pkg->licensee())];
+        for (size_t i = 0; i < pkg->exports().size(); ++i) {
+            const std::string cls = reluva::fs::toLower(pkg->className(int32_t(i) + 1));
+            if (isTextureClass(cls)) {
+                reluva::image::Image img;
+                record("textures", decodeTexture(set, *pkg, int(i), img));
+            } else if (cls == "sound") {
+                EmbeddedFile f;
+                reluva::Error err = readEmbeddedFile(*pkg, int(i), f);
+                reluva::audio::Sound s;
+                if (!err)
+                    err = reluva::audio::decodeSound(f.data, s);
+                if (err)
+                    err.message = pkg->path(int32_t(i) + 1) + ": " + err.message;
+                record("sounds", err);
+            } else if (cls == "music") {
+                EmbeddedFile f;
+                record("music", readEmbeddedFile(*pkg, int(i), f));
+            } else if (cls == "palette") {
+                Palette p;
+                record("palettes", readPalette(*pkg, int(i), p));
+            }
+        }
+        if (set.extension(name) == ".unr") {
+            Model model;
+            std::string error;
+            const int at = findLevelModel(*pkg, &model, &error);
+            reluva::Error err;
+            if (at < 0)
+                err = reluva::Error::fail(name + ": " + (error.empty() ? "no model with BSP nodes" : error));
+            record("levels", err);
+            if (at >= 0)
+                std::printf("%-24s %6zu nodes %6zu surfaces %7zu points  %zu polygons drawn\n", name.c_str(),
+                            model.nodes.size(), model.surfs.size(), model.points.size(),
+                            levelPolygons(model).size());
+        }
+    }
+    std::printf("\n%zu packages (%d wouldn't open); versions/licensee:", set.names().size(), unopened);
+    for (const auto& [v, n] : versions)
+        std::printf(" %s x%d", v.c_str(), n);
+    std::printf("\n");
+    for (const auto& [what, t] : tallies) {
+        std::printf("%-9s %6d decoded, %6d failed\n", what.c_str(), t.ok, t.failed);
+        for (const std::string& ex : t.examples)
+            std::printf("    %s\n", ex.c_str());
+    }
+    return 0;
+}
+
+#endif // RELUVA_ENGINE_UNREAL
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -4437,6 +4730,18 @@ int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "ui-run") == 0)
         return cmdUiRun(argc, argv);
 #endif
+#ifdef RELUVA_ENGINE_UNREAL
+    if (argc >= 2 && std::strcmp(argv[1], "ue-info") == 0)
+        return cmdUeInfo(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-exports") == 0)
+        return cmdUeExports(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-props") == 0)
+        return cmdUeProps(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-extract") == 0)
+        return cmdUeExtract(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-check") == 0)
+        return cmdUeCheck(argc, argv);
+#endif
     std::fprintf(stderr,
                  "usage:\n"
                  "  reluva-tool hexdump <file> [offset] [length]\n"
@@ -4482,6 +4787,13 @@ int main(int argc, char** argv) {
                  "  reluva-tool qvm-dis <game folder> <vm/x.qvm> <first instruction> [count] | -ref <address> [size] | -str <text> | -syscall <number> | -syscalls <first> <last> | -func <instruction> | -blockcopies | -fields <address>\n"
                  "  reluva-tool game-run <game folder> <map> [-frames N] [-noclient] [-walk [forward|back|left|right]] [-set name value] [-addbot 'name skill']... [-cgame [-events] [-entities N] [-cgameframes N] [-fire] [-altfire] [-weapon N|all] [-give] [-watch model]] [-buttons] [-trace]\n"
                  "  reluva-tool ui-run <game folder> [-frames N] [-menu M] [-size WxH] [-glwords N] [-trace] [-v]\n"
+#endif
+#ifdef RELUVA_ENGINE_UNREAL
+                 "  reluva-tool ue-check <game folder> [-v]\n"
+                 "  reluva-tool ue-info <package>\n"
+                 "  reluva-tool ue-exports <package> [filter]\n"
+                 "  reluva-tool ue-props <package> <export>\n"
+                 "  reluva-tool ue-extract <game folder> <package name> <export>\n"
 #endif
                  "");
     return 2;

@@ -14,6 +14,9 @@ const MetaEngine& newWorldsMetaEngine();
 #ifdef RELUVA_ENGINE_IDTECH3
 const MetaEngine& idTech3MetaEngine();
 #endif
+#ifdef RELUVA_ENGINE_UNREAL
+const MetaEngine& unrealMetaEngine();
+#endif
 
 const std::vector<const MetaEngine*>& allEngines() {
     static const std::vector<const MetaEngine*> engines = {
@@ -23,6 +26,9 @@ const std::vector<const MetaEngine*>& allEngines() {
 #endif
 #ifdef RELUVA_ENGINE_IDTECH3
         &idTech3MetaEngine(),
+#endif
+#ifdef RELUVA_ENGINE_UNREAL
+        &unrealMetaEngine(),
 #endif
     };
     return engines;
