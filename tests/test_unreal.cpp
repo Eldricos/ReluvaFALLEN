@@ -8,6 +8,7 @@
 #include "data/tone440_mp3.h"
 #include "engines/registry.h"
 #include "engines/unreal/games.h"
+#include "engines/unreal/lighting.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package.h"
 #include "engines/unreal/package_set.h"
@@ -377,6 +378,23 @@ static void testModel() {
     const int32_t texClass = w.addImport("Engine", "Class", 0, "Texture");
     const int32_t modelClass = w.addImport("Engine", "Class", 0, "Model");
     const int32_t tex = w.addExport(texClass, 0, "Floor", {});
+    // A light 64 units above the floor's corner, and the zone's ambient light.
+    const int32_t lightClass = w.addImport("Engine", "Class", 0, "Light");
+    const int32_t zoneClass = w.addImport("Engine", "Class", 0, "ZoneInfo");
+    Bytes la;
+    tag(la, w, "Location", PropertyType::Struct, 12, 0, "Vector");
+    la.vec(0, 0, 64);
+    tag(la, w, "LightBrightness", PropertyType::Byte, 1);
+    la.u8(128);
+    tag(la, w, "LightRadius", PropertyType::Byte, 1);
+    la.u8(9); // 250 units
+    endProps(la, w);
+    const int32_t light = w.addExport(lightClass, 0, "Light0", la.b);
+    Bytes za;
+    tag(za, w, "AmbientBrightness", PropertyType::Byte, 1);
+    za.u8(16);
+    endProps(za, w);
+    const int32_t zone = w.addExport(zoneClass, 0, "ZoneInfo0", za.b);
     Bytes o;
     endProps(o, w);
     o.vec(0, 0, 0), o.vec(128, 128, 0), o.u8(1); // box
@@ -391,11 +409,23 @@ static void testModel() {
     o.index(0), o.index(0), o.index(-1), o.index(-1), o.index(-1), o.index(-1), o.index(-1);
     o.u8(0), o.u8(0), o.u8(4), o.i32(-1), o.i32(-1);
     o.index(1); // surfs
-    o.index(tex), o.u32(0), o.index(0), o.index(0), o.index(1), o.index(2), o.index(-1), o.index(0);
+    o.index(tex), o.u32(0), o.index(0), o.index(0), o.index(1), o.index(2), o.index(0), o.index(0);
     o.u16(16), o.u16(0), o.index(0);
     o.index(4); // verts
     for (int i = 0; i < 4; ++i)
         o.index(i), o.index(-1);
+    o.i32(0), o.i32(1);
+    // Lighting: the zone, no polys, one lightmap of 5x5 samples 32 units
+    // apart (the floor's 128), one light's bits (all lit but the far
+    // corner), no bounds, hulls or leaves, the light list, two flags.
+    o.index(zone), o.u64(1), o.u64(1);
+    o.index(0);
+    o.index(1);
+    o.i32(0), o.vec(0, 0, 0), o.index(5), o.index(5), o.f32(32), o.f32(32), o.i32(0);
+    o.index(5);
+    o.u8(0x1f), o.u8(0x1f), o.u8(0x1f), o.u8(0x1f), o.u8(0x0f);
+    o.index(0), o.index(0), o.index(0);
+    o.index(2), o.index(light), o.index(0);
     o.i32(0), o.i32(1);
     w.addExport(modelClass, 0, "Model1", o.b);
     // A brush's model, without nodes.
@@ -415,13 +445,34 @@ static void testModel() {
     CHECK(!p.openMemory(w.build(), "Level"));
     Model m;
     std::string err;
-    CHECK(findLevelModel(p, &m, &err) == 1 && err.empty());
+    CHECK(findLevelModel(p, &m, &err) == 3 && err.empty());
     CHECK(m.nodes.size() == 1 && m.surfs.size() == 1 && m.verts.size() == 4 && m.zoneCount == 1);
     const std::vector<Polygon> polys = levelPolygons(m);
     CHECK(polys.size() == 1);
     if (polys.size() == 1) {
         CHECK(polys[0].points.size() == 4 && polys[0].normal[2] == 1);
         CHECK(polys[0].texels[2][0] == 144 && polys[0].texels[2][1] == 128); // panned 16 in U
+    }
+    CHECK(m.hasLighting() && m.zones.size() == 1 && m.lightMaps.size() == 1 && m.lights.size() == 2 &&
+          m.trailingBytes == 0);
+    CHECK((lightColor(0, 0, 128) == Vec3f{1, 0, 0}) && (lightColor(128, 0, 64) == Vec3f{0, 0.5f, 0.5f}));
+    CHECK((lightColor(42, 255, 128) == Vec3f{1, 1, 1})); // saturation 255: white
+    PackageSet set;
+    const LevelLights lights = gatherLights(set, p, m);
+    CHECK(lights.sources.size() == 2 && lights.unreadable == 0 && lights.sources[0].radius == 250);
+    CHECK(lights.zoneAmbient.size() == 1 && lights.zoneAmbient[0][0] == 0.125f);
+    const LightmapAtlas atlas = buildLightmaps(m, lights);
+    CHECK(atlas.pages.size() == 1 && atlas.stats.lightmaps == 1 && atlas.stats.lit == 1);
+    CHECK(atlas.stats.rawAxes == 1 && atlas.stats.panOffset == 1 && atlas.stats.badFit == 0);
+    if (atlas.pages.size() == 1) {
+        const auto uv = atlas.uv(0, {0, 0, 0}), far = atlas.uv(0, {128, 128, 0});
+        CHECK(uv[0] * 1024 == 1.5f && uv[1] * 1024 == 1.5f && far[0] * 1024 == 5.5f);
+        const image::Image& page = atlas.pages[0];
+        // Under the light: ambient 0.125 + (1 - 64 / 250), stored halved.
+        CHECK(std::abs(int(page.pixel(1, 1)[0]) - 111) <= 1);
+        CHECK(page.pixel(5, 5)[0] == 16);                        // in shadow: ambient alone
+        CHECK(page.pixel(0, 0)[0] == page.pixel(1, 1)[0]);       // the border repeats the edge
+        CHECK(page.pixel(3, 1)[0] < page.pixel(1, 1)[0]);        // further from the light, darker
     }
     // Invisible surfaces aren't drawn.
     m.surfs[0].polyFlags = polyflag::Invisible;

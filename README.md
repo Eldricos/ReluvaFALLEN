@@ -108,8 +108,9 @@ Linux (with each distro's packages) and Windows with Visual Studio 2022.
 - The Fallen (Unreal Engine 1) also opens as a data viewer, starting on its maps in 3D.
   **Tab** switches between maps, textures, sounds and packages. In a map, **Left/Right**
   picks one, drag to look, **W/A/S/D** move, **Space/C** (or **E/Q**) go up and down,
-  **Shift** goes faster, **R** returns to the PlayerStart, **T** turns textures off and
-  **I** shows or hides the info (it needs 3D, as Elite Force's). For textures and sounds,
+  **Shift** goes faster, **R** returns to the PlayerStart, **T** turns textures off,
+  **L** the lightmaps, **[**/**]** dim or brighten them and **I** shows or hides the info
+  (it needs 3D, as Elite Force's). For textures and sounds,
   **Left/Right** step and **PageUp/PageDown** pick the package; **Space** plays a sound.
   The packages page lists each package's exports: **Left/Right** picks the package,
   **Up/Down** (**PageUp/PageDown**, **Home/End**) the export, **Enter** shows its properties.

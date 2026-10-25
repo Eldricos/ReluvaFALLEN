@@ -43,6 +43,28 @@ struct BspVert {
     int32_t point = 0, side = 0;
 };
 
+struct Zone {
+    int32_t actor = 0; // object reference: the ZoneInfo (or LevelInfo for zone 0)
+    uint64_t connectivity = 0, visibility = 0;
+};
+
+// Where a surface's lightmap is: a grid of uClamp x vClamp sample points
+// across the surface, `uScale` x `vScale` texture units apart, starting
+// at `pan`; for each light that reaches it, one bit per sample (lit or
+// in shadow) from `dataOffset` in the model's light bits. See model.md.
+struct LightMapIndex {
+    int32_t dataOffset = 0;
+    Vec3f pan{};
+    int32_t uClamp = 0, vClamp = 0;
+    float uScale = 0, vScale = 0;
+    int32_t lightActors = -1; // into Model::lights: the lights, up to a 0
+};
+
+struct Leaf {
+    int32_t zone = 0, permeating = 0, volumetric = 0;
+    uint64_t visibleZones = 0;
+};
+
 struct Model {
     Vec3f boundsMin{}, boundsMax{};
     std::vector<Vec3f> vectors, points;
@@ -50,10 +72,23 @@ struct Model {
     std::vector<BspSurf> surfs;
     std::vector<BspVert> verts;
     int32_t sharedSides = 0, zoneCount = 0;
+
+    // After the vertices: what lighting needs. If these don't read (a
+    // layout this reader doesn't know), the geometry still does and
+    // `lightingError` says why.
+    std::vector<Zone> zones;
+    int32_t polys = 0; // object reference
+    std::vector<LightMapIndex> lightMaps;
+    std::vector<uint8_t> lightBits;
+    std::vector<Leaf> leaves;
+    std::vector<int32_t> lights; // object references: light actors, lists ending in 0
+    size_t trailingBytes = 0;    // left over after the last field read
+    std::string lightingError;
+    bool hasLighting() const { return lightingError.empty(); }
 };
 
-// Reads a model up to its vertices (what drawing it needs); the zones,
-// lightmaps and collision data after them aren't read yet.
+// Reads a model: its geometry (an error if that fails), then its zones,
+// lightmaps and lights (into lightingError if those fail).
 Error readModel(const Package& package, int exportIndex, Model& out);
 
 // The model a level is drawn from: of the package's models, the one with

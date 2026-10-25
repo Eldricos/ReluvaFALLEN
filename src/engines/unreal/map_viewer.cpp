@@ -8,6 +8,7 @@
 
 #include "engines/unreal/viewers.h"
 
+#include "engines/unreal/lighting.h"
 #include "engines/unreal/properties.h"
 #include "engines/unreal/texture.h"
 
@@ -104,13 +105,31 @@ void MapViewer::load(int index) {
         return;
     }
 
-    // Group the polygons by texture and drawing flags.
+    // The lightmaps, lit from the level's lights, as textures.
+    const LevelLights lights = gatherLights(ctx_.packages, *pkg, model);
+    const LightmapAtlas atlas = buildLightmaps(model, lights);
+    std::vector<gfx::TextureId> pages;
+    for (const image::Image& page : atlas.pages) {
+        gfx::TextureParams params;
+        params.clamp = true;
+        params.mipmaps = false;
+        gfx::TextureId id = 0;
+        if (renderer_->createTexture(page.w, page.h, page.rgba.data(), params, id))
+            id = 0;
+        else
+            textures_.push_back(id);
+        pages.push_back(id);
+    }
+    hasLightmaps_ = !atlas.pages.empty();
+
+    // Group the polygons by texture, drawing flags and lightmap page.
     const std::vector<Polygon> polys = levelPolygons(model);
-    std::map<std::tuple<bool, int32_t, uint32_t>, std::vector<const Polygon*>> groups;
+    std::map<std::tuple<bool, int32_t, uint32_t, int>, std::vector<const Polygon*>> groups;
     for (const Polygon& p : polys) {
         const BspSurf& s = model.surfs[size_t(p.surf)];
         const uint32_t flags = s.polyFlags & kDrawFlags;
-        groups[{blended(flags), s.texture, flags}].push_back(&p);
+        const int page = blended(flags) || (flags & polyflag::FakeBackdrop) ? -1 : atlas.surfs[size_t(p.surf)].page;
+        groups[{blended(flags), s.texture, flags, page}].push_back(&p);
     }
 
     std::vector<gfx::Vertex> vertices;
@@ -123,9 +142,10 @@ void MapViewer::load(int index) {
         return gfx::Vec3{0.3f / l, 0.5f / l, 0.8f / l};
     }();
     for (const auto& [key, group] : groups) {
-        const auto& [isBlended, textureRef, flags] = key;
+        const auto& [isBlended, textureRef, flags, page] = key;
         Batch batch;
         batch.polyFlags = flags;
+        batch.lightmap = page >= 0 ? pages[size_t(page)] : 0;
         batch.firstIndex = uint32_t(indices.size());
         std::array<int, 2> size{64, 64};
         const ObjectRef tex = ctx_.packages.resolve(*pkg, textureRef);
@@ -169,6 +189,11 @@ void MapViewer::load(int index) {
                 std::copy(w.begin(), w.end(), v.pos);
                 v.uv[0] = p->texels[k][0] / float(size[0]);
                 v.uv[1] = p->texels[k][1] / float(size[1]);
+                if (page >= 0) {
+                    const auto lm = atlas.uv(p->surf, p->points[k]);
+                    v.uv2[0] = lm[0];
+                    v.uv2[1] = lm[1];
+                }
                 std::copy(n.begin(), n.end(), v.normal);
                 v.color[0] = v.color[1] = v.color[2] = shade;
                 v.color[3] = 255;
@@ -218,7 +243,16 @@ void MapViewer::load(int index) {
     std::snprintf(line, sizeof line, "%zu textures%s%s", textures_.size(),
                   missing ? ", missing or undecodable: " : "", missing ? std::to_string(missing).c_str() : "");
     info_.push_back(missing ? std::string(line) + " (first: " + firstMissing + ")" : std::string(line));
-    info_.push_back("Not drawn yet: lightmaps, movers, actors' meshes, the skybox");
+    if (!model.hasLighting()) {
+        info_.push_back("No lightmaps: " + model.lightingError);
+    } else {
+        const LightmapAtlas::Stats& st = atlas.stats;
+        std::snprintf(line, sizeof line,
+                      "lightmaps: %d surfaces (%d lit) on %zu pages, %zu lights (%d unreadable), %d grids off fit",
+                      st.lightmaps, st.lit, atlas.pages.size(), model.lights.size(), lights.unreadable, st.badFit);
+        info_.push_back(line);
+    }
+    info_.push_back("Not drawn yet: movers, actors' meshes, the skybox, lights' effects (flicker, pulse...)");
 }
 
 void MapViewer::toStart() {
@@ -256,6 +290,12 @@ void MapViewer::handleEvent(const Event& ev) {
             showInfo_ = !showInfo_;
         else if (ev.key == 't')
             textured_ = !textured_;
+        else if (ev.key == 'l')
+            lightmaps_ = !lightmaps_;
+        else if (ev.key == '[')
+            lightScale_ = std::max(0.1f, lightScale_ / 1.25f);
+        else if (ev.key == ']')
+            lightScale_ = std::min(8.0f, lightScale_ * 1.25f);
     } else if (ev.type == EventType::MouseDown && ev.button == MouseButton::Left) {
         dragging_ = true;
         lastX_ = ev.mouseX;
@@ -273,6 +313,10 @@ void MapViewer::handleEvent(const Event& ev) {
 void MapViewer::update(uint64_t nowMs) {
     if (!renderer_)
         return;
+    auto lit = [&](const Batch& b) {
+        return lightmaps_ && b.lightmap && !blended(b.polyFlags) &&
+               !(b.polyFlags & (polyflag::FakeBackdrop | polyflag::Unlit));
+    };
     const float dt = lastMs_ ? std::min(0.1f, float(nowMs - lastMs_) / 1000.0f) : 0.0f;
     lastMs_ = nowMs;
 
@@ -302,7 +346,8 @@ void MapViewer::update(uint64_t nowMs) {
             call.color = {0.15f, 0.2f, 0.35f, 1};
         } else {
             call.texture = textured_ ? b.texture : 0;
-            call.rgbSource = gfx::ColorSource::Vertex;
+            // With a lightmap the second pass lights it; else shading by facing.
+            call.rgbSource = lit(b) ? gfx::ColorSource::Constant : gfx::ColorSource::Vertex;
         }
         if (b.polyFlags & polyflag::Masked)
             call.state.alphaTest = gfx::AlphaTest::Ge128;
@@ -317,6 +362,21 @@ void MapViewer::update(uint64_t nowMs) {
             call.rgbSource = gfx::ColorSource::Constant;
         }
         renderer_->draw(call);
+        if (lit(b)) {
+            // The lightmap over it, doubled (dst * src * 2): light up to
+            // twice the texture's colours.
+            gfx::DrawCall light = call;
+            light.texture = b.lightmap;
+            light.texGen = gfx::TexGen::Uv2;
+            light.rgbSource = gfx::ColorSource::Constant;
+            light.color = {lightScale_, lightScale_, lightScale_, 1};
+            light.state.src = gfx::Blend::DstColor;
+            light.state.dst = gfx::Blend::SrcColor;
+            light.state.depthEqual = true;
+            light.state.depthWrite = false;
+            light.state.alphaTest = gfx::AlphaTest::None;
+            renderer_->draw(light);
+        }
     }
     drawOverlay(nowMs);
     renderer_->endFrame(&overlay_);
@@ -338,7 +398,8 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
         lines.push_back(error_);
     char where[160];
     // Shown in Unreal's own coordinates.
-    std::snprintf(where, sizeof where, "at %.0f %.0f %.0f, %.0f fps", pos_[0], -pos_[1], pos_[2], fps_);
+    std::snprintf(where, sizeof where, "at %.0f %.0f %.0f, %.0f fps; lightmaps %s, brightness x%.2f", pos_[0],
+                  -pos_[1], pos_[2], fps_, !hasLightmaps_ ? "none" : lightmaps_ ? "on" : "off", lightScale_);
     lines.push_back(where);
     const int lh = font::kLineHeight;
     size_t widest = 0;

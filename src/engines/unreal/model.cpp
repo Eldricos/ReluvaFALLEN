@@ -6,6 +6,8 @@
 #include "engines/unreal/properties.h"
 #include "engines/unreal/texture.h"
 
+#include <algorithm>
+
 #include <cmath>
 
 namespace reluva::unreal {
@@ -33,6 +35,89 @@ bool arrayCount(Reader& r, size_t minSize, size_t& count) {
 
 Vec3f sub(const Vec3f& a, const Vec3f& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
 float dot(const Vec3f& a, const Vec3f& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+// Everything after the vertices. Brushes' models stop early (no nodes, so
+// nothing to light); that isn't an error.
+void readLighting(Reader& r, Model& out) {
+    auto fail = [&](const std::string& why) {
+        out.zones.clear();
+        out.lightMaps.clear();
+        out.lightBits.clear();
+        out.leaves.clear();
+        out.lights.clear();
+        out.lightingError = why + " (at file offset " + std::to_string(r.pos()) + ")";
+    };
+    if (out.zoneCount < 0 || out.zoneCount > 64)
+        return fail("zone count " + std::to_string(out.zoneCount));
+    out.zones.resize(size_t(out.zoneCount));
+    for (Zone& z : out.zones) {
+        z.actor = r.index();
+        z.connectivity = r.u64();
+        z.visibility = r.u64();
+    }
+    out.polys = r.index();
+    size_t n = 0;
+    // Light map index: i32 + 3 floats + 2 compact + 2 floats + i32, 30 bytes at least.
+    if (!r.ok() || !arrayCount(r, 30, n))
+        return fail("zones or the light map count run past the end");
+    out.lightMaps.resize(n);
+    for (LightMapIndex& m : out.lightMaps) {
+        m.dataOffset = r.i32();
+        m.pan = readVector(r);
+        m.uClamp = r.index();
+        m.vClamp = r.index();
+        m.uScale = r.f32();
+        m.vScale = r.f32();
+        m.lightActors = r.i32();
+    }
+    if (!r.ok() || !arrayCount(r, 1, n))
+        return fail("light maps run past the end");
+    out.lightBits.resize(n);
+    r.bytes(out.lightBits.data(), n);
+    if (!r.ok() || !arrayCount(r, 25, n))
+        return fail("light bits run past the end");
+    r.skip(n * 25); // bounds: boxes
+    if (!r.ok() || !arrayCount(r, 4, n))
+        return fail("bounds run past the end");
+    r.skip(n * 4); // leaf hulls: planes' node indices
+    if (!r.ok() || !arrayCount(r, 11, n))
+        return fail("leaf hulls run past the end");
+    out.leaves.resize(n);
+    for (Leaf& l : out.leaves) {
+        l.zone = r.index();
+        l.permeating = r.index();
+        l.volumetric = r.index();
+        l.visibleZones = r.u64();
+    }
+    if (!r.ok() || !arrayCount(r, 1, n))
+        return fail("leaves run past the end");
+    out.lights.resize(n);
+    for (int32_t& l : out.lights)
+        l = r.index();
+    r.i32(); // root outside
+    r.i32(); // linked
+    if (!r.ok())
+        return fail("lights run past the end");
+    out.trailingBytes = r.remaining();
+
+    // As with the geometry, the indices have to hold together.
+    for (const LightMapIndex& m : out.lightMaps) {
+        if (m.uClamp < 0 || m.vClamp < 0 || m.uClamp > 4096 || m.vClamp > 4096 || m.dataOffset < 0)
+            return fail("a light map's size or data offset is out of range");
+        if (m.lightActors < -1 || (m.lightActors >= 0 && size_t(m.lightActors) >= out.lights.size()))
+            return fail("a light map's lights are out of range");
+        // Each light in its list has a bitmap of rows padded to bytes.
+        size_t count = 0;
+        for (size_t i = size_t(std::max(m.lightActors, 0)); m.lightActors >= 0 && i < out.lights.size() && out.lights[i]; ++i)
+            ++count;
+        const size_t bytes = size_t((m.uClamp + 7) / 8) * size_t(m.vClamp) * count;
+        if (size_t(m.dataOffset) + bytes > out.lightBits.size())
+            return fail("a light map's bits run past the light bits");
+    }
+    for (const BspSurf& s : out.surfs)
+        if (s.lightMap >= 0 && size_t(s.lightMap) >= out.lightMaps.size())
+            return fail("a surface's light map is out of range");
+}
 
 } // namespace
 
@@ -127,6 +212,7 @@ Error readModel(const Package& package, int index, Model& out) {
     out.zoneCount = r.i32();
     if (!r.ok())
         return Error::fail(what + ": vertices run past the end");
+    const size_t afterVerts = r.pos();
 
     // Check the indices hold together, which they won't if the layout
     // above is off for this game's version.
@@ -147,6 +233,9 @@ Error readModel(const Package& package, int index, Model& out) {
         if (s.base < 0 || s.base >= points || s.normal < 0 || s.normal >= vectors || s.textureU < 0 ||
             s.textureU >= vectors || s.textureV < 0 || s.textureV >= vectors)
             return Error::fail(what + ": a surface's vectors are out of range");
+
+    r.seek(afterVerts);
+    readLighting(r, out);
     return Error::success();
 }
 

@@ -10,7 +10,9 @@
 // Maps:     a level's BSP drawn by the GPU. Left/Right pick a map; drag to
 //           look, W/A/S/D to move, Space/C (or E/Q) up and down, Shift to
 //           go faster, R back to the player start, I to show or hide the
-//           info, T for textures or plain shading.
+//           info, T for textures or plain shading, L for the level's
+//           lightmaps or shading by facing, [ and ] to dim or brighten
+//           the lightmaps (to compare with the original).
 // Textures: Left/Right step through a package's textures, PageUp/PageDown
 //           pick the package (.utx, then maps' own, then .u).
 // Sounds:   Left/Right step, PageUp/PageDown pick the package, Space plays.
@@ -164,6 +166,7 @@ private:
     struct Batch {
         uint32_t firstIndex = 0, indexCount = 0;
         gfx::TextureId texture = 0;
+        gfx::TextureId lightmap = 0; // 0: none (unlit, blended, or the level has no lighting)
         uint32_t polyFlags = 0;
     };
 
@@ -177,6 +180,9 @@ private:
     std::string error_;
     std::vector<std::string> info_;
     bool textured_ = true;
+    bool lightmaps_ = true;  // drawn with the lightmaps (else shaded by facing)
+    float lightScale_ = 1;   // the lightmaps' brightness, [ and ]
+    bool hasLightmaps_ = false;
 
     // Fly camera, in the renderer's world: Unreal's axes with Y negated
     // (so right-handed), Z up; yaw 0 looks along +X.

@@ -173,6 +173,7 @@ if(RELUVA_ENGINE_UNREAL)
         src/engines/unreal/texture.cpp
         src/engines/unreal/sound.cpp
         src/engines/unreal/model.cpp
+        src/engines/unreal/lighting.cpp
         src/engines/unreal/viewers.cpp
         src/engines/unreal/map_viewer.cpp)
     target_compile_definitions(reluva_engines PUBLIC RELUVA_ENGINE_UNREAL)
