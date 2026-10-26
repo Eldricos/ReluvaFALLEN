@@ -94,7 +94,7 @@ void MeshViewer::show() {
     info_.push_back(pkg->className(index + 1) + " " + name + "  " + browser_.where());
     Error err = readMesh(*pkg, index, mesh_);
     if (!err)
-        err = uploadMesh(*renderer_, mesh_, gpu_);
+        err = uploadMesh(*renderer_, mesh_, gpu_, ctx_.meshTurn);
     if (err) {
         error_ = err.message;
         return;
@@ -120,6 +120,13 @@ void MeshViewer::show() {
                   double(mesh_.scale[1]), double(mesh_.scale[2]), double(mesh_.origin[0]), double(mesh_.origin[1]),
                   double(mesh_.origin[2]), mesh_.rotOrigin.pitch, mesh_.rotOrigin.yaw, mesh_.rotOrigin.roll);
     info_.push_back(line);
+    if (mesh_.importAxes) {
+        const auto& a = *mesh_.importAxes;
+        std::snprintf(line, sizeof line, "float copy turned (rows %g %g %g / %g %g %g / %g %g %g); drawn %s (M changes)",
+                      double(a[0][0]), double(a[0][1]), double(a[0][2]), double(a[1][0]), double(a[1][1]),
+                      double(a[1][2]), double(a[2][0]), double(a[2][1]), double(a[2][2]), meshTurnName(ctx_.meshTurn));
+        info_.push_back(line);
+    }
     if (mesh_.trailingBytes)
         info_.push_back(std::to_string(mesh_.trailingBytes) + " bytes after the last field read");
     resetView();
@@ -145,6 +152,13 @@ void MeshViewer::handleEvent(const Event& ev) {
             resetView();
         } else if (ev.key == 'i') {
             showInfo_ = !showInfo_;
+        } else if (ev.key == 'm') {
+            ctx_.meshTurn = MeshTurn((int(ctx_.meshTurn) + 1) % 3);
+            const float yaw = yaw_, pitch = pitch_, distance = distance_;
+            show();
+            yaw_ = yaw;
+            pitch_ = pitch;
+            distance_ = distance;
         }
     } else if (ev.type == EventType::MouseDown && ev.button == MouseButton::Left) {
         dragging_ = true;

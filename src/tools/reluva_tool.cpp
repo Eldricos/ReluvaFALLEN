@@ -4392,7 +4392,18 @@ int findUnrealExport(const reluva::unreal::Package& pkg, const std::string& whic
     for (size_t i = 0; i < pkg.exports().size(); ++i)
         if (reluva::fs::toLower(pkg.path(int32_t(i) + 1)) == wanted)
             return int(i);
-    return pkg.findExport(which);
+    // By name: a class and its mesh are often named alike (ARD_AmmoCrate),
+    // so a class is taken only if nothing else has the name.
+    int classIndex = -1;
+    for (size_t i = 0; i < pkg.exports().size(); ++i) {
+        if (reluva::fs::toLower(pkg.objectName(int32_t(i) + 1)) != wanted)
+            continue;
+        if (reluva::fs::toLower(pkg.className(int32_t(i) + 1)) != "class")
+            return int(i);
+        if (classIndex < 0)
+            classIndex = int(i);
+    }
+    return classIndex >= 0 ? classIndex : pkg.findExport(which);
 }
 
 int cmdUeInfo(int argc, char** argv) {
@@ -4507,11 +4518,18 @@ int cmdUeProbe(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", err.message.c_str());
             return 1;
         }
-        for (const std::string& name : set.names())
-            if (const Package* p = set.get(name); p && (index = findUnrealExport(*p, argv[3])) >= 0) {
-                found = p;
+        // A class found is kept only until something else of the name is
+        // (the mesh ARD_AmmoCrate is in another package than its class).
+        for (const std::string& name : set.names()) {
+            const Package* p = set.get(name);
+            const int at = p ? findUnrealExport(*p, argv[3]) : -1;
+            if (at < 0 || (found && reluva::fs::toLower(p->className(at + 1)) == "class"))
+                continue;
+            found = p;
+            index = at;
+            if (reluva::fs::toLower(p->className(at + 1)) != "class")
                 break;
-            }
+        }
     } else if (openUnrealPackage(argv[2], own)) {
         found = &own;
         index = findUnrealExport(own, argv[3]);
@@ -4691,6 +4709,7 @@ int cmdUeCheck(int argc, char** argv) {
         std::vector<std::string> examples;
     };
     std::map<std::string, Tally> tallies;
+    std::map<std::string, std::pair<int, std::string>> meshTurns; // turn: how many, an example
     auto record = [&](const std::string& what, const reluva::Error& err) {
         Tally& t = tallies[what];
         if (!err) {
@@ -4744,6 +4763,23 @@ int cmdUeCheck(int argc, char** argv) {
                 record(cls == "lodmesh" ? "meshes (LodMesh)" : "meshes (Mesh)", err);
                 if (!err && m.vertexBytes != 4)
                     ++tallies["meshes with 8-byte vertices"].ok;
+                // Which way imported-model meshes' float copies are turned
+                // from their packed vertices (rows), and an example of each.
+                if (!err && m.importBlock) {
+                    std::string turn = "no turn found";
+                    if (m.importAxes) {
+                        turn.clear();
+                        for (const auto& row : *m.importAxes) {
+                            char buf[64];
+                            std::snprintf(buf, sizeof buf, "%s(%g %g %g)", turn.empty() ? "" : " ", double(row[0]),
+                                          double(row[1]), double(row[2]));
+                            turn += buf;
+                        }
+                    }
+                    auto& [n, example] = meshTurns[turn];
+                    if (n++ == 0)
+                        example = pkg->path(int32_t(i) + 1);
+                }
             }
         }
         if (set.isMap(name)) {
@@ -4812,6 +4848,9 @@ int cmdUeCheck(int argc, char** argv) {
                     lightTotals[1], lightTotals[2], lightTotals[3]);
     std::printf("class defaults (for placed actors' classes and their parents): found %d, not found %d\n",
                 classDefaults.found(), classDefaults.missing());
+    for (const auto& [turn, t] : meshTurns)
+        std::printf("meshes with an imported-model block, float copy %s: %d (e.g. %s)\n", turn.c_str(), t.first,
+                    t.second.c_str());
     for (const auto& [what, t] : tallies) {
         std::printf("%-9s %6d decoded, %6d failed\n", what.c_str(), t.ok, t.failed);
         for (const std::string& ex : t.examples)

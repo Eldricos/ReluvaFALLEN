@@ -50,17 +50,28 @@ constexpr uint32_t kDrawFlags = polyflag::Masked | polyflag::Translucent | polyf
 
 } // namespace
 
-Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out) {
+const char* meshTurnName(MeshTurn turn) {
+    switch (turn) {
+    case MeshTurn::FloatCopy: return "turned onto their float copy";
+    case MeshTurn::Reverse: return "turned the opposite way";
+    default: return "as stored";
+    }
+}
+
+Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn) {
     out = GpuMesh{};
     // The mesh's own placement: less Origin, scaled by Scale, turned by RotOrigin.
     const std::array<Vec3f, 3> axes = rotationAxes(mesh.rotOrigin);
     auto place = [&](const Vec3f& v) {
         Vec3f s{(v[0] - mesh.origin[0]) * mesh.scale[0], (v[1] - mesh.origin[1]) * mesh.scale[1],
                 (v[2] - mesh.origin[2]) * mesh.scale[2]};
-        if (mesh.importAxes) {
+        if (mesh.importAxes && turn != MeshTurn::None) {
+            // The opposite turn is the transpose (the turn's rows as columns).
             const auto& m = *mesh.importAxes;
-            s = {m[0][0] * s[0] + m[0][1] * s[1] + m[0][2] * s[2], m[1][0] * s[0] + m[1][1] * s[1] + m[1][2] * s[2],
-                 m[2][0] * s[0] + m[2][1] * s[1] + m[2][2] * s[2]};
+            const bool t = turn == MeshTurn::Reverse;
+            auto at = [&](size_t row, size_t col) { return t ? m[col][row] : m[row][col]; };
+            s = {at(0, 0) * s[0] + at(0, 1) * s[1] + at(0, 2) * s[2], at(1, 0) * s[0] + at(1, 1) * s[1] + at(1, 2) * s[2],
+                 at(2, 0) * s[0] + at(2, 1) * s[1] + at(2, 2) * s[2]};
         }
         Vec3f p{};
         for (size_t k = 0; k < 3; ++k)

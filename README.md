@@ -111,10 +111,11 @@ Linux (with each distro's packages) and Windows with Visual Studio 2022.
   **Shift** goes faster, **R** returns to the PlayerStart, **T** turns textures off,
   **L** the lightmaps, **[**/**]** dim or brighten them, **-**/**=** change the display's
   gamma, **O** moves the doors and lifts to their next position, **K** turns the sky off,
-  **N** plays the placed meshes' animations and **I** shows or hides the info
+  **N** plays the placed meshes' animations, **M** turns imported meshes as their float copies
+  are (or the opposite way, or back; for comparing) and **I** shows or hides the info
   (it needs 3D, as Elite Force's). For meshes, **Left/Right** step, **PageUp/PageDown**
-  pick the package, drag to turn, the wheel zooms, **A** plays or stops the animation and
-  **[**/**]** pick it. For textures and sounds,
+  pick the package, drag to turn, the wheel zooms, **A** plays or stops the animation,
+  **[**/**]** pick it and **M** turns it as in maps. For textures and sounds,
   **Left/Right** step and **PageUp/PageDown** pick the package; **Space** plays a sound.
   The packages page lists each package's exports: **Left/Right** picks the package,
   **Up/Down** (**PageUp/PageDown**, **Home/End**) the export, **Enter** shows its properties.

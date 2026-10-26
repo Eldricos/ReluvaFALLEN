@@ -369,7 +369,7 @@ void MapViewer::load(int index) {
             GpuMesh gpu;
             Error err = readMesh(*a.mesh.package, a.mesh.exportIndex, mesh);
             if (!err)
-                err = uploadMesh(*renderer_, mesh, gpu);
+                err = uploadMesh(*renderer_, mesh, gpu, ctx_.meshTurn);
             int at = -1;
             if (err) {
                 ++badMeshes;
@@ -477,6 +477,10 @@ void MapViewer::load(int index) {
                   meshActors_.size(), meshes_.size(), meshStats.fromDefaults, meshStats.hidden, badMeshes,
                   defaults.found(), defaults.missing());
     info_.push_back(line);
+    const auto turned = std::count_if(meshes_.begin(), meshes_.end(), [](const Mesh& m) { return bool(m.importAxes); });
+    if (turned)
+        info_.push_back(std::to_string(turned) + " meshes with a float copy turned from them: drawn " +
+                        meshTurnName(ctx_.meshTurn) + " (M changes)");
     if (!firstBadMesh.empty())
         info_.push_back("First unreadable mesh: " + firstBadMesh);
     info_.push_back("Not drawn yet: sprites, lights' effects (flicker, pulse...), movers' own lighting");
@@ -531,6 +535,17 @@ void MapViewer::handleEvent(const Event& ev) {
             showSky_ = !showSky_;
         else if (ev.key == 'n')
             animate_ = !animate_;
+        else if (ev.key == 'm') {
+            ctx_.meshTurn = MeshTurn((int(ctx_.meshTurn) + 1) % 3);
+            // Kept where it is: only the meshes need uploading again, but
+            // the level loads quickly enough to just load it again.
+            const auto pos = pos_;
+            const float yaw = yaw_, pitch = pitch_;
+            load(index_);
+            pos_ = pos;
+            yaw_ = yaw;
+            pitch_ = pitch;
+        }
         else if (ev.key == 'o')
             for (MoverDraw& m : movers_)
                 if (m.key == m.target && m.mover.numKeys > 1) {
