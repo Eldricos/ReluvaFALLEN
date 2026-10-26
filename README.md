@@ -110,7 +110,8 @@ Linux (with each distro's packages) and Windows with Visual Studio 2022.
   picks one, drag to look, **W/A/S/D** move, **Space/C** (or **E/Q**) go up and down,
   **Shift** goes faster, **R** returns to the PlayerStart, **T** turns textures off,
   **L** the lightmaps, **[**/**]** dim or brighten them, **-**/**=** change the display's
-  gamma and **I** shows or hides the info
+  gamma, **O** moves the doors and lifts to their next position, **K** turns the sky off
+  and **I** shows or hides the info
   (it needs 3D, as Elite Force's). For textures and sounds,
   **Left/Right** step and **PageUp/PageDown** pick the package; **Space** plays a sound.
   The packages page lists each package's exports: **Left/Right** picks the package,

@@ -13,7 +13,9 @@
 //           info, T for textures or plain shading, L for the level's
 //           lightmaps or shading by facing, [ and ] to dim or brighten
 //           the lightmaps, - and = to change the display's contrast (its
-//           gamma; to compare with the original).
+//           gamma; to compare with the original), O to move the movers
+//           (doors, lifts) on to their next keyframe, K to show or hide
+//           the sky.
 // Textures: Left/Right step through a package's textures, PageUp/PageDown
 //           pick the package (.utx, then maps' own, then .u).
 // Sounds:   Left/Right step, PageUp/PageDown pick the package, Space plays.
@@ -21,6 +23,7 @@
 //           Up/Down move through its exports (PageUp/PageDown, Home/End),
 //           Enter shows the selected export's properties.
 
+#include "engines/unreal/actors.h"
 #include "engines/unreal/games.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package_set.h"
@@ -34,6 +37,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -171,11 +175,26 @@ private:
         uint32_t polyFlags = 0;
     };
 
+    // A mover: its polygons (in its brush's own coordinates, in
+    // moverMesh_) and where it is between its keyframes.
+    struct MoverDraw {
+        Mover mover;
+        std::vector<Batch> batches;
+        int key = 0, target = 0; // moving from key to target
+        float t = 0;             // 0-1 of the way
+    };
+    gfx::Mat4 moverTransform(const MoverDraw& m) const;
+    void drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh, const gfx::Mat4& model, bool levelLit);
+
     std::vector<std::string> names_;
     int index_ = 0;
     gfx::Renderer3D* renderer_ = nullptr; // valid while this page is shown
     gfx::MeshId mesh_ = 0;
     std::vector<Batch> batches_;
+    gfx::MeshId moverMesh_ = 0;
+    std::vector<MoverDraw> movers_;
+    std::optional<Vec3f> sky_; // the sky zone's viewpoint, Unreal's coordinates
+    bool showSky_ = true;
     std::vector<gfx::TextureId> textures_;
     Surface overlay_;
     std::string error_;

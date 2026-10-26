@@ -7,6 +7,7 @@
 #include "common/audio/wav.h"
 #include "data/tone440_mp3.h"
 #include "engines/registry.h"
+#include "engines/unreal/actors.h"
 #include "engines/unreal/games.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/model.h"
@@ -672,6 +673,94 @@ static void testMapExtension() {
     std::filesystem::remove_all(tmp);
 }
 
+static void testActors() {
+    // Classes defined here: Brush, Mover extending it, ElevatorMover
+    // extending that, SkyZoneInfo; a square brush polygon; an elevator
+    // using it with two keyframes; a sky zone.
+    PackageWriter w;
+    const int32_t brushClass = w.addExport(0, 0, "Brush", {});
+    const int32_t moverClass = w.addExport(0, 0, "Mover", {});
+    w.exports.back().superRef = brushClass;
+    const int32_t elevatorClass = w.addExport(0, 0, "ElevatorMover", {});
+    w.exports.back().superRef = moverClass;
+    const int32_t skyClass = w.addExport(0, 0, "SkyZoneInfo", {});
+    const int32_t polysClass = w.addImport("Engine", "Class", 0, "Polys");
+    const int32_t modelClass = w.addImport("Engine", "Class", 0, "Model");
+
+    Bytes polys;
+    endProps(polys, w);
+    polys.i32(1), polys.i32(1);
+    polys.index(4);
+    polys.vec(0, 0, 0), polys.vec(0, 0, 1), polys.vec(1, 0, 0), polys.vec(0, 1, 0);
+    polys.vec(0, 0, 0), polys.vec(64, 0, 0), polys.vec(64, 64, 0), polys.vec(0, 64, 0);
+    polys.u32(0), polys.index(0), polys.index(0), polys.index(0), polys.index(0), polys.index(0);
+    polys.u16(8), polys.u16(0);
+    const int32_t polysRef = w.addExport(polysClass, 0, "Polys0", polys.b);
+
+    Bytes model; // a brush's model: no geometry of its own, then its Polys
+    endProps(model, w);
+    for (int i = 0; i < 6; ++i)
+        model.f32(0);
+    model.u8(0);
+    for (int i = 0; i < 4; ++i)
+        model.f32(0);
+    for (int i = 0; i < 5; ++i)
+        model.index(0);
+    model.i32(0), model.i32(0);
+    model.index(polysRef);
+    model.index(0), model.index(0), model.index(0), model.index(0), model.index(0), model.index(0);
+    model.i32(0), model.i32(0);
+    const int32_t modelRef = w.addExport(modelClass, 0, "Model5", model.b);
+
+    Bytes mover;
+    tag(mover, w, "Location", PropertyType::Struct, 12, 0, "Vector");
+    mover.vec(10, 20, 30);
+    tag(mover, w, "KeyPos", PropertyType::Struct, 12, 1, "Vector");
+    mover.vec(0, 0, 64);
+    tag(mover, w, "MoveTime", PropertyType::Float, 4);
+    mover.f32(2);
+    tag(mover, w, "Brush", PropertyType::Object, 1);
+    mover.index(modelRef);
+    endProps(mover, w);
+    w.addExport(elevatorClass, 0, "ElevatorMover0", mover.b);
+
+    Bytes sky;
+    tag(sky, w, "Location", PropertyType::Struct, 12, 0, "Vector");
+    sky.vec(1000, 2000, 3000);
+    endProps(sky, w);
+    w.addExport(skyClass, 0, "SkyZoneInfo0", sky.b);
+
+    PackageSet set;
+    set.addMemory("Level", ".unr", w.build());
+    const Package* p = set.get("Level");
+    CHECK(p != nullptr);
+    if (!p)
+        return;
+    const int elevator = p->findExport("ElevatorMover0"), skyZone = p->findExport("SkyZoneInfo0");
+    CHECK(isA(set, *p, elevator, "mover") && isA(set, *p, elevator, "Brush") && !isA(set, *p, skyZone, "Mover"));
+
+    std::vector<Poly> list;
+    size_t trailing = 1;
+    CHECK(!readPolys(*p, int(polysRef) - 1, list, &trailing) && trailing == 0);
+    CHECK(list.size() == 1 && list[0].vertices.size() == 4 && list[0].normal[2] == 1 && list[0].panU == 8);
+
+    std::vector<std::string> errors;
+    const std::vector<Mover> movers = findMovers(set, *p, &errors);
+    CHECK(errors.empty() && movers.size() == 1);
+    if (movers.size() == 1) {
+        const Mover& m = movers[0];
+        CHECK(m.polys.size() == 1 && m.numKeys == 2 && m.keyNum == 0 && m.moveTime == 2);
+        CHECK((m.basePosition() == Vec3f{10, 20, 30}) && (m.keyPos[1] == Vec3f{0, 0, 64}));
+        CHECK((m.mainScale == Vec3f{1, 1, 1}));
+    }
+    const auto skyAt = findSkyZone(set, *p);
+    CHECK(skyAt && (*skyAt == Vec3f{1000, 2000, 3000}));
+
+    // Yaw a quarter turn: forward is +Y, right is -X.
+    const auto axes = rotationAxes({0, 16384, 0});
+    CHECK(std::abs(axes[0][1] - 1) < 1e-5f && std::abs(axes[1][0] + 1) < 1e-5f && std::abs(axes[2][2] - 1) < 1e-5f);
+}
+
 int main() {
     testCompactIndex();
     testPackageTables();
@@ -684,6 +773,7 @@ int main() {
     testSoundErrors();
     testProceduralTextures();
     testStreamedSounds();
+    testActors();
     testMapExtension();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

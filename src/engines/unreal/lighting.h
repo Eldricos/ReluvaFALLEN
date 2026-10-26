@@ -50,6 +50,7 @@ constexpr float kMaxLight = 1;
 struct LevelLights {
     std::vector<LightSource> sources; // one per entry of Model::lights
     std::vector<Vec3f> zoneAmbient;   // one per zone
+    std::vector<LightSource> unique;  // each light once (sources repeats them)
     int unreadable = 0;               // light actors whose properties didn't read
 };
 LevelLights gatherLights(const PackageSet& packages, const Package& package, const Model& model);

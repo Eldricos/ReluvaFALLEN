@@ -129,6 +129,8 @@ LevelLights gatherLights(const PackageSet& packages, const Package& package, con
             if (!readLight(packages, package, ref, l))
                 ++out.unreadable;
             it = byRef.emplace(ref, l).first;
+            if (l.radius > 0)
+                out.unique.push_back(l);
         }
         out.sources.push_back(it->second);
     }

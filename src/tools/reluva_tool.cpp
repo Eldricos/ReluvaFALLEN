@@ -131,6 +131,7 @@
 #endif
 
 #ifdef RELUVA_ENGINE_UNREAL
+#include "engines/unreal/actors.h"
 #include "engines/unreal/games.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/model.h"
@@ -4663,6 +4664,18 @@ int cmdUeCheck(int argc, char** argv) {
                                                    " bytes after the model's last field");
                 }
                 record("lighting", lerr);
+                // Movers and the sky zone (actors.md).
+                std::vector<std::string> moverErrors;
+                const std::vector<Mover> movers = findMovers(set, *pkg, &moverErrors);
+                size_t moverPolys = 0;
+                for (const Mover& m : movers)
+                    moverPolys += m.polys.size();
+                const auto skyAt = findSkyZone(set, *pkg);
+                std::printf("    movers: %zu (%zu polygons), %zu unreadable; sky zone: %s\n", movers.size(), moverPolys,
+                            moverErrors.size(), skyAt ? "yes" : "none");
+                tallies["movers"].ok += int(movers.size());
+                for (const std::string& e : moverErrors)
+                    record("movers", reluva::Error::fail(name + ": " + e));
             }
         }
     }

@@ -35,7 +35,7 @@ they go in. Never use Epic's licensee source code (leaked or otherwise).
 | Textures | P8 with palettes (masked colour 0), DXT1, RGB8, RGBA8; all The Fallen's stored textures decode. Procedural ones (fire, water...) shown as still stand-ins until their effects are written ([texture.md](../formats/unreal/texture.md)) |
 | Sounds | the embedded WAV, played through `common/audio`; The Fallen's music streamed from `mp3/` in place of its placeholder Sounds ([sound.md](../formats/unreal/sound.md)) |
 | Music | the embedded module is extracted (`ue-extract`); not played (no tracker player yet) |
-| Levels | all 74 of The Fallen's maps read and draw. The level's BSP model: points, vectors, nodes, surfaces, vertices ([model.md](../formats/unreal/model.md)); polygons drawn textured, with masked, translucent and modulated surfaces. Lit by lightmaps worked out from the shadow bits and light actors, with zone ambient ([lighting.md](../formats/unreal/lighting.md)); not yet checked on The Fallen's maps. Not yet: lights' changing effects, movers and other brushes, actors' meshes, the sky |
+| Levels | all 74 of The Fallen's maps read and draw. The level's BSP model: points, vectors, nodes, surfaces, vertices ([model.md](../formats/unreal/model.md)); polygons drawn textured, with masked, translucent and modulated surfaces. Lit by lightmaps worked out from the shadow bits and light actors, with zone ambient ([lighting.md](../formats/unreal/lighting.md)); not yet checked on The Fallen's maps. Movers (doors, lifts) from their own brushes, moved through their keyframes on request, and the sky from the level's sky zone ([actors.md](../formats/unreal/actors.md)); not yet checked on The Fallen's maps. Not yet: lights' changing effects, actors' meshes |
 | Viewer | Maps (3D, fly camera from the PlayerStart), Textures, Sounds, Packages (tables and properties) |
 | Game | not started: UnrealScript bytecode VM, actors, collision, input, HUD/menus |
 
@@ -70,8 +70,8 @@ added fields).
    `int/` (`*.int`, `*_Dialogue.txt`), the `System/*.int` localisation.
 2. **Levels, continued**: check the lightmaps on The Fallen's maps and
    tune them against the original ([lighting.md](../formats/unreal/lighting.md));
-   lights' effects; the sky zone; brush actors (movers) drawn from their
-   own models (Polys); visibility by zone portals.
+   lights' effects; check movers and the sky on The Fallen's maps; movers
+   lit as they move; visibility by zone portals.
 3. **Meshes**: vertex meshes (`Mesh`/`LodMesh`) for actors, and The
    Fallen's character models, whatever format they turn out to be.
 4. **UnrealScript**: classes, functions and states from `.u` packages;

@@ -2,12 +2,13 @@
 // Copyright (C) 2026 The Reluva contributors
 
 // The data viewer's Maps page: a level's BSP polygons drawn on the GPU,
-// textured but not yet lit by the level's lightmaps (each face is shaded
-// by which way it faces instead), with a fly camera starting at the
-// level's PlayerStart.
+// textured and lit by its lightmaps, its movers (doors, lifts) from their
+// own brushes and its sky seen from the sky zone, with a fly camera
+// starting at the level's PlayerStart.
 
 #include "engines/unreal/viewers.h"
 
+#include "engines/unreal/actors.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/properties.h"
 #include "engines/unreal/texture.h"
@@ -47,6 +48,50 @@ constexpr uint32_t kDrawFlags = polyflag::Masked | polyflag::Translucent | polyf
 
 bool blended(uint32_t flags) { return flags & (polyflag::Translucent | polyflag::Modulated); }
 
+// Column-major 4x4 matrices for placing movers (gfx3d.h's conventions).
+gfx::Mat4 translation(const Vec3f& t) {
+    gfx::Mat4 m = gfx::identity();
+    m[12] = t[0];
+    m[13] = t[1];
+    m[14] = t[2];
+    return m;
+}
+gfx::Mat4 scaling(const Vec3f& s) {
+    gfx::Mat4 m = gfx::identity();
+    m[0] = s[0];
+    m[5] = s[1];
+    m[10] = s[2];
+    return m;
+}
+gfx::Mat4 rotation(const Rotator& r) {
+    const std::array<Vec3f, 3> axes = rotationAxes(r);
+    gfx::Mat4 m = gfx::identity();
+    for (size_t c = 0; c < 3; ++c)
+        for (size_t k = 0; k < 3; ++k)
+            m[c * 4 + k] = axes[c][k];
+    return m;
+}
+
+// The light at a point facing `n` from every light, without shadows (for
+// movers, which the level's lightmaps don't cover), at most kMaxLight.
+Vec3f lightAt(const LevelLights& lights, const Vec3f& p, const Vec3f& n) {
+    Vec3f total{0.1f, 0.1f, 0.1f}; // a little, so unlit sides aren't black
+    for (const LightSource& l : lights.unique) {
+        const Vec3f d{l.position[0] - p[0], l.position[1] - p[1], l.position[2] - p[2]};
+        const float dist = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (dist >= l.radius || dist <= 0)
+            continue;
+        float amount = 1 - dist / l.radius;
+        if (l.incidence)
+            amount *= std::max(0.0f, (n[0] * d[0] + n[1] * d[1] + n[2] * d[2]) / dist);
+        for (size_t k = 0; k < 3; ++k)
+            total[k] += l.color[k] * amount;
+    }
+    for (float& c : total)
+        c = std::min(c, kMaxLight);
+    return total;
+}
+
 } // namespace
 
 MapViewer::MapViewer(ViewerContext& ctx) : Page(ctx), names_(ctx.packages.mapNames()) {}
@@ -63,7 +108,11 @@ void MapViewer::unload() {
         return;
     if (mesh_)
         renderer_->destroyMesh(mesh_);
-    mesh_ = 0;
+    if (moverMesh_)
+        renderer_->destroyMesh(moverMesh_);
+    mesh_ = moverMesh_ = 0;
+    movers_.clear();
+    sky_.reset();
     for (gfx::TextureId t : textures_)
         renderer_->destroyTexture(t);
     textures_.clear();
@@ -146,9 +195,43 @@ void MapViewer::load(int index) {
 
     std::vector<gfx::Vertex> vertices;
     std::vector<uint32_t> indices;
+    // Each texture uploaded once; its size divides texture coordinates.
     std::map<std::pair<const Package*, int>, std::pair<gfx::TextureId, std::array<int, 2>>> loaded;
     int missing = 0;
     std::string firstMissing;
+    auto textureFor = [&](const Package& from, int32_t ref) -> std::pair<gfx::TextureId, std::array<int, 2>> {
+        const ObjectRef tex = ctx_.packages.resolve(from, ref);
+        if (!tex) {
+            if (ref != 0) {
+                ++missing;
+                if (firstMissing.empty())
+                    firstMissing = from.path(ref);
+            }
+            return {0, {64, 64}};
+        }
+        auto it = loaded.find({tex.package, tex.exportIndex});
+        if (it == loaded.end()) {
+            image::Image img;
+            gfx::TextureId id = 0;
+            TextureInfo ti;
+            if (decodeTexture(ctx_.packages, *tex.package, tex.exportIndex, img, &ti)) {
+                ++missing;
+                if (firstMissing.empty())
+                    firstMissing = tex.package->path(tex.exportIndex + 1);
+            } else {
+                gfx::TextureParams params;
+                params.nearest = (ti.polyFlags & polyflag::NoSmooth) != 0;
+                if (!renderer_->createTexture(img.w, img.h, img.rgba.data(), params, id))
+                    textures_.push_back(id);
+                else
+                    id = 0;
+            }
+            it = loaded.emplace(std::make_pair(tex.package, tex.exportIndex),
+                                std::make_pair(id, std::array<int, 2>{std::max(1, img.w), std::max(1, img.h)}))
+                     .first;
+        }
+        return it->second;
+    };
     const gfx::Vec3 light = [] {
         const float l = std::sqrt(0.3f * 0.3f + 0.5f * 0.5f + 0.8f * 0.8f);
         return gfx::Vec3{0.3f / l, 0.5f / l, 0.8f / l};
@@ -159,37 +242,8 @@ void MapViewer::load(int index) {
         batch.polyFlags = flags;
         batch.lightmap = page >= 0 ? pages[size_t(page)] : 0;
         batch.firstIndex = uint32_t(indices.size());
-        std::array<int, 2> size{64, 64};
-        const ObjectRef tex = ctx_.packages.resolve(*pkg, textureRef);
-        if (tex) {
-            auto it = loaded.find({tex.package, tex.exportIndex});
-            if (it == loaded.end()) {
-                image::Image img;
-                gfx::TextureId id = 0;
-                TextureInfo ti;
-                if (decodeTexture(ctx_.packages, *tex.package, tex.exportIndex, img, &ti)) {
-                    ++missing;
-                    if (firstMissing.empty())
-                        firstMissing = tex.package->path(tex.exportIndex + 1);
-                } else {
-                    gfx::TextureParams params;
-                    params.nearest = (ti.polyFlags & polyflag::NoSmooth) != 0;
-                    if (!renderer_->createTexture(img.w, img.h, img.rgba.data(), params, id))
-                        textures_.push_back(id);
-                    else
-                        id = 0;
-                }
-                it = loaded.emplace(std::make_pair(tex.package, tex.exportIndex),
-                                    std::make_pair(id, std::array<int, 2>{std::max(1, img.w), std::max(1, img.h)}))
-                         .first;
-            }
-            batch.texture = it->second.first;
-            size = it->second.second;
-        } else if (textureRef != 0) {
-            ++missing;
-            if (firstMissing.empty())
-                firstMissing = pkg->path(textureRef);
-        }
+        const auto [textureId, size] = textureFor(*pkg, textureRef);
+        batch.texture = textureId;
         for (const Polygon* p : group) {
             const auto base = uint32_t(vertices.size());
             const gfx::Vec3 n = toWorld(p->normal);
@@ -224,6 +278,72 @@ void MapViewer::load(int index) {
     if (!indices.empty())
         if (Error err = renderer_->createMesh(vertices, indices, mesh_))
             error_ = err.message;
+
+    // The movers: each brush's polygons in its own coordinates, grouped by
+    // texture and flags, lit (without shadows) where it starts.
+    std::vector<std::string> moverErrors;
+    std::vector<Mover> movers = findMovers(ctx_.packages, *pkg, &moverErrors);
+    vertices.clear();
+    indices.clear();
+    for (Mover& m : movers) {
+        MoverDraw d;
+        d.key = d.target = m.keyNum;
+        d.mover = std::move(m);
+        const gfx::Mat4 place = moverTransform(d);
+        std::map<std::pair<int32_t, uint32_t>, std::vector<const Poly*>> moverGroups;
+        for (const Poly& p : d.mover.polys)
+            if (p.vertices.size() >= 3 && !(p.polyFlags & (polyflag::Invisible | polyflag::Portal)))
+                moverGroups[{p.texture, p.polyFlags & kDrawFlags}].push_back(&p);
+        for (const auto& [key, group] : moverGroups) {
+            Batch batch;
+            batch.polyFlags = key.second;
+            batch.firstIndex = uint32_t(indices.size());
+            const auto [textureId, size] = textureFor(*pkg, key.first);
+            batch.texture = textureId;
+            for (const Poly* p : group) {
+                const auto base = uint32_t(vertices.size());
+                // The normal as the mover is placed, in Unreal's axes: where
+                // its tip goes less where the origin goes, made unit length.
+                const gfx::Vec3 origin = gfx::transformPoint(place, Vec3f{});
+                const gfx::Vec3 tip = gfx::transformPoint(place, p->normal);
+                Vec3f normal{tip[0] - origin[0], -(tip[1] - origin[1]), tip[2] - origin[2]};
+                const float len = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+                for (float& c : normal)
+                    c = len > 0 ? c / len : 0;
+                for (const Vec3f& v : p->vertices) {
+                    gfx::Vertex vx{};
+                    std::copy(v.begin(), v.end(), vx.pos);
+                    const Vec3f d2{v[0] - p->base[0], v[1] - p->base[1], v[2] - p->base[2]};
+                    vx.uv[0] = (d2[0] * p->textureU[0] + d2[1] * p->textureU[1] + d2[2] * p->textureU[2] + float(p->panU)) /
+                               float(size[0]);
+                    vx.uv[1] = (d2[0] * p->textureV[0] + d2[1] * p->textureV[1] + d2[2] * p->textureV[2] + float(p->panV)) /
+                               float(size[1]);
+                    std::copy(p->normal.begin(), p->normal.end(), vx.normal);
+                    const gfx::Vec3 w = gfx::transformPoint(place, v);
+                    const Vec3f light = (key.second & polyflag::Unlit)
+                                            ? Vec3f{1, 1, 1}
+                                            : lightAt(lights, Vec3f{w[0], -w[1], w[2]}, normal);
+                    for (size_t k = 0; k < 3; ++k)
+                        vx.color[k] = uint8_t(light[k] * 255 + 0.5f);
+                    vx.color[3] = 255;
+                    vertices.push_back(vx);
+                }
+                for (size_t k = 2; k < p->vertices.size(); ++k) {
+                    indices.push_back(base);
+                    indices.push_back(base + uint32_t(k) - 1);
+                    indices.push_back(base + uint32_t(k));
+                }
+            }
+            batch.indexCount = uint32_t(indices.size()) - batch.firstIndex;
+            if (batch.indexCount)
+                d.batches.push_back(batch);
+        }
+        movers_.push_back(std::move(d));
+    }
+    if (!indices.empty())
+        if (Error err = renderer_->createMesh(vertices, indices, moverMesh_))
+            error_ = err.message;
+    sky_ = findSkyZone(ctx_.packages, *pkg);
     const auto tMesh = Clock::now();
 
     // Start at the first PlayerStart, or above the level's middle.
@@ -269,7 +389,11 @@ void MapViewer::load(int index) {
                   "loaded in %.0f ms: model %.0f, light actors %.0f, lightmaps %.0f, textures and mesh %.0f",
                   ms(t0, tMesh), ms(t0, tModel), ms(tModel, tLights), ms(tLights, tLightmaps), ms(tLightmaps, tMesh));
     info_.push_back(line);
-    info_.push_back("Not drawn yet: movers, actors' meshes, the skybox, lights' effects (flicker, pulse...)");
+    std::snprintf(line, sizeof line, "%zu movers%s; sky zone: %s", movers_.size(),
+                  moverErrors.empty() ? "" : (", " + std::to_string(moverErrors.size()) + " unreadable").c_str(),
+                  sky_ ? "yes" : "none");
+    info_.push_back(moverErrors.empty() ? std::string(line) : std::string(line) + " (first: " + moverErrors[0] + ")");
+    info_.push_back("Not drawn yet: actors' meshes, lights' effects (flicker, pulse...), movers' own lighting");
 }
 
 void MapViewer::toStart() {
@@ -317,6 +441,14 @@ void MapViewer::handleEvent(const Event& ev) {
             displayGamma_ = std::max(0.5f, displayGamma_ - 0.05f);
         else if (ev.key == '=')
             displayGamma_ = std::min(2.5f, displayGamma_ + 0.05f);
+        else if (ev.key == 'k')
+            showSky_ = !showSky_;
+        else if (ev.key == 'o')
+            for (MoverDraw& m : movers_)
+                if (m.key == m.target && m.mover.numKeys > 1) {
+                    m.target = (m.key + 1) % m.mover.numKeys;
+                    m.t = 0;
+                }
     } else if (ev.type == EventType::MouseDown && ev.button == MouseButton::Left) {
         dragging_ = true;
         lastX_ = ev.mouseX;
@@ -334,10 +466,6 @@ void MapViewer::handleEvent(const Event& ev) {
 void MapViewer::update(uint64_t nowMs) {
     if (!renderer_)
         return;
-    auto lit = [&](const Batch& b) {
-        return lightmaps_ && b.lightmap && !blended(b.polyFlags) &&
-               !(b.polyFlags & (polyflag::FakeBackdrop | polyflag::Unlit));
-    };
     const float dt = lastMs_ ? std::min(0.1f, float(nowMs - lastMs_) / 1000.0f) : 0.0f;
     lastMs_ = nowMs;
 
@@ -355,25 +483,102 @@ void MapViewer::update(uint64_t nowMs) {
     const float fovY = 2 * std::atan(std::tan(kPi / 4) / aspect);
     const gfx::Mat4 viewProj =
         gfx::multiply(gfx::perspective(fovY, aspect, 4, 65536), gfx::lookAlong(pos_, forward, {0, 0, 1}));
+    // Movers between keyframes, at their own pace.
+    for (MoverDraw& m : movers_)
+        if (m.key != m.target) {
+            m.t += dt / std::max(0.05f, m.mover.moveTime);
+            if (m.t >= 1) {
+                m.key = m.target;
+                m.t = 0;
+            }
+        }
+
     // The renderer raises colours to 1 / its gamma.
     renderer_->setGamma(1 / displayGamma_);
-    renderer_->beginFrame(viewProj, pos_, {20, 24, 40});
+    const gfx::Mat4 proj = gfx::perspective(fovY, aspect, 4, 65536);
+    const bool sky = sky_ && showSky_;
+    if (sky) {
+        // The sky first: the level seen from the sky zone, looking the
+        // same way; then the view, from scratch, with the backdrop
+        // surfaces leaving it showing.
+        const gfx::Vec3 eye = toWorld(*sky_);
+        renderer_->beginFrame(gfx::multiply(proj, gfx::lookAlong(eye, forward, {0, 0, 1})), eye, {20, 24, 40});
+        drawBatches(batches_, mesh_, gfx::identity(), true);
+        renderer_->clearDepth();
+        renderer_->setView(viewProj, pos_);
+    } else {
+        renderer_->beginFrame(viewProj, pos_, {20, 24, 40});
+    }
+    // Backdrop surfaces: with the sky, only their depth, hiding what's
+    // behind them; without it, a plain colour.
     for (const Batch& b : batches_) {
+        if (!(b.polyFlags & polyflag::FakeBackdrop))
+            continue;
         gfx::DrawCall call;
         call.mesh = mesh_;
         call.firstIndex = b.firstIndex;
         call.indexCount = b.indexCount;
         call.state.cull = gfx::Cull::None;
-        if (b.polyFlags & polyflag::FakeBackdrop) {
-            // Where the sky shows through; the skybox isn't drawn yet.
-            call.color = {0.15f, 0.2f, 0.35f, 1};
-        } else {
-            call.texture = textured_ ? b.texture : 0;
-            // With a lightmap the second pass lights it; else shading by facing.
-            call.rgbSource = lit(b) ? gfx::ColorSource::Constant : gfx::ColorSource::Vertex;
-            if (!(b.polyFlags & polyflag::Modulated)) // those multiply what's there, so stay as they are
-                call.color = {kExposure, kExposure, kExposure, 1};
+        call.color = {0.15f, 0.2f, 0.35f, 1};
+        if (sky) {
+            call.state.src = gfx::Blend::Zero;
+            call.state.dst = gfx::Blend::One;
         }
+        renderer_->draw(call);
+    }
+    drawBatches(batches_, mesh_, gfx::identity(), true);
+    for (const MoverDraw& m : movers_)
+        drawBatches(m.batches, moverMesh_, moverTransform(m), false);
+    drawOverlay(nowMs);
+    renderer_->endFrame(&overlay_);
+}
+
+gfx::Mat4 MapViewer::moverTransform(const MoverDraw& d) const {
+    const Mover& m = d.mover;
+    // Where it is between its two keyframes.
+    const Vec3f base = m.basePosition();
+    const Rotator baseRot = m.baseRotation();
+    const Vec3f& a = m.keyPos[size_t(d.key)];
+    const Vec3f& b = m.keyPos[size_t(d.target)];
+    const Rotator& ra = m.keyRot[size_t(d.key)];
+    const Rotator& rb = m.keyRot[size_t(d.target)];
+    const float t = d.t;
+    const Vec3f location{base[0] + a[0] + (b[0] - a[0]) * t, base[1] + a[1] + (b[1] - a[1]) * t,
+                         base[2] + a[2] + (b[2] - a[2]) * t};
+    const Rotator rot{baseRot.pitch + ra.pitch + int32_t(float(rb.pitch - ra.pitch) * t),
+                      baseRot.yaw + ra.yaw + int32_t(float(rb.yaw - ra.yaw) * t),
+                      baseRot.roll + ra.roll + int32_t(float(rb.roll - ra.roll) * t)};
+    // location + postScale * (rotation * (mainScale * (v - prePivot))),
+    // then Y negated into the renderer's axes.
+    const gfx::Mat4 flip = scaling({1, -1, 1});
+    gfx::Mat4 m4 = gfx::multiply(flip, translation(location));
+    m4 = gfx::multiply(m4, scaling(m.postScale));
+    m4 = gfx::multiply(m4, rotation(rot));
+    m4 = gfx::multiply(m4, scaling(m.mainScale));
+    return gfx::multiply(m4, translation({-m.prePivot[0], -m.prePivot[1], -m.prePivot[2]}));
+}
+
+void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh, const gfx::Mat4& model,
+                            bool levelLit) {
+    auto lit = [&](const Batch& b) {
+        return levelLit && lightmaps_ && b.lightmap && !blended(b.polyFlags) &&
+               !(b.polyFlags & (polyflag::FakeBackdrop | polyflag::Unlit));
+    };
+    for (const Batch& b : batches) {
+        if (b.polyFlags & polyflag::FakeBackdrop)
+            continue;
+        gfx::DrawCall call;
+        call.mesh = mesh;
+        call.model = model;
+        call.firstIndex = b.firstIndex;
+        call.indexCount = b.indexCount;
+        call.state.cull = gfx::Cull::None;
+        call.texture = textured_ ? b.texture : 0;
+        // With a lightmap the second pass lights it; else the vertex colours
+        // (shading by facing, or a mover's light).
+        call.rgbSource = lit(b) ? gfx::ColorSource::Constant : gfx::ColorSource::Vertex;
+        if (!(b.polyFlags & polyflag::Modulated)) // those multiply what's there, so stay as they are
+            call.color = {kExposure, kExposure, kExposure, 1};
         if (b.polyFlags & polyflag::Masked)
             call.state.alphaTest = gfx::AlphaTest::Ge128;
         if (b.polyFlags & polyflag::Translucent) {
@@ -388,8 +593,7 @@ void MapViewer::update(uint64_t nowMs) {
         }
         renderer_->draw(call);
         if (lit(b)) {
-            // The lightmap over it, doubled (dst * src * 2): light up to
-            // twice the texture's colours.
+            // The lightmap over it, doubled (dst * src * 2).
             gfx::DrawCall light = call;
             light.texture = b.lightmap;
             light.texGen = gfx::TexGen::Uv2;
@@ -403,8 +607,6 @@ void MapViewer::update(uint64_t nowMs) {
             renderer_->draw(light);
         }
     }
-    drawOverlay(nowMs);
-    renderer_->endFrame(&overlay_);
 }
 
 void MapViewer::drawOverlay(uint64_t nowMs) {
