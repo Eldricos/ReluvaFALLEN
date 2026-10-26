@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <optional>
 
 namespace reluva::unreal {
 
@@ -205,6 +207,77 @@ bool findVertexBlock(const std::vector<uint8_t>& data, size_t base, size_t from,
     return false;
 }
 
+// Which way the vertices go: the block keeps them a second time as
+// floats, placed (`(n, n, 128)` and n x 3 floats, n = FrameVerts). Of the
+// 24 axis-aligned turns, the one that takes the first frame's packed
+// vertices (by Scale and Origin) closest onto those, if close.
+std::optional<std::array<Vec3f, 3>> importAxes(const std::vector<uint8_t>& data, size_t base, size_t from,
+                                               size_t to, const Mesh& mesh, const MeshTail& t) {
+    const auto n = uint32_t(t.frameVerts);
+    auto u32At = [&](size_t at) {
+        const uint8_t* p = data.data() + (at - base);
+        return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
+    };
+    auto f32At = [&](size_t at) {
+        const uint32_t bits = u32At(at);
+        float f;
+        std::memcpy(&f, &bits, 4);
+        return f;
+    };
+    // The first frame, by Scale and Origin, and its extent.
+    std::vector<Vec3f> scaled(n);
+    float extent = 0;
+    for (uint32_t k = 0; k < n; ++k) {
+        for (size_t a = 0; a < 3; ++a) {
+            scaled[k][a] = (mesh.verts[k][a] - t.origin[a]) * t.scale[a];
+            extent = std::max(extent, std::fabs(scaled[k][a]));
+        }
+    }
+    if (extent <= 0)
+        return std::nullopt;
+    // The 24 turns: each output axis takes an input axis, signed, with
+    // determinant +1.
+    std::vector<std::array<Vec3f, 3>> turns;
+    const int perms[6][3] = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
+    for (const auto& p : perms)
+        for (int signs = 0; signs < 8; ++signs) {
+            std::array<Vec3f, 3> m{};
+            for (size_t row = 0; row < 3; ++row)
+                m[row][size_t(p[row])] = (signs >> row) & 1 ? -1.0f : 1.0f;
+            const float det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+                              m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+                              m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+            if (det > 0)
+                turns.push_back(m);
+        }
+    std::optional<std::array<Vec3f, 3>> best;
+    float bestError = 0;
+    for (size_t at = from; at + 12 + size_t(n) * 12 <= to; ++at) {
+        if (u32At(at) != n || u32At(at + 4) != n || u32At(at + 8) != 128)
+            continue;
+        for (const auto& m : turns) {
+            float err = 0;
+            for (uint32_t k = 0; k < n && std::isfinite(err); ++k)
+                for (size_t row = 0; row < 3; ++row) {
+                    const float want = f32At(at + 12 + 12 * size_t(k) + 4 * row);
+                    const float got = m[row][0] * scaled[k][0] + m[row][1] * scaled[k][1] + m[row][2] * scaled[k][2];
+                    err += (want - got) * (want - got);
+                }
+            if (!std::isfinite(err))
+                break;
+            if (!best || err < bestError) {
+                best = m;
+                bestError = err;
+            }
+        }
+    }
+    // Close: within 5% of the mesh's size on average (the packed vertices
+    // are rounded to whole units).
+    if (!best || std::sqrt(bestError / float(3 * n)) > 0.05f * extent)
+        return std::nullopt;
+    return best;
+}
+
 } // namespace
 
 bool isMeshClass(std::string_view className) {
@@ -342,6 +415,8 @@ Error readMesh(const Package& package, int index, Mesh& out) {
             out.verts = std::move(verts);
             out.vertexBytes = 4;
             out.importBlock = at - afterTextures;
+            out.importAxes = importAxes(data, size_t(package.exports()[size_t(index)].serialOffset), afterTextures, at,
+                                        out, tail);
             found = true;
         }
         if (!found)
@@ -367,10 +442,58 @@ Error readMesh(const Package& package, int index, Mesh& out) {
         for (int32_t v : t.vertex)
             if (v < 0 || v >= out.frameVerts)
                 return fail("a triangle's vertex is out of range");
-    for (const MeshAnimSeq& a : out.anims)
-        if (a.startFrame < 0 || a.numFrames < 0 || a.startFrame + a.numFrames > out.animFrames)
-            return fail("animation " + a.name + "'s frames are out of range");
+    // Animations whose frames run past the mesh's are left out (The
+    // Fallen's JadziaDax has a test one like that), not the whole mesh.
+    const size_t anims = out.anims.size();
+    std::erase_if(out.anims, [&](const MeshAnimSeq& a) {
+        return a.startFrame < 0 || a.numFrames < 0 || a.startFrame + a.numFrames > out.animFrames;
+    });
+    out.droppedAnims = int(anims - out.anims.size());
     return Error::success();
+}
+
+std::vector<std::string> describeMeshLayout(const Package& package, int index) {
+    std::vector<std::string> out;
+    std::vector<uint8_t> data;
+    if (package.readExport(index, data))
+        return out;
+    const size_t base = size_t(package.exports()[size_t(index)].serialOffset), end = base + data.size();
+    auto u32At = [&](size_t at) {
+        const uint8_t* p = data.data() + (at - base);
+        return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
+    };
+    Reader r(data, base);
+    PropertyList props;
+    if (beginObject(package, index, r, props))
+        return out;
+    const size_t start = r.pos();
+    char line[160];
+    out.push_back("Array headers (i32 n, i32 n, i32 flags; n 1-1000000), offsets from the properties' end:");
+    auto header = [&](size_t at) {
+        const uint32_t n = u32At(at);
+        return at + 12 <= end && n != 0 && n <= 1000000 && u32At(at + 4) == n && u32At(at + 8) <= 0xffff;
+    };
+    for (size_t at = start; at + 12 <= end; ++at) {
+        // A header seen a byte early (its count shifted up) is left out.
+        if (!header(at) || header(at + 1))
+            continue;
+        std::snprintf(line, sizeof line, "  +%zu: n %u, flags %u", at - start, u32At(at), u32At(at + 8));
+        out.push_back(line);
+    }
+    out.push_back("Places the standard tail reads from to the end, holding together:");
+    const bool lod = fs::toLower(package.className(index + 1)) == "lodmesh";
+    for (size_t at = start; at < end; ++at) {
+        Reader c = r;
+        c.seek(at);
+        MeshTail t;
+        if (readTail(c, package.version(), lod, t) || c.remaining() != 0 || !plausible(t, lod))
+            continue;
+        std::snprintf(line, sizeof line, "  +%zu: %d vertices x %d frames, scale %g %g %g, %zu triangles", at - start,
+                      t.frameVerts, t.animFrames, double(t.scale[0]), double(t.scale[1]), double(t.scale[2]),
+                      t.tris.size());
+        out.push_back(line);
+    }
+    return out;
 }
 
 } // namespace reluva::unreal

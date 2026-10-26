@@ -4560,6 +4560,13 @@ int cmdUeProbe(int argc, char** argv) {
         Mesh m;
         const reluva::Error err = readMesh(pkg, index, m);
         std::printf("\nMesh reader: %s\n", err ? err.message.c_str() : "reads");
+        if (!err)
+            std::printf("  %d vertices x %d frames, %zu triangles, %zu animations (%d left out); import block %zu "
+                        "bytes, %s\n",
+                        m.frameVerts, m.animFrames, m.tris.size(), m.anims.size(), m.droppedAnims, m.importBlock,
+                        m.importAxes ? "turned as its float copy" : "no turn found");
+        for (const std::string& l : describeMeshLayout(pkg, index))
+            std::printf("%s\n", l.c_str());
     }
 
     auto dump = [&](size_t from, size_t to) {

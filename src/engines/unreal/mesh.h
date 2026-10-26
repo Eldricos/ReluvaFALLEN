@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -48,6 +49,11 @@ struct Mesh {
     // the vertices) came between the textures and the standard fields; 0
     // for the standard layout.
     size_t importBlock = 0;
+    // Its float copy of the vertices shows they're turned from how the
+    // packed ones lie: that turn (rows: output axes), applied after Scale
+    // and Origin and before RotOrigin. None for the standard layout.
+    std::optional<std::array<Vec3f, 3>> importAxes;
+    int droppedAnims = 0; // animations left out, their frames past the mesh's
 
     const MeshAnimSeq* findAnim(std::string_view name) const;
 };
@@ -56,5 +62,10 @@ struct Mesh {
 Error readMesh(const Package& package, int exportIndex, Mesh& out);
 
 bool isMeshClass(std::string_view className);
+
+// For working out a mesh's layout (reluva-tool ue-probe): the arrays
+// that look like an imported-model block's ((n, n, flags) headers), and
+// every place the standard tail could start and hold together.
+std::vector<std::string> describeMeshLayout(const Package& package, int exportIndex);
 
 } // namespace reluva::unreal

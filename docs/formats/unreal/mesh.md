@@ -50,6 +50,24 @@ the data). On KiraCellLight this gives its 12 vertices, its 14 triangles
 (8 with texture 0, 6 with texture 1, as the block's header counts) and
 Scale (0.0307, 0.0307, 0.0614), with no bytes over.
 
+**Which way up.** The block's float copy of the vertices is turned from
+the packed ones: in KiraCellLight packed (313, 1016, 26) is float
+(9.62, 1.62, -31.19), i.e. after Scale x stays, y takes z and z takes
+-y (a quarter turn about X). Drawn as the packed ones lie, with RotOrigin
+0, The Fallen's chairs (CM05_Kira) lay on their backs. So each mesh's
+turn is found from its own float copy: of the 24 axis-aligned turns, the
+one taking its first frame (by Scale and Origin) closest onto the
+`(FrameVerts, FrameVerts, 128)` float array, if within 5% of its size on
+average; it's applied after Scale and Origin, before RotOrigin. On
+KiraCellLight it finds exactly the turn above.
+
+**`ue-check` on The Fallen** after this layout was added (October 2026):
+306 of 455 LodMeshes and 4 of 9 Meshes read. JadziaDax failed only for an
+animation (aaThumbTest2) running past its frames; such animations are now
+left out rather than the mesh. The rest are still to be looked at with
+`ue-probe`, which lists the block's array headers and every place the
+standard tail could start.
+
 A Mesh (not LodMesh) in this layout has no triangles in their standard
 array either; they're presumably the block's triangle and corner arrays
 (with texture coordinates somewhere in it), not read yet. The Fallen has

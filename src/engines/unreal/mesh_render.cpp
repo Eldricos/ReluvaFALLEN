@@ -55,8 +55,13 @@ Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out) {
     // The mesh's own placement: less Origin, scaled by Scale, turned by RotOrigin.
     const std::array<Vec3f, 3> axes = rotationAxes(mesh.rotOrigin);
     auto place = [&](const Vec3f& v) {
-        const Vec3f s{(v[0] - mesh.origin[0]) * mesh.scale[0], (v[1] - mesh.origin[1]) * mesh.scale[1],
-                      (v[2] - mesh.origin[2]) * mesh.scale[2]};
+        Vec3f s{(v[0] - mesh.origin[0]) * mesh.scale[0], (v[1] - mesh.origin[1]) * mesh.scale[1],
+                (v[2] - mesh.origin[2]) * mesh.scale[2]};
+        if (mesh.importAxes) {
+            const auto& m = *mesh.importAxes;
+            s = {m[0][0] * s[0] + m[0][1] * s[1] + m[0][2] * s[2], m[1][0] * s[0] + m[1][1] * s[1] + m[1][2] * s[2],
+                 m[2][0] * s[0] + m[2][1] * s[1] + m[2][2] * s[2]};
+        }
         Vec3f p{};
         for (size_t k = 0; k < 3; ++k)
             p[k] = axes[0][k] * s[0] + axes[1][k] * s[1] + axes[2][k] * s[2];
