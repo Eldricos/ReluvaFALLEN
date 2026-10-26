@@ -198,69 +198,43 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
         const Vec3f& tu = model.vectors[size_t(surf.textureU)];
         const Vec3f& tv = model.vectors[size_t(surf.textureV)];
 
-        // Which axes: the texture's as stored, or the same made unit length
-        // (world units); whichever spans the polygon in about the samples
-        // the lightmap has.
-        struct Fit {
-            Vec3f ua, va;
-            float minU, maxU, minV, maxV, score;
-        };
-        auto fit = [&](const Vec3f& ua, const Vec3f& va) {
-            Fit f{ua, va, 1e30f, -1e30f, 1e30f, -1e30f, 0};
-            for (const Vec3f& p : points[s]) {
-                const Vec3f d = sub(p, base);
-                f.minU = std::min(f.minU, dot(d, ua));
-                f.maxU = std::max(f.maxU, dot(d, ua));
-                f.minV = std::min(f.minV, dot(d, va));
-                f.maxV = std::max(f.maxV, dot(d, va));
-            }
-            const float us = m.uScale > 0 ? m.uScale : 1, vs = m.vScale > 0 ? m.vScale : 1;
-            f.score = std::fabs((f.maxU - f.minU) / us - float(m.uClamp - 1)) +
-                      std::fabs((f.maxV - f.minV) / vs - float(m.vClamp - 1));
-            return f;
-        };
-        const float lu = length(tu), lv = length(tv);
-        const Fit raw = fit(tu, tv);
-        const Fit unit = lu > 0 && lv > 0 ? fit(scale(tu, 1 / lu), scale(tv, 1 / lv)) : raw;
-        const bool useUnit = unit.score < raw.score;
-        const Fit& f = useUnit ? unit : raw;
-        if (std::fabs(lu - 1) < 1e-3f && std::fabs(lv - 1) < 1e-3f)
-            ++atlas.stats.sameAxes;
-        else
-            ++(useUnit ? atlas.stats.unitAxes : atlas.stats.rawAxes);
-        if (f.score > 2 || m.uScale <= 0 || m.vScale <= 0)
-            ++atlas.stats.badFit;
-        const float us = m.uScale > 0 ? m.uScale : std::max(1.0f, (f.maxU - f.minU) / float(std::max(1, m.uClamp - 1)));
-        const float vs = m.vScale > 0 ? m.vScale : std::max(1.0f, (f.maxV - f.minV) / float(std::max(1, m.vClamp - 1)));
-
-        // Where the grid starts, along those axes from the base point: the
-        // pan as offsets, the pan as a point, or the polygon's own corner.
+        // The grid runs along the surface's texture axes, uScale and vScale
+        // texture units between samples, from the pan (X along U, Y along V)
+        // measured from the base point. Where that doesn't cover the polygon
+        // (a few degenerate surfaces), from the polygon's own lowest corner.
+        float minU = 1e30f, maxU = -1e30f, minV = 1e30f, maxV = -1e30f;
+        for (const Vec3f& p : points[s]) {
+            const Vec3f d = sub(p, base);
+            minU = std::min(minU, dot(d, tu));
+            maxU = std::max(maxU, dot(d, tu));
+            minV = std::min(minV, dot(d, tv));
+            maxV = std::max(maxV, dot(d, tv));
+        }
+        const bool scaled = m.uScale > 0 && m.vScale > 0;
+        const float us = scaled ? m.uScale : std::max(1.0f, (maxU - minU) / float(std::max(1, m.uClamp - 1)));
+        const float vs = scaled ? m.vScale : std::max(1.0f, (maxV - minV) / float(std::max(1, m.vClamp - 1)));
+        // Covers the polygon, give or take a sample.
         auto fits = [&](float ou, float ov) {
             const float tol = 1.0f;
-            return (f.minU - ou) / us >= -tol && (f.maxU - ou) / us <= float(m.uClamp - 1) + tol &&
-                   (f.minV - ov) / vs >= -tol && (f.maxV - ov) / vs <= float(m.vClamp - 1) + tol;
+            return (minU - ou) / us >= -tol && (maxU - ou) / us <= float(m.uClamp - 1) + tol &&
+                   (minV - ov) / vs >= -tol && (maxV - ov) / vs <= float(m.vClamp - 1) + tol;
         };
-        float ou = f.minU, ov = f.minV;
-        const Vec3f panFromBase = sub(m.pan, base);
-        if (fits(m.pan[0], m.pan[1])) {
-            ou = m.pan[0];
-            ov = m.pan[1];
-            ++atlas.stats.panOffset;
-        } else if (fits(dot(panFromBase, f.ua), dot(panFromBase, f.va))) {
-            ou = dot(panFromBase, f.ua);
-            ov = dot(panFromBase, f.va);
-            ++atlas.stats.panPoint;
-        } else {
+        float ou = m.pan[0], ov = m.pan[1];
+        if (!scaled || !fits(ou, ov)) {
+            ou = minU;
+            ov = minV;
             ++atlas.stats.fromBounds;
+            if (!scaled || !fits(ou, ov))
+                ++atlas.stats.badFit;
         }
         Grid g;
         g.surf = int(s);
         g.w = m.uClamp;
         g.h = m.vClamp;
-        g.uAxis = scale(f.ua, 1 / us);
-        g.vAxis = scale(f.va, 1 / vs);
-        g.uOffset = -(dot(base, f.ua) + ou) / us;
-        g.vOffset = -(dot(base, f.va) + ov) / vs;
+        g.uAxis = scale(tu, 1 / us);
+        g.vAxis = scale(tv, 1 / vs);
+        g.uOffset = -(dot(base, tu) + ou) / us;
+        g.vOffset = -(dot(base, tv) + ov) / vs;
         gridOfSurf[s] = int(grids.size());
         grids.push_back(g);
     }
@@ -299,7 +273,7 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
         auto put = [&](int x, int y, const Vec3f& light) {
             uint8_t* p = img.pixel(x, y);
             for (int k = 0; k < 3; ++k)
-                p[k] = uint8_t(std::clamp(light[size_t(k)] / 2, 0.0f, 1.0f) * 255 + 0.5f);
+                p[k] = uint8_t(std::clamp(light[size_t(k)], 0.0f, kMaxLight) / 2 * 255 + 0.5f);
             p[3] = 255;
         };
         if (g.surf < 0) {

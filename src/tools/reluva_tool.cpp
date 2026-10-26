@@ -4592,7 +4592,7 @@ int cmdUeCheck(int argc, char** argv) {
             t.examples.push_back(err.message);
     };
     int unopened = 0;
-    long long lightTotals[9] = {};
+    long long lightTotals[4] = {};
     for (const std::string& name : set.names()) {
         const Package* pkg = set.get(name);
         if (!pkg) {
@@ -4649,21 +4649,15 @@ int cmdUeCheck(int argc, char** argv) {
                     const LightmapAtlas atlas = buildLightmaps(model, lights);
                     const LightmapAtlas::Stats& st = atlas.stats;
                     std::printf("    lighting: %zu zones, %zu lightmaps (%d used, %d lit), %zu light bytes, %zu lights "
-                                "(%d unreadable), %zu leaves, %zu bytes after; grids: axes unit already %d, else raw %d unit %d, start "
-                                "pan %d pan-point %d bounds %d, off fit %d, too large %d; %zu pages\n",
+                                "(%d unreadable), %zu leaves, %zu bytes after; grids placed by bounds %d, off fit %d, too "
+                                "large %d; %zu pages\n",
                                 model.zones.size(), model.lightMaps.size(), st.lightmaps, st.lit,
                                 model.lightBits.size(), model.lights.size(), lights.unreadable, model.leaves.size(),
-                                model.trailingBytes, st.sameAxes, st.rawAxes, st.unitAxes, st.panOffset, st.panPoint,
-                                st.fromBounds, st.badFit, st.tooLarge, atlas.pages.size());
+                                model.trailingBytes, st.fromBounds, st.badFit, st.tooLarge, atlas.pages.size());
                     lightTotals[0] += st.lightmaps;
                     lightTotals[1] += st.lit;
-                    lightTotals[2] += st.rawAxes;
-                    lightTotals[3] += st.unitAxes;
-                    lightTotals[4] += st.panOffset;
-                    lightTotals[5] += st.panPoint;
-                    lightTotals[6] += st.fromBounds;
-                    lightTotals[7] += st.badFit;
-                    lightTotals[8] += st.sameAxes;
+                    lightTotals[2] += st.fromBounds;
+                    lightTotals[3] += st.badFit;
                     if (model.trailingBytes)
                         lerr = reluva::Error::fail(name + ": " + std::to_string(model.trailingBytes) +
                                                    " bytes after the model's last field");
@@ -4677,10 +4671,8 @@ int cmdUeCheck(int argc, char** argv) {
         std::printf(" %s x%d", v.c_str(), n);
     std::printf("\n");
     if (lightTotals[0])
-        std::printf("lightmap grids: %lld, %lld lit; axes unit already %lld, else raw %lld / unit %lld; start from "
-                    "pan %lld / pan as a point %lld / bounds %lld; off fit %lld\n",
-                    lightTotals[0], lightTotals[1], lightTotals[8], lightTotals[2], lightTotals[3], lightTotals[4],
-                    lightTotals[5], lightTotals[6], lightTotals[7]);
+        std::printf("lightmap grids: %lld, %lld lit; placed by bounds %lld; off fit %lld\n", lightTotals[0],
+                    lightTotals[1], lightTotals[2], lightTotals[3]);
     for (const auto& [what, t] : tallies) {
         std::printf("%-9s %6d decoded, %6d failed\n", what.c_str(), t.ok, t.failed);
         for (const std::string& ex : t.examples)

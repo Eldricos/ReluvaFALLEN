@@ -463,7 +463,7 @@ static void testModel() {
     CHECK(lights.zoneAmbient.size() == 1 && lights.zoneAmbient[0][0] == 0.125f);
     const LightmapAtlas atlas = buildLightmaps(m, lights);
     CHECK(atlas.pages.size() == 1 && atlas.stats.lightmaps == 1 && atlas.stats.lit == 1);
-    CHECK(atlas.stats.sameAxes == 1 && atlas.stats.rawAxes == 0 && atlas.stats.panOffset == 1 && atlas.stats.badFit == 0);
+    CHECK(atlas.stats.fromBounds == 0 && atlas.stats.badFit == 0);
     if (atlas.pages.size() == 1) {
         const auto uv = atlas.uv(0, {0, 0, 0}), far = atlas.uv(0, {128, 128, 0});
         CHECK(uv[0] * 1024 == 1.5f && uv[1] * 1024 == 1.5f && far[0] * 1024 == 5.5f);
@@ -474,6 +474,14 @@ static void testModel() {
         CHECK(page.pixel(0, 0)[0] == page.pixel(1, 1)[0]);       // the border repeats the edge
         CHECK(page.pixel(3, 1)[0] < page.pixel(1, 1)[0]);        // further from the light, darker
     }
+    // A light four times as bright: capped at the texture's own colours
+    // (1, stored halved), not brighter.
+    LevelLights bright = lights;
+    for (float& c : bright.sources[0].color)
+        c *= 4;
+    const LightmapAtlas capped = buildLightmaps(m, bright);
+    if (capped.pages.size() == 1)
+        CHECK(capped.pages[0].pixel(1, 1)[0] == 128 && capped.pages[0].pixel(5, 5)[0] == 16);
     // Invisible surfaces aren't drawn.
     m.surfs[0].polyFlags = polyflag::Invisible;
     CHECK(levelPolygons(m).empty());

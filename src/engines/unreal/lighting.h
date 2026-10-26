@@ -40,6 +40,13 @@ struct LightSource {
 // World units per step of an actor's LightRadius.
 constexpr float kRadiusUnit = 25;
 
+// The most light a sample gets: 1, the texture's own colours. The
+// original doesn't brighten surfaces past their texture (a lamp against a
+// wall shows its texture, not white); see lighting.md. Kept as a
+// constant (the lightmaps still hold up to 2) in case another game wants
+// UE1's brighter blending.
+constexpr float kMaxLight = 1;
+
 struct LevelLights {
     std::vector<LightSource> sources; // one per entry of Model::lights
     std::vector<Vec3f> zoneAmbient;   // one per zone
@@ -62,19 +69,15 @@ struct LightmapPlacement {
 
 struct LightmapAtlas {
     int pageSize = 0;
-    std::vector<image::Image> pages; // RGBA, light / 2 (drawn doubled, so up to 2x bright)
+    std::vector<image::Image> pages; // RGBA, light / 2 (drawn doubled), at most kMaxLight
     std::vector<LightmapPlacement> surfs; // one per Model::surfs
 
-    // How the surfaces' sample grids were lined up with them (see
-    // lighting.md), for checking the guesses against a game's data.
+    // How the surfaces' sample grids lined up with them (see lighting.md).
     struct Stats {
-        int lightmaps = 0, lit = 0;      // surfaces with a lightmap; their samples some light reached
-        // Grid along the texture axes as stored, or made unit length (only
-        // counted where they differ; sameAxes where they're unit already).
-        int rawAxes = 0, unitAxes = 0, sameAxes = 0;
-        int panOffset = 0, panPoint = 0, fromBounds = 0; // where the grid starts
-        int badFit = 0;                  // surfaces no guess fitted (drawn with the closest)
-        int tooLarge = 0;                // lightmaps larger than a page (drawn with ambient light)
+        int lightmaps = 0, lit = 0; // surfaces with a lightmap; their samples some light reached
+        int fromBounds = 0;         // grids the pan didn't place, started at the polygon's corner instead
+        int badFit = 0;             // grids that don't cover their polygon even so
+        int tooLarge = 0;           // lightmaps larger than a page (drawn with ambient light)
     } stats;
 
     // The texture coordinates (0-1 in the surface's page) of a point.

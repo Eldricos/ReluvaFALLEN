@@ -29,29 +29,19 @@ The light's colour, brightness, radius and cone come from the light
 actor's properties, worked out when the level loads (the original does it
 then too, which is why lights' brightness can change in game).
 
-## The sample grid (guesses, checked by fit)
+## The sample grid
 
-Where the grid lies on the surface isn't certain from the documentation,
-so Reluva tries the readings that make sense and keeps the one that
-fits the polygon, counting each (`ue-check`'s `grids:` line, the Maps
-page's info):
-
-- **Axes**: the surface's texture axes as stored (`raw`), or the same made
-  unit length (`unit`, world units); whichever gives a polygon spanning
-  about `uClamp - 1` by `vClamp - 1` sample steps of `uScale` x `vScale`.
-- **Start**: along those axes from the surface's base point, the
-  lightmap's `pan` taken as offsets (`pan`: X along U, Y along V), or as a
-  point (`pan-point`), or failing both the polygon's own lowest corner
-  (`bounds`). A reading fits when every polygon point lands inside the
-  grid, give or take a sample.
-- Grids no reading fits within two samples are counted `off fit`.
-
-On The Fallen: the pan as offsets fits 345700 of the 345952 grids (pan
-as a point 3, bounds 249, none off fit), so that's the layout; the rest
-are likely degenerate surfaces. For the axes the first run counted
-322682 raw and 23270 unit, but a surface whose texture axes are unit
-length already counted as raw; `ue-check` now counts those apart
-("unit already"), to show which holds where they differ.
+Sample (i, j) of a surface's grid is at texture coordinates
+`(pan.X + i * uScale, pan.Y + j * vScale)`, measured from the surface's
+base point along its texture axes as stored (`dot(P - base, textureU)`,
+without the surface's own pan). Worked out on The Fallen by trying the
+readings that made sense and counting which covered each polygon
+(`ue-check`, October 2026): where the texture axes aren't unit length
+already, the stored axes fitted 208723 grids and the same made unit
+length 474; the pan as offsets fitted 345700 of the 345952 grids, as a
+point 3. So that's the layout. The 249 grids it doesn't place (likely
+degenerate surfaces) start at the polygon's lowest corner instead,
+counted by `ue-check` as "placed by bounds".
 
 The lights list holds each lightmap's lights in turn, so it repeats a
 light for every lightmap it reaches: up to 416997 entries (M01_KiraL1A)
@@ -82,6 +72,13 @@ For each sample, its position on the surface's plane, then:
   as their texture.
 - Light effects that change over time (flicker, pulse, strobe...) are drawn
   as their steady light for now.
+- **At most 1** (`kMaxLight`): the texture's own colours. In the
+  original, a lamp right against a wall (TrainingRoom, the two over the
+  far door) shows its texture's detail, and the wall round it keeps its
+  colour; summed as above the light there is well over 1, and drawn so it
+  washed out to white. So the original doesn't brighten surfaces past
+  their texture (as UE1's renderers do with 1x blending), and Reluva caps
+  it the same.
 
 The 128 brightness unit, the linear falloff and the cone's angle are the
 first things to tune against the original.
@@ -120,7 +117,8 @@ it, and then the curve can follow the player's setting.
 Lightmaps are packed into 1024x1024 pages, each with a one-texel border
 copying its edges so filtering doesn't bleed. They hold the light halved,
 and are drawn over the surface's texture doubled (destination times
-source times two), so light reaches twice the texture's own colours as
-the original's overbright lighting does. In the Maps page `L` turns them
+source times two); with the light capped at 1 that's the texture's own
+colours at most, but the headroom is there for a game that brightens
+past them. In the Maps page `L` turns them
 off (shading by facing instead) and `[`/`]` dim or brighten them, for
 comparing with the original.
