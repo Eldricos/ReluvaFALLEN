@@ -845,7 +845,10 @@ std::vector<NamedClip> findClipTable(const BoneReader& r, size_t frameVerts) {
             if (runs)
                 return clips;
         }
-        return {};
+        // The names without vertex keys (an animation set's).
+        for (NamedClip& clip : clips)
+            clip.keys.clear();
+        return clips;
     }
     return {};
 }
@@ -853,7 +856,9 @@ std::vector<NamedClip> findClipTable(const BoneReader& r, size_t frameVerts) {
 // Fills the frames of a mesh's own animations from its named clips: each
 // frame at its time in the clip (30 a second), from the clip's vertex keys
 // (between two, blended) or else from its bones. Returns the frames filled.
-int framesFromClips(const std::vector<uint8_t>& data, size_t base, size_t from, size_t to, Mesh& mesh) {
+int framesFromClips(const std::vector<uint8_t>& data, size_t base, size_t from, size_t to, Mesh& mesh,
+                    int& bonesUsed) {
+    bonesUsed = 0;
     const BoneReader r{data, base, from, to};
     const std::vector<NamedClip> clips = findClipTable(r, size_t(mesh.frameVerts));
     if (clips.empty())
@@ -901,6 +906,9 @@ int framesFromClips(const std::vector<uint8_t>& data, size_t base, size_t from, 
                                     [&](size_t i) { return poser.local(bones[i], c, t); }) * 10 >= frame * 9) {
                 std::copy(pose.begin(), pose.end(), out);
                 ++filled;
+                // One bone is a prop (a chair's "root"), not a character.
+                if (bones.size() > 1)
+                    bonesUsed = int(bones.size());
             }
         }
     }
@@ -1116,9 +1124,15 @@ Error readMesh(const Package& package, int index, Mesh& out) {
     // vertices were only some keyframes).
     if (blockEnd && (out.keyFrames || out.bones || vertexKeys || std::getenv("RELUVA_CLIPS_ALWAYS"))) {
         const size_t base = size_t(package.exports()[size_t(index)].serialOffset);
-        if (const int filled = framesFromClips(data, base, afterTextures, blockEnd, out); filled > 0) {
+        int bonesUsed = 0;
+        if (const int filled = framesFromClips(data, base, afterTextures, blockEnd, out, bonesUsed); filled > 0) {
             out.framesFromClips = filled;
             out.keyFrames = 0;
+            // A skeleton that places the mesh (so it can take shared animations).
+            if (bonesUsed && !out.bones) {
+                out.bones = bonesUsed;
+                out.bonesAnimated = true;
+            }
         }
     }
 
@@ -1141,6 +1155,7 @@ struct AnimationSet::Impl {
     size_t base = 0, from = 0, to = 0;
     std::vector<BoneRecord> bones;
     std::vector<int> clipStart, clipFrames; // per clip
+    std::vector<std::string> clipNames;     // lower case, if it names them
     BoneReader reader() const { return BoneReader{data, base, from, to}; }
 };
 
@@ -1153,14 +1168,18 @@ int AnimationSet::frames() const {
     return impl && !impl->clipStart.empty() ? impl->clipStart.back() + impl->clipFrames.back() : 0;
 }
 
-int AnimationSet::clipFor(int32_t startFrame, int32_t numFrames) const {
+int AnimationSet::clipFor(int32_t startFrame, int32_t numFrames, std::string_view name) const {
     if (!impl)
         return -1;
     const auto it = std::lower_bound(impl->clipStart.begin(), impl->clipStart.end(), startFrame);
     if (it == impl->clipStart.end() || *it != startFrame)
         return -1;
     const auto c = size_t(it - impl->clipStart.begin());
-    return impl->clipFrames[c] == numFrames ? int(c) : -1;
+    if (impl->clipFrames[c] != numFrames)
+        return -1;
+    if (!name.empty() && c < impl->clipNames.size() && impl->clipNames[c] != fs::toLower(name))
+        return -1;
+    return int(c);
 }
 
 namespace {
@@ -1205,6 +1224,10 @@ Error readAnimationSet(const Package& package, int index, AnimationSet& out) {
     }
     if (clips == 0)
         return Error::fail(package.path(index + 1) + ": no clips");
+    for (const NamedClip& c : findClipTable(r, 0))
+        impl->clipNames.push_back(fs::toLower(c.name));
+    if (impl->clipNames.size() != clips)
+        impl->clipNames.clear();
     out.impl = std::move(impl);
     return Error::success();
 }
@@ -1282,7 +1305,7 @@ bool borrowNamedAnimation(const Package& package, int index, const std::vector<A
         if (fs::toLower(seq.name) != wanted)
             continue;
         for (const AnimationSet& set : sets)
-            if (const int clip = set.clipFor(seq.startFrame, seq.numFrames); clip >= 0) {
+            if (const int clip = set.clipFor(seq.startFrame, seq.numFrames, seq.name); clip >= 0) {
                 const MeshAnimSeq copy = seq; // mesh.otherAnims may not survive the borrowing
                 return !borrowAnimation(package, index, set, clip, copy, mesh);
             }

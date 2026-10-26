@@ -193,3 +193,16 @@ that keep one array of every frame match the clips to within a packed
 unit; the 180 that keep only keys or bones are now filled every frame
 from them; the 38 glass and debris fragments in Shared.u have an i32 0
 before their standard fields and otherwise read as standard meshes.
+
+**Shared sets name their clips too** (Female: BaseReference, FireCrch,
+RunF, WalkF; MaleTwo its 111; Male its 274), so a borrowed sequence must
+also be the clip of its name. Female's own clips are the start of her
+timeline (Leeta's RunF at frame 15), the rest of a Female list points
+into Male's. With the face-keyframed humanoids counted (Quark, Garak,
+the ensigns, Kira, Dax, Worf, Odo: bones for the body, vertex keys for
+Blink, Eyebrows and Phonemes), all 17440 sequences the characters list
+past their own frames are a set's clip, and the levels' placed
+characters play 814 borrowed animations and 85 of their own. Rendered in
+checking: Kira at a low console (SitOpConLo), Worf in WoundedIdle, Dax
+running (runf), an ensign sneaking (SneakF). The Meshes page steps
+through a character's shared animations too, borrowing each when picked.

@@ -92,13 +92,34 @@ void MeshViewer::show() {
     const std::string name = pkg->path(index + 1);
     setTitle(name + " (" + browser_.where() + ")");
     info_.push_back(pkg->className(index + 1) + " " + name + "  " + browser_.where());
+    choices_.clear();
+    choice_ = -1;
     Error err = readMesh(*pkg, index, mesh_);
+    if (err) {
+        // The Fallen's shared animations are Meshes without vertices.
+        AnimationSet set;
+        if (!readAnimationSet(*pkg, index, set)) {
+            info_.push_back("A shared animation set: a skeleton and " + std::to_string(set.frames()) +
+                            " frames of clips, no vertices of its own.");
+            info_.push_back("Characters borrow from it: pick one built on bones, and [/] steps through these too.");
+            return;
+        }
+    }
     if (!err)
         err = uploadMesh(*renderer_, mesh_, gpu_, ctx_.meshTurn, ctx_.meshYawQuarters);
     if (err) {
         error_ = err.message;
         return;
     }
+    for (const MeshAnimSeq& a : mesh_.anims)
+        choices_.push_back(a.name);
+    ownAnims_ = choices_.size();
+    ownAnimCount_ = mesh_.anims.size();
+    ownFrames_ = mesh_.animFrames;
+    if (mesh_.bones)
+        for (const MeshAnimSeq& a : mesh_.otherAnims)
+            if (std::find(choices_.begin(), choices_.end(), a.name) == choices_.end())
+                choices_.push_back(a.name);
     // Its own textures.
     for (int32_t ref : mesh_.textures) {
         gfx::TextureId id = 0;
@@ -109,8 +130,10 @@ void MeshViewer::show() {
                 id = 0;
         textures_.push_back(id);
     }
-    if (!mesh_.anims.empty())
+    if (!mesh_.anims.empty()) {
         anim_ = 0;
+        choice_ = 0;
+    }
     char line[200];
     std::snprintf(line, sizeof line, "%d vertices x %d frames (%d-byte), %zu triangles, %zu textures, %zu animations",
                   mesh_.frameVerts, mesh_.animFrames, mesh_.vertexBytes, mesh_.tris.size(), mesh_.textures.size(),
@@ -141,11 +164,39 @@ void MeshViewer::show() {
     resetView();
 }
 
+// Picks one of the animations to step through, borrowing it from the
+// shared sets (and uploading the mesh again with its frames) if need be.
+void MeshViewer::pick(int choice) {
+    choice_ = choice;
+    const std::string& name = choices_[size_t(choice)];
+    if (!mesh_.findAnim(name)) {
+        // Only the mesh's own frames and the one borrowed now are kept.
+        mesh_.anims.resize(ownAnimCount_);
+        mesh_.animFrames = ownFrames_;
+        mesh_.verts.resize(size_t(ownFrames_) * size_t(mesh_.frameVerts));
+        const Package* pkg = browser_.package();
+        if (!pkg || !borrowNamedAnimation(*pkg, browser_.exportIndex(), ctx_.sets(), name, mesh_)) {
+            anim_ = -1;
+            return;
+        }
+        if (gpu_.mesh)
+            renderer_->destroyMesh(gpu_.mesh);
+        const float radius = gpu_.radius;
+        if (Error err = uploadMesh(*renderer_, mesh_, gpu_, ctx_.meshTurn, ctx_.meshYawQuarters)) {
+            error_ = err.message;
+            anim_ = -1;
+            return;
+        }
+        gpu_.radius = radius; // keep the view where it was
+    }
+    anim_ = int(mesh_.findAnim(name) - mesh_.anims.data());
+}
+
 void MeshViewer::handleEvent(const Event& ev) {
     if (!renderer_)
         return;
     if (ev.type == EventType::KeyDown && !ev.repeat) {
-        const int anims = int(mesh_.anims.size());
+        const int anims = int(choices_.size());
         if (ev.key == key::Left || ev.key == key::Right) {
             browser_.step(ev.key == key::Left ? -1 : 1);
             show();
@@ -155,7 +206,7 @@ void MeshViewer::handleEvent(const Event& ev) {
         } else if (ev.key == 'a') {
             playing_ = !playing_;
         } else if ((ev.key == '[' || ev.key == ']') && anims > 0) {
-            anim_ = (anim_ + (ev.key == '[' ? anims - 1 : 1)) % anims;
+            pick((std::max(choice_, 0) + (ev.key == '[' ? anims - 1 : 1)) % anims);
             time_ = 0;
         } else if (ev.key == 'r') {
             resetView();
@@ -219,11 +270,15 @@ void MeshViewer::update(uint64_t nowMs) {
         lines = info_;
         if (anim_ >= 0) {
             const MeshAnimSeq& a = mesh_.anims[size_t(anim_)];
-            char line[160];
-            std::snprintf(line, sizeof line, "animation %d/%zu: %s (%s), frames %d-%d at %g/s%s", anim_ + 1,
-                          mesh_.anims.size(), a.name.c_str(), a.group.c_str(), a.startFrame,
-                          a.startFrame + a.numFrames - 1, double(a.rate), playing_ ? "" : ", stopped");
+            char line[200];
+            std::snprintf(line, sizeof line, "animation %d/%zu: %s (%s), frames %d-%d at %g/s%s%s", choice_ + 1,
+                          choices_.size(), a.name.c_str(), a.group.c_str(), a.startFrame,
+                          a.startFrame + a.numFrames - 1, double(a.rate),
+                          size_t(choice_) >= ownAnims_ ? ", from a shared set" : "", playing_ ? "" : ", stopped");
             lines.push_back(line);
+        } else if (choice_ >= 0 && size_t(choice_) < choices_.size()) {
+            lines.push_back("animation " + std::to_string(choice_ + 1) + "/" + std::to_string(choices_.size()) + ": " +
+                            choices_[size_t(choice_)] + " isn't in any shared animation set");
         }
     }
     if (!error_.empty())

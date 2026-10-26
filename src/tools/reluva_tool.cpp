@@ -4803,7 +4803,7 @@ int cmdUeCheck(int argc, char** argv) {
                 // Which way imported-model meshes' float copies are turned
                 // from their packed vertices (rows), and an example of each.
                 if (!err && m.importBlock) {
-                    std::string turn = "none to fit (usual turn taken)";
+                    std::string turn = !m.importAxes ? "none (standard vertices, no turn)" : "none to fit (usual turn taken)";
                     if (m.importAxes && !m.importAxesGuessed) {
                         turn.clear();
                         for (const auto& row : *m.importAxes) {

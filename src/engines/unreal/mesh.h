@@ -89,8 +89,9 @@ public:
     AnimationSet(AnimationSet&&) noexcept;
     AnimationSet& operator=(AnimationSet&&) noexcept;
     int frames() const; // its clips' frames together
-    // The clip whose frames a sequence's are exactly, or -1.
-    int clipFor(int32_t startFrame, int32_t numFrames) const;
+    // The clip whose frames a sequence's are exactly (and, where the set
+    // names its clips, of its name), or -1.
+    int clipFor(int32_t startFrame, int32_t numFrames, std::string_view name = {}) const;
 
     struct Impl;
     std::unique_ptr<Impl> impl;

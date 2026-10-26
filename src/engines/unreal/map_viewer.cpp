@@ -386,12 +386,12 @@ void MapViewer::load(int index) {
                 for (const std::string& seq : wanted[{a.mesh.package, a.mesh.exportIndex}]) {
                     if (mesh.findAnim(seq))
                         continue;
-                    if (!animationSets_) {
+                    if (!ctx_.animationSets) {
                         const auto t0 = Clock::now();
-                        animationSets_ = findAnimationSets(ctx_.packages);
+                        ctx_.sets();
                         animationSetsMs_ = int(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count());
                     }
-                    borrowed += borrowNamedAnimation(*a.mesh.package, a.mesh.exportIndex, *animationSets_, seq, mesh);
+                    borrowed += borrowNamedAnimation(*a.mesh.package, a.mesh.exportIndex, ctx_.sets(), seq, mesh);
                 }
             if (!err)
                 err = uploadMesh(*renderer_, mesh, gpu, ctx_.meshTurn, ctx_.meshYawQuarters);
@@ -529,7 +529,7 @@ void MapViewer::load(int index) {
                         std::to_string(ctx_.meshYawQuarters * 90) + " degrees of yaw (Y changes)");
     if (borrowed)
         info_.push_back(std::to_string(borrowed) + " animations given to characters from " +
-                        std::to_string(animationSets_ ? animationSets_->size() : 0) +
+                        std::to_string(ctx_.animationSets ? ctx_.animationSets->size() : 0) +
                         " shared animation sets (read in " + std::to_string(animationSetsMs_) + " ms)");
     if (!firstBadMesh.empty())
         info_.push_back("First unreadable mesh: " + firstBadMesh);

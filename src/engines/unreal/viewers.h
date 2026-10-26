@@ -58,6 +58,13 @@ struct ViewerContext {
     // How imported-model meshes are turned, on both 3D pages (M changes it).
     MeshTurn meshTurn = MeshTurn::Reverse;
     int meshYawQuarters = kImportYawQuarters; // and about Z (Y changes it)
+    // The Fallen's shared animation sets, read the first time a page needs them.
+    std::optional<std::vector<AnimationSet>> animationSets;
+    const std::vector<AnimationSet>& sets() {
+        if (!animationSets)
+            animationSets = findAnimationSets(packages);
+        return *animationSets;
+    }
 };
 
 class Page {
@@ -184,7 +191,15 @@ private:
     std::string error_;
     std::vector<std::string> info_;
     Surface overlay_;
-    int anim_ = -1;
+    int anim_ = -1; // into mesh_.anims
+    // The animations to step through: the mesh's own, then (built on bones)
+    // those of the shared sets its list names, borrowed when picked.
+    std::vector<std::string> choices_;
+    int choice_ = -1;
+    size_t ownAnims_ = 0; // of choices_, the mesh's own
+    size_t ownAnimCount_ = 0;
+    int32_t ownFrames_ = 0;
+    void pick(int choice);
     bool playing_ = true, showInfo_ = true, dragging_ = false;
     float time_ = 0, yaw_ = 0, pitch_ = 0.3f, distance_ = 200;
     int lastX_ = 0, lastY_ = 0;
@@ -250,9 +265,7 @@ private:
     };
     void jumpToMeshActor(bool skeletalOnly);
     static std::string idleFor(const std::string& anim);
-    // The Fallen's shared animation sets, read once (the first map that needs them).
-    std::optional<std::vector<AnimationSet>> animationSets_;
-    int animationSetsMs_ = 0;
+    int animationSetsMs_ = 0; // how long reading the shared animation sets took
     int jump_ = -1; // the mesh actor last jumped to (G / H)
     std::vector<Mesh> meshes_;
     std::vector<GpuMesh> gpuMeshes_;

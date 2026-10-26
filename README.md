@@ -117,7 +117,7 @@ Linux (with each distro's packages) and Windows with Visual Studio 2022.
   posed from bones: characters) and **I** shows or hides the info
   (it needs 3D, as Elite Force's). For meshes, **Left/Right** step, **PageUp/PageDown**
   pick the package, drag to turn, the wheel zooms, **A** plays or stops the animation,
-  **[**/**]** pick it and **M**/**Y** turn it as in maps. For textures and sounds,
+  **[**/**]** pick it (for characters, the shared animations too) and **M**/**Y** turn it as in maps. For textures and sounds,
   **Left/Right** step and **PageUp/PageDown** pick the package; **Space** plays a sound.
   The packages page lists each package's exports: **Left/Right** picks the package,
   **Up/Down** (**PageUp/PageDown**, **Home/End**) the export, **Enter** shows its properties.
