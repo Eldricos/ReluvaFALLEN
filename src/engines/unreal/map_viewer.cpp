@@ -479,7 +479,7 @@ void MapViewer::load(int index) {
     info_.push_back(line);
     const auto turned = std::count_if(meshes_.begin(), meshes_.end(), [](const Mesh& m) { return bool(m.importAxes); });
     if (turned)
-        info_.push_back(std::to_string(turned) + " meshes with a float copy turned from them: drawn " +
+        info_.push_back(std::to_string(turned) + " imported meshes turned from their packed vertices: drawn " +
                         meshTurnName(ctx_.meshTurn) + " (M changes)");
     if (!firstBadMesh.empty())
         info_.push_back("First unreadable mesh: " + firstBadMesh);

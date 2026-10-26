@@ -66,8 +66,21 @@ transpose), all stand as in the game. So that's what's drawn. Both are
 compared about their middles, since the float copy can also be moved.
 
 `ue-check` on The Fallen (October 2026) tallied the turns found: 159
-meshes the KiraCellLight one, 8 none, a few each of five others, and 175
-where none fitted (before the middles were compared).
+meshes the KiraCellLight one, 8 none, a few each of five others, and 174
+where none fitted, even about the middles. Those have no float copy: their
+`(FrameVerts, FrameVerts, 128)` array holds one float per vertex, all 1.0
+(weights, say), not three. Drawn as stored they lie on their backs as the
+chairs did, so they're given the usual turn (KiraCellLight's) and the
+same opposite-way drawing.
+
+**Keyframed meshes.** Many animated meshes keep fewer `(FrameVerts,
+FrameVerts, 1)` vertex arrays than they have frames: ARD_AmmoCrate 2 for
+100 frames (its whole export is 8550 bytes, too small for 100), and
+ARD_TortureMachine about 250 for 400, each followed by a `(9, 9, 64)`
+array and, every few dozen, a `(k, k, 5)` header whose k is near an
+animation's frame count. They look like keyframes with timing still to be
+worked out; for now the first frame found is used for every frame
+(`Mesh::keyFrames` says how many were found) so the mesh is at least drawn.
 
 **`ue-check` on The Fallen** after this layout was added (October 2026):
 306 of 455 LodMeshes and 4 of 9 Meshes read. JadziaDax failed only for an

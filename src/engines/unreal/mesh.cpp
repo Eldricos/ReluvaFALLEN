@@ -175,8 +175,13 @@ Vec3f unpackVertex(uint32_t p) {
 // The vertices in an imported-model block (data[from, to), file offsets):
 // an array of (i32 count, i32 count again, i32 1) and that many packed
 // vertices, of all frames at once, or else one such array per frame.
+// Many of The Fallen's animated meshes keep fewer such frames than they
+// have (keyframes, between other arrays not worked out yet): then the
+// first is used for every frame, and `keys` says how many were found
+// (0 when every frame was).
 bool findVertexBlock(const std::vector<uint8_t>& data, size_t base, size_t from, size_t to, const MeshTail& t,
-                     std::vector<Vec3f>& out) {
+                     std::vector<Vec3f>& out, int& keys) {
+    keys = 0;
     const auto frame = uint32_t(t.frameVerts), total = uint32_t(t.frameVerts) * uint32_t(t.animFrames);
     auto u32At = [&](size_t at) {
         const uint8_t* p = data.data() + (at - base);
@@ -194,17 +199,21 @@ bool findVertexBlock(const std::vector<uint8_t>& data, size_t base, size_t from,
             take(at, total);
             return true;
         }
-    if (t.animFrames > 1)
-        for (size_t at = from; at + 12 <= to; ++at) {
-            if (!block(at, frame))
-                continue;
-            take(at, frame);
-            at += 12 + size_t(frame) * 4 - 1;
-            if (out.size() == total)
-                return true;
-        }
-    out.clear();
-    return false;
+    for (size_t at = from; at + 12 <= to; ++at) {
+        if (!block(at, frame))
+            continue;
+        take(at, frame);
+        at += 12 + size_t(frame) * 4 - 1;
+        if (out.size() == total)
+            return true;
+    }
+    if (out.empty())
+        return false;
+    keys = int(out.size() / frame);
+    out.resize(frame);
+    for (int32_t f = 1; f < t.animFrames; ++f)
+        out.insert(out.end(), out.begin(), out.begin() + frame);
+    return true;
 }
 
 // Which way the vertices go: the block keeps them a second time as
@@ -295,6 +304,10 @@ std::optional<std::array<Vec3f, 3>> importAxes(const std::vector<uint8_t>& data,
         return std::nullopt;
     return best;
 }
+
+// The turn most of The Fallen's imported meshes' float copies show
+// (159 of 180 that have one); for those without one to fit.
+constexpr std::array<Vec3f, 3> kUsualImportAxes{Vec3f{1, 0, 0}, Vec3f{0, 0, 1}, Vec3f{0, -1, 0}};
 
 } // namespace
 
@@ -426,15 +439,21 @@ Error readMesh(const Package& package, int index, Mesh& out) {
             if (readTail(c, ver, out.lod, candidate) || c.remaining() != 0 || !plausible(candidate, out.lod))
                 continue;
             std::vector<Vec3f> verts;
+            int keys = 0;
             if (!findVertexBlock(data, size_t(package.exports()[size_t(index)].serialOffset), afterTextures, at,
-                                 candidate, verts))
+                                 candidate, verts, keys))
                 continue;
             tail = std::move(candidate);
             out.verts = std::move(verts);
+            out.keyFrames = keys;
             out.vertexBytes = 4;
             out.importBlock = at - afterTextures;
             out.importAxes = importAxes(data, size_t(package.exports()[size_t(index)].serialOffset), afterTextures, at,
                                         out, tail);
+            if (!out.importAxes) {
+                out.importAxes = kUsualImportAxes;
+                out.importAxesGuessed = true;
+            }
             found = true;
         }
         if (!found)

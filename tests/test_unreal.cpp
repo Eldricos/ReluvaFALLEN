@@ -837,7 +837,8 @@ static std::vector<uint8_t> meshData(PackageWriter& w, bool lod, int32_t texture
             o.u32(6), o.u32(6), o.u32(1);
             o.bytes(verts.b);
         } else {
-            for (int f = 0; f < 2; ++f) {
+            // 2: one array per frame; 3: only the first frame's (a keyframed mesh).
+            for (int f = 0; f < (importBlock == 3 ? 1 : 2); ++f) {
                 o.u32(3), o.u32(3), o.u32(1);
                 o.bytes(std::vector<uint8_t>(verts.b.begin() + f * 12, verts.b.begin() + f * 12 + 12));
                 o.u32(0), o.u32(64);
@@ -914,6 +915,17 @@ static void testImportedMeshBlock() {
         CHECK(m.importBlock > 0 && m.frameVerts == 3 && m.animFrames == 2 && m.verts.size() == 6);
         CHECK((m.verts[0] == Vec3f{-3, 0, 0}) && (m.verts[5] == Vec3f{0, 10, 5}) && m.tris.size() == 1);
         CHECK((m.scale == Vec3f{2, 2, 2}) && m.trailingBytes == 0 && m.findAnim("Wave"));
+        CHECK(m.keyFrames == 0 && m.importAxes && m.importAxesGuessed); // no float copy to fit
+    }
+    {
+        // Only the first frame's vertices: used for both frames.
+        PackageWriter w;
+        const int32_t meshClass = w.addImport("Engine", "Class", 0, "LodMesh");
+        w.addExport(meshClass, 0, "Triangle", meshData(w, true, 2, 3));
+        Package p;
+        CHECK(!p.openMemory(w.build(), "Meshes"));
+        Mesh m;
+        CHECK(!readMesh(p, 0, m) && m.keyFrames == 1 && m.verts.size() == 6 && m.verts[3] == m.verts[0]);
     }
     PackageWriter w;
     const int32_t meshClass = w.addImport("Engine", "Class", 0, "Mesh");

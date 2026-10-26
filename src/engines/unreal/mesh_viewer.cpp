@@ -122,11 +122,15 @@ void MeshViewer::show() {
     info_.push_back(line);
     if (mesh_.importAxes) {
         const auto& a = *mesh_.importAxes;
-        std::snprintf(line, sizeof line, "float copy turned (rows %g %g %g / %g %g %g / %g %g %g); drawn %s (M changes)",
+        std::snprintf(line, sizeof line, "%s (rows %g %g %g / %g %g %g / %g %g %g); drawn %s (M changes)",
+                      mesh_.importAxesGuessed ? "no float copy, usual turn" : "float copy turned",
                       double(a[0][0]), double(a[0][1]), double(a[0][2]), double(a[1][0]), double(a[1][1]),
                       double(a[1][2]), double(a[2][0]), double(a[2][1]), double(a[2][2]), meshTurnName(ctx_.meshTurn));
         info_.push_back(line);
     }
+    if (mesh_.keyFrames)
+        info_.push_back(std::to_string(mesh_.keyFrames) + " of its " + std::to_string(mesh_.animFrames) +
+                        " frames of vertices found (keyframes not worked out yet): the first is shown");
     if (mesh_.trailingBytes)
         info_.push_back(std::to_string(mesh_.trailingBytes) + " bytes after the last field read");
     resetView();

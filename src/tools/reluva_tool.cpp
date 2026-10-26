@@ -4581,7 +4581,11 @@ int cmdUeProbe(int argc, char** argv) {
             std::printf("  %d vertices x %d frames, %zu triangles, %zu animations (%d left out); import block %zu "
                         "bytes, %s\n",
                         m.frameVerts, m.animFrames, m.tris.size(), m.anims.size(), m.droppedAnims, m.importBlock,
-                        m.importAxes ? "turned as its float copy" : "no turn found");
+                        !m.importAxes ? "no turn" : m.importAxesGuessed ? "no float copy (usual turn taken)"
+                                                                        : "turned as its float copy");
+        if (!err && m.keyFrames)
+            std::printf("  %d of its %d frames of vertices found (the first is shown for all)\n", m.keyFrames,
+                        m.animFrames);
         for (const std::string& l : describeMeshLayout(pkg, index))
             std::printf("%s\n", l.c_str());
     }
@@ -4767,8 +4771,8 @@ int cmdUeCheck(int argc, char** argv) {
                 // Which way imported-model meshes' float copies are turned
                 // from their packed vertices (rows), and an example of each.
                 if (!err && m.importBlock) {
-                    std::string turn = "no turn found";
-                    if (m.importAxes) {
+                    std::string turn = "none to fit (usual turn taken)";
+                    if (m.importAxes && !m.importAxesGuessed) {
                         turn.clear();
                         for (const auto& row : *m.importAxes) {
                             char buf[64];
@@ -4780,6 +4784,8 @@ int cmdUeCheck(int argc, char** argv) {
                     auto& [n, example] = meshTurns[turn];
                     if (n++ == 0)
                         example = pkg->path(int32_t(i) + 1);
+                    if (m.keyFrames)
+                        ++tallies["meshes keyframed (first frame shown)"].ok;
                 }
             }
         }

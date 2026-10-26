@@ -53,6 +53,13 @@ struct Mesh {
     // packed ones lie: that turn (rows: output axes), applied after Scale
     // and Origin and before RotOrigin. None for the standard layout.
     std::optional<std::array<Vec3f, 3>> importAxes;
+    // Without a float copy to fit (most keep per-vertex weights where
+    // KiraCellLight keeps its copy), the turn most of them show is taken.
+    bool importAxesGuessed = false;
+    // The Fallen's keyframed meshes: how many frames of vertices were
+    // found, fewer than animFrames; the first is used for every frame
+    // until the rest is worked out. 0: every frame was found.
+    int keyFrames = 0;
     int droppedAnims = 0; // animations left out, their frames past the mesh's
 
     const MeshAnimSeq* findAnim(std::string_view name) const;
