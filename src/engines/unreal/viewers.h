@@ -15,9 +15,13 @@
 //           the lightmaps, - and = to change the display's contrast (its
 //           gamma; to compare with the original), O to move the movers
 //           (doors, lifts) on to their next keyframe, K to show or hide
-//           the sky.
+//           the sky, N to play or stop the meshes' animations.
 // Textures: Left/Right step through a package's textures, PageUp/PageDown
 //           pick the package (.utx, then maps' own, then .u).
+// Meshes:   every Mesh and LodMesh. Left/Right step, PageUp/PageDown pick
+//           the package; drag to turn, the wheel zooms, A plays or stops
+//           the animation, [ and ] pick it, R resets the view, I shows or
+//           hides the info.
 // Sounds:   Left/Right step, PageUp/PageDown pick the package, Space plays.
 // Packages: every package on the search path. Left/Right pick one,
 //           Up/Down move through its exports (PageUp/PageDown, Home/End),
@@ -25,6 +29,7 @@
 
 #include "engines/unreal/actors.h"
 #include "engines/unreal/games.h"
+#include "engines/unreal/mesh_render.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package_set.h"
 
@@ -150,6 +155,39 @@ private:
     audio::SoundHandle playing_ = audio::kNoSound;
 };
 
+class MeshViewer : public Page {
+public:
+    explicit MeshViewer(ViewerContext& ctx);
+    ~MeshViewer() override;
+    const char* name() const override { return "Meshes"; }
+    size_t count() const override { return browser_.packageCount(); }
+    void activate() override;
+    void deactivate() override;
+    void handleEvent(const Event& ev) override;
+    void update(uint64_t nowMs) override;
+    bool uses3D() const override { return renderer_ != nullptr; }
+
+private:
+    void show();
+    void unload();
+    void resetView();
+
+    ObjectBrowser browser_;
+    bool started_ = false;
+    gfx::Renderer3D* renderer_ = nullptr;
+    Mesh mesh_;
+    GpuMesh gpu_;
+    std::vector<gfx::TextureId> textures_;
+    std::string error_;
+    std::vector<std::string> info_;
+    Surface overlay_;
+    int anim_ = -1;
+    bool playing_ = true, showInfo_ = true, dragging_ = false;
+    float time_ = 0, yaw_ = 0, pitch_ = 0.3f, distance_ = 200;
+    int lastX_ = 0, lastY_ = 0;
+    uint64_t lastMs_ = 0;
+};
+
 class MapViewer : public Page {
 public:
     explicit MapViewer(ViewerContext& ctx);
@@ -195,6 +233,20 @@ private:
     std::vector<MoverDraw> movers_;
     std::optional<Vec3f> sky_; // the sky zone's viewpoint, Unreal's coordinates
     bool showSky_ = true;
+    // Actors drawn as meshes, each mesh uploaded once.
+    struct MeshDraw {
+        size_t mesh = 0; // into meshes_ / gpuMeshes_
+        gfx::Mat4 placement{};
+        std::vector<gfx::TextureId> textures; // by texture index
+        MeshLight light;
+        int anim = -1; // into the mesh's animations
+        float startFraction = 0;
+    };
+    std::vector<Mesh> meshes_;
+    std::vector<GpuMesh> gpuMeshes_;
+    std::vector<MeshDraw> meshActors_;
+    bool animate_ = false;
+    float animTime_ = 0;
     std::vector<gfx::TextureId> textures_;
     Surface overlay_;
     std::string error_;

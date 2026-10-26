@@ -8,7 +8,9 @@
 #include "data/tone440_mp3.h"
 #include "engines/registry.h"
 #include "engines/unreal/actors.h"
+#include "engines/unreal/class_defaults.h"
 #include "engines/unreal/games.h"
+#include "engines/unreal/mesh.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package.h"
@@ -777,6 +779,151 @@ static void testActors() {
     CHECK(std::abs(axes[0][1] - 1) < 1e-5f && std::abs(axes[1][0] + 1) < 1e-5f && std::abs(axes[2][2] - 1) < 1e-5f);
 }
 
+// A two-frame triangle mesh as the package's first export (its data at file
+// offset 64, which its lazy arrays' end offsets need), classic or LOD.
+static std::vector<uint8_t> meshData(PackageWriter& w, bool lod, int32_t textureRef) {
+    const size_t base = 64;
+    Bytes o;
+    endProps(o, w);
+    for (int i = 0; i < 6; ++i)
+        o.f32(0);
+    o.u8(1);
+    o.f32(0), o.f32(0), o.f32(0), o.f32(10);
+    auto packed = [](int x, int y, int z) {
+        return uint32_t(x & 0x7ff) | uint32_t(y & 0x7ff) << 11 | uint32_t(z & 0x3ff) << 22;
+    };
+    // A lazy array: the file offset just past it, the count, the elements.
+    auto lazy = [&](int count, const std::vector<uint8_t>& elements) {
+        Bytes c;
+        c.index(count);
+        o.u32(uint32_t(base + o.b.size() + 4 + c.b.size() + elements.size()));
+        o.bytes(c.b);
+        o.bytes(elements);
+    };
+    Bytes verts;
+    for (int z : {0, 5}) {
+        verts.u32(packed(-3, 0, z));
+        verts.u32(packed(10, 0, z));
+        verts.u32(packed(0, 10, z));
+    }
+    lazy(6, verts.b);
+    Bytes tris;
+    if (!lod) {
+        tris.u16(0), tris.u16(1), tris.u16(2);
+        tris.u8(0), tris.u8(0), tris.u8(128), tris.u8(0), tris.u8(0), tris.u8(128);
+        tris.u32(0), tris.i32(0);
+    }
+    lazy(lod ? 0 : 1, tris.b);
+    o.index(1); // animations
+    o.index(w.name("Wave")), o.index(w.name("None")), o.i32(0), o.i32(2), o.index(0), o.f32(10);
+    lazy(0, {}); // connects
+    for (int i = 0; i < 6; ++i)
+        o.f32(0);
+    o.u8(1);
+    o.f32(0), o.f32(0), o.f32(0), o.f32(10);
+    lazy(0, {}); // vertex links
+    o.index(1), o.index(textureRef);
+    o.index(0), o.index(0);
+    o.i32(3), o.i32(2);
+    o.u32(0), o.u32(0);
+    o.vec(2, 2, 2), o.vec(0, 0, 0), o.i32(0), o.i32(0), o.i32(0);
+    o.i32(0), o.i32(0);
+    o.index(0); // texture levels of detail
+    if (lod) {
+        o.index(0), o.index(0);
+        o.index(1), o.u16(0), o.u16(1), o.u16(2), o.u16(0); // a face: wedges, material
+        o.index(0);
+        o.index(3); // wedges: vertex, u, v
+        o.u16(0), o.u8(0), o.u8(0), o.u16(1), o.u8(128), o.u8(0), o.u16(2), o.u8(0), o.u8(128);
+        o.index(1), o.u32(polyflag::Masked), o.i32(0); // a material
+        o.index(0);
+        o.i32(3), o.i32(0);
+        for (int i = 0; i < 6; ++i)
+            o.f32(0);
+        o.index(0);
+        o.i32(3);
+    }
+    return o.b;
+}
+
+static void testMeshes() {
+    for (bool lod : {false, true}) {
+        PackageWriter w;
+        const int32_t meshClass = w.addImport("Engine", "Class", 0, lod ? "LodMesh" : "Mesh");
+        const int32_t texClass = w.addImport("Engine", "Class", 0, "Texture");
+        w.addExport(meshClass, 0, "Triangle", meshData(w, lod, 2));
+        w.addExport(texClass, 0, "Skin", {});
+        Package p;
+        CHECK(!p.openMemory(w.build(), "Meshes"));
+        Mesh m;
+        const Error err = readMesh(p, 0, m);
+        CHECK(!err);
+        if (err) {
+            std::fprintf(stderr, "%s\n", err.message.c_str());
+            continue;
+        }
+        CHECK(m.lod == lod && m.frameVerts == 3 && m.animFrames == 2 && m.verts.size() == 6 && m.vertexBytes == 4);
+        CHECK((m.verts[0] == Vec3f{-3, 0, 0}) && (m.verts[5] == Vec3f{0, 10, 5}));
+        CHECK(m.tris.size() == 1 && m.tris[0].vertex[2] == 2 && m.tris[0].uv[1][0] == 0.5f);
+        CHECK(m.tris[0].polyFlags == (lod ? polyflag::Masked : 0u));
+        CHECK(m.textures.size() == 1 && m.textures[0] == 2 && (m.scale == Vec3f{2, 2, 2}) && m.trailingBytes == 0);
+        const MeshAnimSeq* wave = m.findAnim("wave");
+        CHECK(wave && wave->numFrames == 2 && wave->rate == 10);
+    }
+}
+
+static void testClassDefaultsAndMeshActors() {
+    // A class "Lamp" whose data is some script-like bytes, the class's
+    // outer and config name, then its defaults: drawn as a mesh, twice
+    // the size. A placed Lamp sets only its location.
+    PackageWriter w;
+    const int32_t meshClass = w.addImport("Engine", "Class", 0, "LodMesh");
+    const int32_t texClass = w.addImport("Engine", "Class", 0, "Texture");
+    const int32_t meshRef = w.addExport(meshClass, 0, "Triangle", meshData(w, true, 2));
+    w.addExport(texClass, 0, "Skin", {});
+    Bytes cls;
+    for (int i = 0; i < 40; ++i)
+        cls.u8(i);
+    cls.index(-1);                 // within: an object
+    cls.index(w.name("System"));   // config name
+    tag(cls, w, "DrawType", PropertyType::Byte, 1);
+    cls.u8(2);
+    tag(cls, w, "Mesh", PropertyType::Object, 1);
+    cls.index(meshRef);
+    tag(cls, w, "DrawScale", PropertyType::Float, 4);
+    cls.f32(2);
+    endProps(cls, w);
+    const int32_t lampClass = w.addExport(0, 0, "Lamp", cls.b);
+    Bytes actor;
+    tag(actor, w, "Location", PropertyType::Struct, 12, 0, "Vector");
+    actor.vec(1, 2, 3);
+    endProps(actor, w);
+    w.addExport(lampClass, 0, "Lamp0", actor.b);
+
+    PackageSet set;
+    set.addMemory("Level", ".unr", w.build());
+    const Package* p = set.get("Level");
+    CHECK(p != nullptr);
+    if (!p)
+        return;
+    ClassDefaults defaults(set);
+    const PropertyList* d = defaults.defaults(*p, int(lampClass) - 1);
+    CHECK(d && d->items.size() == 3 && d->byte("DrawType") == 2 && d->number("DrawScale") == 2);
+    MeshActorStats stats;
+    const std::vector<MeshActor> actors = findMeshActors(set, *p, defaults, &stats);
+    CHECK(actors.size() == 1 && stats.meshes == 1 && stats.fromDefaults == 1);
+    if (actors.size() == 1) {
+        CHECK(actors[0].mesh.package == p && actors[0].mesh.exportIndex == int(meshRef) - 1);
+        CHECK(actors[0].drawScale == 2 && (actors[0].location == Vec3f{1, 2, 3}));
+    }
+    // Without the config name before them, the whole list isn't taken (a
+    // tail of it can be, where other bytes happen to look like one: in a
+    // class the true start comes first, so the earliest is kept).
+    std::vector<uint8_t> bare(cls.b.begin() + 40 + 2, cls.b.end());
+    PropertyList tail;
+    CHECK(!findTrailingDefaults(*p, bare, tail) || tail.items.size() < 3);
+}
+
 int main() {
     testCompactIndex();
     testPackageTables();
@@ -790,6 +937,8 @@ int main() {
     testProceduralTextures();
     testStreamedSounds();
     testActors();
+    testMeshes();
+    testClassDefaultsAndMeshActors();
     testMapExtension();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

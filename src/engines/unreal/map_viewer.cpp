@@ -9,6 +9,7 @@
 #include "engines/unreal/viewers.h"
 
 #include "engines/unreal/actors.h"
+#include "engines/unreal/class_defaults.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/properties.h"
 #include "engines/unreal/texture.h"
@@ -112,6 +113,12 @@ void MapViewer::unload() {
         renderer_->destroyMesh(moverMesh_);
     mesh_ = moverMesh_ = 0;
     movers_.clear();
+    for (const GpuMesh& g : gpuMeshes_)
+        if (g.mesh)
+            renderer_->destroyMesh(g.mesh);
+    gpuMeshes_.clear();
+    meshes_.clear();
+    meshActors_.clear();
     sky_.reset();
     for (gfx::TextureId t : textures_)
         renderer_->destroyTexture(t);
@@ -199,16 +206,9 @@ void MapViewer::load(int index) {
     std::map<std::pair<const Package*, int>, std::pair<gfx::TextureId, std::array<int, 2>>> loaded;
     int missing = 0;
     std::string firstMissing;
-    auto textureFor = [&](const Package& from, int32_t ref) -> std::pair<gfx::TextureId, std::array<int, 2>> {
-        const ObjectRef tex = ctx_.packages.resolve(from, ref);
-        if (!tex) {
-            if (ref != 0) {
-                ++missing;
-                if (firstMissing.empty())
-                    firstMissing = from.path(ref);
-            }
+    auto textureOf = [&](const ObjectRef& tex) -> std::pair<gfx::TextureId, std::array<int, 2>> {
+        if (!tex)
             return {0, {64, 64}};
-        }
         auto it = loaded.find({tex.package, tex.exportIndex});
         if (it == loaded.end()) {
             image::Image img;
@@ -231,6 +231,15 @@ void MapViewer::load(int index) {
                      .first;
         }
         return it->second;
+    };
+    auto textureFor = [&](const Package& from, int32_t ref) -> std::pair<gfx::TextureId, std::array<int, 2>> {
+        const ObjectRef tex = ctx_.packages.resolve(from, ref);
+        if (!tex && ref != 0) {
+            ++missing;
+            if (firstMissing.empty())
+                firstMissing = from.path(ref);
+        }
+        return textureOf(tex);
     };
     const gfx::Vec3 light = [] {
         const float l = std::sqrt(0.3f * 0.3f + 0.5f * 0.5f + 0.8f * 0.8f);
@@ -344,6 +353,75 @@ void MapViewer::load(int index) {
         if (Error err = renderer_->createMesh(vertices, indices, moverMesh_))
             error_ = err.message;
     sky_ = findSkyZone(ctx_.packages, *pkg);
+
+    // Actors drawn as meshes: each mesh read and uploaded once; its skins
+    // by texture index (MultiSkins, else Skin, else the mesh's own); lit
+    // by the level's lights where it stands.
+    ClassDefaults defaults(ctx_.packages);
+    MeshActorStats meshStats;
+    std::map<std::pair<const Package*, int>, int> meshIndex; // -1: unreadable
+    int badMeshes = 0;
+    std::string firstBadMesh;
+    for (const MeshActor& a : findMeshActors(ctx_.packages, *pkg, defaults, &meshStats)) {
+        auto it = meshIndex.find({a.mesh.package, a.mesh.exportIndex});
+        if (it == meshIndex.end()) {
+            Mesh mesh;
+            GpuMesh gpu;
+            Error err = readMesh(*a.mesh.package, a.mesh.exportIndex, mesh);
+            if (!err)
+                err = uploadMesh(*renderer_, mesh, gpu);
+            int at = -1;
+            if (err) {
+                ++badMeshes;
+                if (firstBadMesh.empty())
+                    firstBadMesh = err.message;
+            } else {
+                at = int(meshes_.size());
+                meshes_.push_back(std::move(mesh));
+                gpuMeshes_.push_back(gpu);
+            }
+            it = meshIndex.emplace(std::make_pair(a.mesh.package, a.mesh.exportIndex), at).first;
+        }
+        if (it->second < 0)
+            continue;
+        const Mesh& mesh = meshes_[size_t(it->second)];
+        MeshDraw d;
+        d.mesh = size_t(it->second);
+        d.placement = meshPlacement(a.location, a.rotation, a.drawScale, a.prePivot);
+        for (size_t k = 0; k < std::max<size_t>(mesh.textures.size(), 8); ++k) {
+            ObjectRef tex = k < a.multiSkins.size() ? a.multiSkins[k] : ObjectRef{};
+            if (!tex)
+                tex = a.skin;
+            if (!tex && k < mesh.textures.size())
+                tex = ctx_.packages.resolve(*a.mesh.package, mesh.textures[k]);
+            d.textures.push_back(textureOf(tex).first);
+        }
+        // The lights reaching where it stands: some all round, the rest
+        // from their average direction.
+        Vec3f total{}, toward{};
+        for (const LightSource& l : lights.unique) {
+            const Vec3f dv{l.position[0] - a.location[0], l.position[1] - a.location[1], l.position[2] - a.location[2]};
+            const float dist = std::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
+            if (dist >= l.radius || dist <= 0)
+                continue;
+            const float amount = 1 - dist / l.radius;
+            for (size_t k = 0; k < 3; ++k) {
+                total[k] += l.color[k] * amount;
+                toward[k] += dv[k] / dist * amount;
+            }
+        }
+        for (size_t k = 0; k < 3; ++k) {
+            d.light.ambient[k] = std::min(kMaxLight, 0.15f + 0.5f * total[k]);
+            d.light.directed[k] = std::min(kMaxLight, 0.7f * total[k]);
+        }
+        const float len = std::sqrt(toward[0] * toward[0] + toward[1] * toward[1] + toward[2] * toward[2]);
+        d.light.direction = len > 0 ? toWorld(Vec3f{toward[0] / len, toward[1] / len, toward[2] / len})
+                                    : gfx::Vec3{0, 0, 1};
+        if (const MeshAnimSeq* anim = mesh.findAnim(a.animSequence))
+            d.anim = int(anim - mesh.anims.data());
+        d.startFraction = a.animFrame;
+        meshActors_.push_back(std::move(d));
+    }
     const auto tMesh = Clock::now();
 
     // Start at the first PlayerStart, or above the level's middle.
@@ -393,7 +471,15 @@ void MapViewer::load(int index) {
                   moverErrors.empty() ? "" : (", " + std::to_string(moverErrors.size()) + " unreadable").c_str(),
                   sky_ ? "yes" : "none");
     info_.push_back(moverErrors.empty() ? std::string(line) : std::string(line) + " (first: " + moverErrors[0] + ")");
-    info_.push_back("Not drawn yet: actors' meshes, lights' effects (flicker, pulse...), movers' own lighting");
+    std::snprintf(line, sizeof line,
+                  "%zu actors drawn as %zu meshes (%d with the mesh from class defaults, %d hidden, %d meshes "
+                  "unreadable); class defaults found %d, not %d",
+                  meshActors_.size(), meshes_.size(), meshStats.fromDefaults, meshStats.hidden, badMeshes,
+                  defaults.found(), defaults.missing());
+    info_.push_back(line);
+    if (!firstBadMesh.empty())
+        info_.push_back("First unreadable mesh: " + firstBadMesh);
+    info_.push_back("Not drawn yet: sprites, lights' effects (flicker, pulse...), movers' own lighting");
 }
 
 void MapViewer::toStart() {
@@ -443,6 +529,8 @@ void MapViewer::handleEvent(const Event& ev) {
             displayGamma_ = std::min(2.5f, displayGamma_ + 0.05f);
         else if (ev.key == 'k')
             showSky_ = !showSky_;
+        else if (ev.key == 'n')
+            animate_ = !animate_;
         else if (ev.key == 'o')
             for (MoverDraw& m : movers_)
                 if (m.key == m.target && m.mover.numKeys > 1) {
@@ -529,6 +617,14 @@ void MapViewer::update(uint64_t nowMs) {
     drawBatches(batches_, mesh_, gfx::identity(), true);
     for (const MoverDraw& m : movers_)
         drawBatches(m.batches, moverMesh_, moverTransform(m), false);
+    if (animate_)
+        animTime_ += dt;
+    for (const MeshDraw& d : meshActors_) {
+        const Mesh& mesh = meshes_[d.mesh];
+        const MeshAnimSeq* anim = d.anim >= 0 ? &mesh.anims[size_t(d.anim)] : nullptr;
+        drawMesh(*renderer_, gpuMeshes_[d.mesh], d.placement, poseAt(mesh, anim, animTime_, d.startFraction),
+                 textured_ ? d.textures : std::vector<gfx::TextureId>{}, d.light, kExposure);
+    }
     drawOverlay(nowMs);
     renderer_->endFrame(&overlay_);
 }

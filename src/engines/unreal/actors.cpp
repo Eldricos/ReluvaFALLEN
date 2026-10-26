@@ -3,6 +3,10 @@
 
 #include "engines/unreal/actors.h"
 
+#include "engines/unreal/class_defaults.h"
+#include "engines/unreal/mesh.h"
+#include "engines/unreal/texture.h"
+
 #include "common/fs.h"
 
 #include <algorithm>
@@ -179,6 +183,56 @@ std::optional<Vec3f> findSkyZone(const PackageSet& packages, const Package& pack
             return location;
     }
     return std::nullopt;
+}
+
+std::vector<MeshActor> findMeshActors(const PackageSet& packages, const Package& package, ClassDefaults& defaults,
+                                      MeshActorStats* stats) {
+    constexpr uint8_t kDrawMesh = 2; // EDrawType's DT_Mesh
+    MeshActorStats st;
+    std::vector<MeshActor> out;
+    for (size_t i = 0; i < package.exports().size(); ++i) {
+        const int32_t cls = package.exports()[i].classRef;
+        if (cls == 0)
+            continue;
+        // Objects that aren't actors (the level's own textures, models...).
+        const std::string className = fs::toLower(package.objectName(cls));
+        if (className == "model" || className == "polys" || className == "level" || className == "palette" ||
+            className == "sound" || className == "music" || isTextureClass(className) || isMeshClass(className))
+            continue;
+        ActorProperties props;
+        if (defaults.actorProperties(package, int(i), props)) {
+            ++st.unreadable;
+            continue;
+        }
+        if (props.byte("DrawType", 1) != kDrawMesh)
+            continue;
+        const ObjectRef mesh = props.object(packages, "Mesh");
+        if (!mesh || !isMeshClass(mesh.package->className(mesh.exportIndex + 1)))
+            continue;
+        if (props.boolean("bHidden")) {
+            ++st.hidden;
+            continue;
+        }
+        MeshActor a;
+        a.name = package.path(int32_t(i) + 1);
+        a.mesh = mesh;
+        props.vector("Location", a.location);
+        props.vector("PrePivot", a.prePivot);
+        props.rotator("Rotation", a.rotation);
+        a.drawScale = props.number("DrawScale", 1);
+        a.animSequence = props.nameValue("AnimSequence");
+        a.animFrame = props.number("AnimFrame", 0);
+        a.skin = props.object(packages, "Skin");
+        for (int k = 0; k < 8; ++k)
+            a.multiSkins[size_t(k)] = props.object(packages, "MultiSkins", k);
+        ++st.meshes;
+        if (!props.layers.empty() && !props.layers[0].props.find("Mesh"))
+            ++st.fromDefaults;
+        out.push_back(std::move(a));
+    }
+    if (stats)
+        *stats = st;
+    return out;
 }
 
 std::array<Vec3f, 3> rotationAxes(const Rotator& r) {

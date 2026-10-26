@@ -93,3 +93,24 @@ over it from scratch, its backdrop surfaces writing only depth (so what's
 behind them stays hidden and the sky shows). K turns it off (backdrops
 then drawn a plain colour). With several sky zones the first is used;
 the original picks per zone.
+
+## Class defaults
+
+A placed actor stores only the properties that differ from its class's
+defaults, and a class only those that differ from its parent's. So an
+actor's mesh, draw type and scale usually come from its class. The
+defaults are the last thing in a class's data, after its script and
+just after its config name (and before that, the class it's within).
+
+Reading a class properly means parsing its script (part of running
+UnrealScript, not done yet). Meanwhile `findTrailingDefaults()` finds
+them by where they end: the earliest start within the last 64 KB of the
+class's data from which tagged properties read cleanly to exactly the
+end, each a plausible size for its type, with a compact name index and a
+compact object reference just before. Later starts that also read are
+tails of the same list, so the earliest is kept; without the config name
+before it, a list's start isn't taken. `ue-check` counts the classes
+whose defaults were found and weren't. An actor's properties are then
+its own over its class's defaults over each parent's
+(`ClassDefaults::actorProperties()`), each property's object references
+read in the package it came from.

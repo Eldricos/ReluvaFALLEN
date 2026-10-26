@@ -132,6 +132,8 @@
 
 #ifdef RELUVA_ENGINE_UNREAL
 #include "engines/unreal/actors.h"
+#include "engines/unreal/class_defaults.h"
+#include "engines/unreal/mesh.h"
 #include "engines/unreal/games.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/model.h"
@@ -4594,6 +4596,7 @@ int cmdUeCheck(int argc, char** argv) {
     };
     int unopened = 0;
     long long lightTotals[4] = {};
+    ClassDefaults classDefaults(set);
     for (const std::string& name : set.names()) {
         const Package* pkg = set.get(name);
         if (!pkg) {
@@ -4625,6 +4628,15 @@ int cmdUeCheck(int argc, char** argv) {
             } else if (cls == "palette") {
                 Palette p;
                 record("palettes", readPalette(*pkg, int(i), p));
+            } else if (isMeshClass(cls)) {
+                Mesh m;
+                reluva::Error err = readMesh(*pkg, int(i), m);
+                if (!err && m.trailingBytes)
+                    err = reluva::Error::fail(pkg->path(int32_t(i) + 1) + ": " + std::to_string(m.trailingBytes) +
+                                              " bytes after the last field read");
+                record(cls == "lodmesh" ? "meshes (LodMesh)" : "meshes (Mesh)", err);
+                if (!err && m.vertexBytes != 4)
+                    ++tallies["meshes with 8-byte vertices"].ok;
             }
         }
         if (set.isMap(name)) {
@@ -4674,6 +4686,11 @@ int cmdUeCheck(int argc, char** argv) {
                 std::printf("    movers: %zu (%zu polygons), %zu unreadable; sky zone: %s\n", movers.size(), moverPolys,
                             moverErrors.size(), skyAt ? "yes" : "none");
                 tallies["movers"].ok += int(movers.size());
+                MeshActorStats meshStats;
+                findMeshActors(set, *pkg, classDefaults, &meshStats);
+                std::printf("    mesh actors: %d (%d with the mesh from class defaults), %d hidden, %d unreadable\n",
+                            meshStats.meshes, meshStats.fromDefaults, meshStats.hidden, meshStats.unreadable);
+                tallies["mesh actors"].ok += meshStats.meshes;
                 for (const std::string& e : moverErrors)
                     record("movers", reluva::Error::fail(name + ": " + e));
             }
@@ -4686,6 +4703,8 @@ int cmdUeCheck(int argc, char** argv) {
     if (lightTotals[0])
         std::printf("lightmap grids: %lld, %lld lit; placed by bounds %lld; off fit %lld\n", lightTotals[0],
                     lightTotals[1], lightTotals[2], lightTotals[3]);
+    std::printf("class defaults (for placed actors' classes and their parents): found %d, not found %d\n",
+                classDefaults.found(), classDefaults.missing());
     for (const auto& [what, t] : tallies) {
         std::printf("%-9s %6d decoded, %6d failed\n", what.c_str(), t.ok, t.failed);
         for (const std::string& ex : t.examples)

@@ -175,8 +175,12 @@ if(RELUVA_ENGINE_UNREAL)
         src/engines/unreal/model.cpp
         src/engines/unreal/lighting.cpp
         src/engines/unreal/actors.cpp
+        src/engines/unreal/class_defaults.cpp
+        src/engines/unreal/mesh.cpp
+        src/engines/unreal/mesh_render.cpp
         src/engines/unreal/viewers.cpp
-        src/engines/unreal/map_viewer.cpp)
+        src/engines/unreal/map_viewer.cpp
+        src/engines/unreal/mesh_viewer.cpp)
     target_compile_definitions(reluva_engines PUBLIC RELUVA_ENGINE_UNREAL)
 endif()
 target_link_libraries(reluva_engines PUBLIC reluva_common PRIVATE reluva_warnings)

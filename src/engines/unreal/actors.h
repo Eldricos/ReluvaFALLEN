@@ -67,6 +67,31 @@ std::vector<Mover> findMovers(const PackageSet& packages, const Package& package
 // location. nullopt when the level has none.
 std::optional<Vec3f> findSkyZone(const PackageSet& packages, const Package& package);
 
+// An actor drawn as a mesh (DrawType DT_Mesh), with what it needs from
+// its properties and its classes' defaults (class_defaults.h).
+struct MeshActor {
+    std::string name;
+    ObjectRef mesh;
+    Vec3f location{}, prePivot{};
+    Rotator rotation;
+    float drawScale = 1;
+    std::string animSequence;
+    float animFrame = 0; // 0-1 through the sequence
+    ObjectRef skin;
+    std::array<ObjectRef, 8> multiSkins{};
+};
+
+struct MeshActorStats {
+    int meshes = 0;       // actors drawn as meshes
+    int fromDefaults = 0; // of those, whose mesh came from their class's defaults
+    int hidden = 0;       // drawn as meshes but hidden (bHidden)
+    int unreadable = 0;   // actors whose properties didn't read
+};
+
+class ClassDefaults;
+std::vector<MeshActor> findMeshActors(const PackageSet& packages, const Package& package, ClassDefaults& defaults,
+                                      MeshActorStats* stats = nullptr);
+
 // A rotator's axes in Unreal's space: forward, right, up.
 std::array<Vec3f, 3> rotationAxes(const Rotator& r);
 
