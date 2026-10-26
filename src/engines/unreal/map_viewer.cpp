@@ -365,11 +365,15 @@ void MapViewer::load(int index) {
     int badMeshes = 0, borrowed = 0;
     std::string firstBadMesh;
     const std::vector<MeshActor> meshActors = findMeshActors(ctx_.packages, *pkg, defaults, &meshStats);
-    // The animations each mesh's actors play.
+    // The animations each mesh's actors play, and the idles that may stand
+    // in for a one-frame pose (below).
     std::map<std::pair<const Package*, int>, std::set<std::string>> wanted;
-    for (const MeshActor& a : meshActors)
+    for (const MeshActor& a : meshActors) {
+        auto& w = wanted[{a.mesh.package, a.mesh.exportIndex}];
         if (!a.animSequence.empty())
-            wanted[{a.mesh.package, a.mesh.exportIndex}].insert(a.animSequence);
+            w.insert(a.animSequence);
+        w.insert(idleFor(a.animSequence));
+    }
     for (const MeshActor& a : meshActors) {
         auto it = meshIndex.find({a.mesh.package, a.mesh.exportIndex});
         if (it == meshIndex.end()) {
@@ -442,7 +446,15 @@ void MapViewer::load(int index) {
         const float len = std::sqrt(toward[0] * toward[0] + toward[1] * toward[1] + toward[2] * toward[2]);
         d.light.direction = len > 0 ? toWorld(Vec3f{toward[0] / len, toward[1] / len, toward[2] / len})
                                     : gfx::Vec3{0, 0, 1};
-        if (const MeshAnimSeq* anim = mesh.findAnim(a.animSequence)) {
+        const MeshAnimSeq* anim = mesh.findAnim(a.animSequence);
+        // Characters are placed in a one-frame pose (BaseRelax, BaseReady),
+        // which the game's scripts follow with an idle loop: its idle
+        // (Idle1, or IdleReady1 for a ready pose), which every humanoid's
+        // list has, so they move when animations play.
+        if (mesh.bones && (!anim || anim->numFrames <= 1))
+            if (const MeshAnimSeq* idle = mesh.findAnim(idleFor(a.animSequence)))
+                anim = idle;
+        if (anim) {
             d.anim = int(anim - mesh.anims.data());
         } else if (mesh.bones) {
             // A character naming an animation its mesh doesn't have (the
@@ -685,6 +697,11 @@ void MapViewer::update(uint64_t nowMs) {
     }
     drawOverlay(nowMs);
     renderer_->endFrame(&overlay_);
+}
+
+// The idle loop a character placed in pose `anim` plays (see load()).
+std::string MapViewer::idleFor(const std::string& anim) {
+    return fs::toLower(anim).rfind("baseready", 0) == 0 ? "IdleReady1" : "Idle1";
 }
 
 // Puts the camera before the next placed mesh (or the next whose mesh is

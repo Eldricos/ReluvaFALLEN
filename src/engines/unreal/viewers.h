@@ -249,6 +249,7 @@ private:
         bool skeletal = false; // its mesh is posed from bones
     };
     void jumpToMeshActor(bool skeletalOnly);
+    static std::string idleFor(const std::string& anim);
     // The Fallen's shared animation sets, read once (the first map that needs them).
     std::optional<std::vector<AnimationSet>> animationSets_;
     int animationSetsMs_ = 0;

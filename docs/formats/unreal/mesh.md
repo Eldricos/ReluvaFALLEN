@@ -170,4 +170,7 @@ checking: Leeta and BajFanatic standing in BaseRelax, a Klingon and
 BajFanatic in CrchWalkF). On The Fallen's levels: 277 placed characters'
 animations come from the sets, 61 are their own, and 103 (the Grigari
 drones' "BaseReady", from their class) aren't in their mesh's list at all;
-the viewer plays their idle.
+the viewer plays their idle. Nearly all placed characters ask for a
+one-frame pose (BaseRelax, BaseReady), which the game's scripts follow
+with an idle loop, so the viewer plays Idle1 (IdleReady1 for a ready pose)
+in its place; every humanoid list has both.
