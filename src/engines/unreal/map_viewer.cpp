@@ -388,9 +388,10 @@ void MapViewer::load(int index) {
         const Mesh& mesh = meshes_[size_t(it->second)];
         MeshDraw d;
         d.mesh = size_t(it->second);
-        d.label = a.name + " (" + a.mesh.package->path(a.mesh.exportIndex + 1) + ")";
+        d.label = a.name + " (" + a.mesh.package->path(a.mesh.exportIndex + 1) +
+                  (mesh.bones ? ", " + std::to_string(mesh.bones) + " bones" : std::string()) + ")";
         d.at = toWorld(a.location);
-        d.skeletal = mesh.bones > 0 || mesh.keyFrames > 0;
+        d.skeletal = mesh.bones > 0;
         d.placement = meshPlacement(a.location, a.rotation, a.drawScale, a.prePivot);
         for (size_t k = 0; k < std::max<size_t>(mesh.textures.size(), 8); ++k) {
             ObjectRef tex = k < a.multiSkins.size() ? a.multiSkins[k] : ObjectRef{};
@@ -655,7 +656,7 @@ void MapViewer::update(uint64_t nowMs) {
 }
 
 // Puts the camera before the next placed mesh (or the next whose mesh is
-// posed from bones or keyframed), looking at it along X.
+// posed from bones: the characters), looking at it along X.
 void MapViewer::jumpToMeshActor(bool skeletalOnly) {
     const int n = int(meshActors_.size());
     for (int step = 1; step <= n; ++step) {
