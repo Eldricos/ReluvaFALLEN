@@ -833,7 +833,7 @@ static std::vector<uint8_t> meshData(PackageWriter& w, bool lod, int32_t texture
         // Some of the block's other contents (names, counts), then the
         // vertex arrays: (count, count, 1) and the packed vertices.
         o.u32(1), o.u16(4), o.u8('n'), o.u8('a'), o.u8('m'), o.u8('e'), o.u32(3), o.f32(0.5f);
-        if (importBlock == 4) {
+        if (importBlock == 4 || importBlock == 5) {
             // A skeleton: "root", no vertices, placed 10 up, and its one
             // child "b", placed 10 up from it, with the first frame's
             // vertices (by Scale 2) 20 below it, their weights and indices.
@@ -856,7 +856,11 @@ static std::vector<uint8_t> meshData(PackageWriter& w, bool lod, int32_t texture
                     o.vec(1, 0, 0), o.vec(0, 1, 0), o.vec(0, 0, 1), o.vec(0, 0, m ? 10.0f : 0.0f);
                     o.u32(m ? 4 : 7);
                 }
-                o.u32(1), o.u32(1), o.u32(1); // a clip, without keys
+                // A clip, without keys (5: the child's clips not understood).
+                if (importBlock == 5 && !child)
+                    o.u32(1), o.u32(2), o.u32(1);
+                else
+                    o.u32(1), o.u32(1), o.u32(1);
                 o.u32(0), o.u32(0), o.u32(32), o.u32(0), o.u32(0), o.u32(32), o.u32(0), o.u32(0);
                 if (child)
                     o.u32(1), o.u32(1), o.u32(4);
@@ -970,6 +974,20 @@ static void testImportedMeshBlock() {
         if (!err && m.verts.size() == 6)
             CHECK((m.verts[0] == Vec3f{-3, 0, 0}) && (m.verts[2] == Vec3f{0, 10, 0}) && m.verts[5] == m.verts[2] &&
                   m.importAxes && !m.importAxesGuessed);
+    }
+    {
+        // A bone whose clips aren't understood is still found, and placed
+        // under its parent.
+        PackageWriter w;
+        const int32_t meshClass = w.addImport("Engine", "Class", 0, "LodMesh");
+        w.addExport(meshClass, 0, "Triangle", meshData(w, true, 2, 5));
+        Package p;
+        CHECK(!p.openMemory(w.build(), "Meshes"));
+        Mesh m;
+        const Error err = readMesh(p, 0, m);
+        CHECK(!err && m.bones == 2 && m.verts.size() == 6 && (m.verts[0] == Vec3f{-3, 0, 0}));
+        const auto lines = describeBones(p, 0);
+        CHECK(!lines.empty() && lines.back().find("not understood") != std::string::npos);
     }
     PackageWriter w;
     const int32_t meshClass = w.addImport("Engine", "Class", 0, "Mesh");

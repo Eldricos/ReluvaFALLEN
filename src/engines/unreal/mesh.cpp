@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <optional>
 
 namespace reluva::unreal {
@@ -325,7 +326,8 @@ struct BoneRecord {
     std::array<float, 12> offset{}, placement{};
     uint32_t kind = 0, clips = 0;
     size_t clipsAt = 0; // the first clip
-    size_t end = 0;     // past its own fields (before its children)
+    size_t start = 0;   // where its record starts (its name)
+    size_t end = 0;     // past its own fields (before its children); 0: its clips didn't read
 };
 
 struct BoneReader {
@@ -378,95 +380,108 @@ struct BoneReader {
         return 0;
     }
 
-    // Every bone: the tree from the first, and where a record in it isn't
-    // understood, the trees found after it (their parents lost). Returns
-    // whether the first tree read whole.
-    bool all(std::vector<BoneRecord>& out) {
-        size_t at = first();
-        bool whole = true;
-        size_t firstFailure = 0;
-        while (at) {
-            const size_t end = bone(at, -1, out);
-            if (!end) {
-                whole = false;
-                if (!firstFailure)
-                    firstFailure = failedAt;
-            }
-            at = first(end ? end : failedAt + 1);
-        }
-        if (firstFailure)
-            failedAt = firstFailure;
-        return whole;
-    }
-
-    // A bone and its children, depth first, into `out`; where they end,
-    // or 0 (and failedAt) if they don't hold together.
-    size_t bone(size_t at, int parent, std::vector<BoneRecord>& out) {
-        BoneRecord b;
-        b.parent = parent;
+    // A bone's own fields from `at` (its name). Its clips' keys are
+    // stepped over too, to find its children; if they don't read, `end`
+    // stays 0 and its children aren't known, but the bone still is.
+    bool record(size_t at, BoneRecord& b) const {
         uint32_t n = 0, flags = 0;
-        if (out.size() > 4096 || !name(at, b.name)) {
-            failedAt = at;
-            return 0;
-        }
+        if (!name(at, b.name))
+            return false;
+        b.start = at;
         size_t p = at + 2 + b.name.size();
-        if (!header(p, n, flags) || flags != 8) {
-            failedAt = at;
-            return 0;
-        }
+        if (!header(p, n, flags) || flags != 8 || n > 64)
+            return false;
         p += 12 + 4 * size_t(n);
         size_t* arrays[3] = {&b.positions, &b.weights, &b.indices};
         for (int a = 0; a < 3; ++a) {
             uint32_t k = 0;
-            if (!header(p, k, flags) || flags != 128 || (a && k != b.vertices)) {
-                failedAt = at;
-                return 0;
-            }
+            if (!header(p, k, flags) || flags != 128 || (a && k != b.vertices))
+                return false;
             b.vertices = k;
             *arrays[a] = p + 12;
             p += 12 + size_t(k) * (a == 0 ? 12 : 4);
         }
-        if (p + 104 + 12 > to) {
-            failedAt = at;
-            return 0;
-        }
+        if (p + 104 > to)
+            return false;
         for (size_t c = 0; c < 12; ++c) {
             b.offset[c] = f32(p + 4 * c);
             b.placement[c] = f32(p + 52 + 4 * c);
+            if (!sane(b.offset[c]) || !sane(b.placement[c]))
+                return false;
         }
         p += 100;
         b.kind = u32(p);
         p += 4;
-        if (!header(p, b.clips, flags)) {
-            failedAt = at;
-            return 0;
-        }
+        b.end = 0;
+        if (!header(p, b.clips, flags))
+            return true;
         p += 12;
         b.clipsAt = p;
         for (uint32_t c = 0; c < b.clips; ++c) {
             uint32_t np = 0, nr = 0;
-            if (!header(p, np, flags) || p + 12 + 16 * size_t(np) > to) {
-                failedAt = at;
-                return 0;
-            }
+            if (!header(p, np, flags) || p + 12 + 16 * size_t(np) > to)
+                return true;
             p += 12 + 16 * size_t(np);
-            if (!header(p, nr, flags) || p + 12 + 10 * size_t(nr) + 8 > to) {
-                failedAt = at;
-                return 0;
-            }
+            if (!header(p, nr, flags) || p + 12 + 10 * size_t(nr) + 8 > to)
+                return true;
             p += 12 + 10 * size_t(nr) + 8;
         }
         b.end = p;
-        const int self = int(out.size());
-        out.push_back(b);
-        uint32_t children = 0;
-        if (!header(p, children, flags) || (children && flags != 4))
-            return p; // no children (what follows is something else)
-        p += 12;
-        for (uint32_t ch = 0; ch < children; ++ch)
-            if ((p = bone(p, self, out)) == 0)
+        return true;
+    }
+
+    // Every bone, in file order, each found by its own fields; then their
+    // parents, from each bone's children ((h, h, 4) after its clips, their
+    // records following depth first). A bone whose clips or children
+    // aren't understood keeps its own children unknown (they're placed as
+    // if at the root; failedAt says where). Returns whether all were.
+    bool all(std::vector<BoneRecord>& out) {
+        out.clear();
+        for (size_t at = first(); at; at = first(at + 1)) {
+            BoneRecord b;
+            if (!record(at, b))
+                continue;
+            out.push_back(b);
+            at = b.indices; // past its name and arrays' headers
+        }
+        std::map<size_t, int> byStart;
+        for (size_t i = 0; i < out.size(); ++i)
+            byStart[out[i].start] = int(i);
+        std::vector<bool> reached(out.size(), false);
+        failedAt = 0;
+        // Where bone i's subtree ends, 0 if that's not known.
+        std::function<size_t(int, int)> subtree = [&](int i, int depth) -> size_t {
+            reached[size_t(i)] = true;
+            const BoneRecord& b = out[size_t(i)];
+            if (!b.end || depth > 256) {
+                if (!failedAt)
+                    failedAt = b.start;
                 return 0;
-        return p;
+            }
+            uint32_t children = 0, flags = 0;
+            size_t p = b.end;
+            if (!header(p, children, flags) || (children && flags != 4))
+                return p; // a leaf
+            p += 12;
+            for (uint32_t c = 0; c < children; ++c) {
+                const auto it = byStart.find(p);
+                if (it == byStart.end()) {
+                    if (!failedAt)
+                        failedAt = p;
+                    return 0;
+                }
+                out[size_t(it->second)].parent = i;
+                if ((p = subtree(it->second, depth + 1)) == 0)
+                    return 0;
+            }
+            return p;
+        };
+        for (size_t i = 0; i < out.size(); ++i)
+            if (!reached[i])
+                subtree(int(i), 0);
+        // Parents come before their children in file order, so a bone's
+        // parent is always placed first.
+        return failedAt == 0;
     }
 };
 
@@ -802,7 +817,7 @@ std::vector<std::string> describeBones(const Package& package, int index) {
     const bool whole = r.all(bones);
     out.push_back("Bones (offsets from the properties' end; the first at +" + std::to_string(first - start) + "):");
     std::vector<int> depth(bones.size(), 0);
-    char line[256];
+    char line[512];
     int shown = 0;
     for (size_t i = 0; i < bones.size(); ++i) {
         const BoneRecord& b = bones[i];
@@ -812,6 +827,10 @@ std::vector<std::string> describeBones(const Package& package, int index) {
                       b.name.c_str(), b.vertices, double(b.placement[9]), double(b.placement[10]),
                       double(b.placement[11]), b.kind, b.clips);
         out.push_back(line);
+        if (!b.end) {
+            out.push_back(std::string(size_t(d) + 2, ' ') + "its clips aren't understood, so neither are its children");
+            continue;
+        }
         std::string keys;
         size_t p = b.clipsAt;
         for (uint32_t c = 0; c < b.clips; ++c) {
@@ -844,9 +863,11 @@ std::vector<std::string> describeBones(const Package& package, int index) {
     if (whole) {
         out.push_back(std::to_string(bones.size()) + " bones, all in one tree");
     } else {
-        int w = std::snprintf(line, sizeof line, "%zu bones; at +%zu a record not understood (the bones after it have lost their parents):",
+        int w = std::snprintf(line, sizeof line,
+                              "%zu bones; at +%zu not understood (some bones' parents not known, placed from the "
+                              "root):",
                               bones.size(), r.failedAt - start);
-        for (size_t k = 0; k < 48 && r.failedAt + k < base + data.size(); ++k)
+        for (size_t k = 0; k < 64 && r.failedAt + k < base + data.size(); ++k)
             w += std::snprintf(line + w, sizeof line - size_t(w), " %02x", data[r.failedAt + k - base]);
         out.push_back(line);
     }

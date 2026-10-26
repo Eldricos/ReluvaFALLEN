@@ -4730,6 +4730,7 @@ int cmdUeCheck(int argc, char** argv) {
     std::map<std::string, Tally> tallies;
     std::map<std::string, std::pair<int, std::string>> meshTurns; // turn: how many, an example
     std::map<std::string, bool> meshReads;     // placed actors' meshes: whether they read
+    std::map<std::string, int> meshBones;      // and how many bones they're posed from
     std::map<std::string, int> unreadPlaced;   // those that don't: how many actors use them
     auto record = [&](const std::string& what, const reluva::Error& err) {
         Tally& t = tallies[what];
@@ -4856,7 +4857,7 @@ int cmdUeCheck(int argc, char** argv) {
                 tallies["movers"].ok += int(movers.size());
                 MeshActorStats meshStats;
                 // Placed actors whose mesh doesn't read: which meshes matter most.
-                int meshless = 0;
+                int meshless = 0, skeletal = 0;
                 for (const MeshActor& a : findMeshActors(set, *pkg, classDefaults, &meshStats)) {
                     if (!a.mesh)
                         continue;
@@ -4865,15 +4866,18 @@ int cmdUeCheck(int argc, char** argv) {
                     if (it == meshReads.end()) {
                         Mesh m;
                         it = meshReads.emplace(mesh, !readMesh(*a.mesh.package, a.mesh.exportIndex, m)).first;
+                        meshBones[mesh] = m.bones;
                     }
+                    skeletal += meshBones[mesh] > 0;
                     if (!it->second) {
                         ++meshless;
                         ++unreadPlaced[mesh];
                     }
                 }
                 std::printf("    mesh actors: %d (%d with the mesh from class defaults), %d hidden, %d unreadable, "
-                            "%d whose mesh doesn't read\n",
-                            meshStats.meshes, meshStats.fromDefaults, meshStats.hidden, meshStats.unreadable, meshless);
+                            "%d whose mesh doesn't read, %d posed from bones\n",
+                            meshStats.meshes, meshStats.fromDefaults, meshStats.hidden, meshStats.unreadable, meshless,
+                            skeletal);
                 tallies["mesh actors"].ok += meshStats.meshes;
                 for (const std::string& e : moverErrors)
                     record("movers", reluva::Error::fail(name + ": " + e));

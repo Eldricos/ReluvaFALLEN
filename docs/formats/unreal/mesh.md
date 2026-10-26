@@ -126,9 +126,12 @@ by a few units each: BajFanatic's spine 5.7 above the pelvis, its head
 1.75 above the neck), so a vertex is the weighted sum, over its bones, of
 `p * offset * placement * parent's placement * ...` up to the root (row
 vectors), in the same units as the packed vertices after Scale and Origin.
-A leaf's `(h, h, 4)` may be missing; where a record isn't understood, the
-records found after it are read as trees of their own (their parents
-lost), and ue-probe shows the bytes there.
+Each bone is found by its own fields (as the vertices need nothing
+else); the tree only gives their parents. A leaf's `(h, h, 4)` may be
+missing; a bone whose clips aren't understood keeps its children's
+parents unknown (they're placed from the root), and ue-probe shows the
+bytes there. (Reading the bones only by walking the tree lost every bone
+after one not understood, and with them whole characters.)
 
 A rotation key's 6 bytes are a quaternion: x, y and z packed as 11, 11
 and 10 bits (0 to the top of each standing for -1 to 1, as packed
