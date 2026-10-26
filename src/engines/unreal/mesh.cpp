@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <optional>
 
 namespace reluva::unreal {
@@ -629,6 +630,154 @@ std::vector<std::string> describeMeshLayout(const Package& package, int index) {
                       t.tris.size());
         out.push_back(line);
     }
+    return out;
+}
+
+std::vector<std::string> describeBones(const Package& package, int index) {
+    std::vector<std::string> out;
+    std::vector<uint8_t> data;
+    if (package.readExport(index, data))
+        return out;
+    const size_t base = size_t(package.exports()[size_t(index)].serialOffset), end = base + data.size();
+    size_t start = base;
+    {
+        Reader r(data, base);
+        PropertyList props;
+        if (beginObject(package, index, r, props))
+            return out;
+        start = r.pos();
+    }
+    auto u32At = [&](size_t at) {
+        const uint8_t* p = data.data() + (at - base);
+        return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
+    };
+    auto f32At = [&](size_t at) {
+        const uint32_t bits = u32At(at);
+        float f;
+        std::memcpy(&f, &bits, 4);
+        return f;
+    };
+    auto header = [&](size_t at, uint32_t& n, uint32_t& flags) {
+        if (at + 12 > end)
+            return false;
+        n = u32At(at);
+        flags = u32At(at + 8);
+        return u32At(at + 4) == n && n < 100000;
+    };
+    // A name: u16 length and that many printable characters.
+    auto nameAt = [&](size_t at, std::string& name) {
+        if (at + 2 > end)
+            return false;
+        const size_t len = size_t(data[at - base]) | size_t(data[at - base + 1]) << 8;
+        if (len == 0 || len > 64 || at + 2 + len > end)
+            return false;
+        name.assign(reinterpret_cast<const char*>(data.data() + (at - base) + 2), len);
+        return std::all_of(name.begin(), name.end(), [](char c) { return c >= 32 && c < 127; });
+    };
+    // The first bone: a name just before an (n, n, 8) header that the
+    // vertex arrays follow.
+    size_t first = 0;
+    for (size_t at = start; at + 24 < end && !first; ++at) {
+        uint32_t n = 0, flags = 0, k = 0, kf = 0;
+        if (!header(at, n, flags) || flags != 8 || n == 0 || n > 64)
+            continue;
+        if (!header(at + 12 + 4 * size_t(n), k, kf) || kf != 128)
+            continue;
+        for (size_t len = 1; len <= 64 && len + 2 <= at - start; ++len) {
+            std::string name;
+            if (nameAt(at - 2 - len, name) && name.size() == len) {
+                first = at - 2 - len;
+                break;
+            }
+        }
+    }
+    if (!first)
+        return out;
+    char line[256];
+    int bones = 0, shownKeys = 0;
+    // One bone and its children, depth first; returns where it ends, 0 if
+    // it doesn't hold together.
+    std::function<size_t(size_t, int)> bone = [&](size_t at, int depth) -> size_t {
+        std::string name;
+        if (!nameAt(at, name))
+            return 0;
+        size_t p = at + 2 + name.size();
+        uint32_t n = 0, flags = 0;
+        if (!header(p, n, flags) || flags != 8)
+            return 0;
+        p += 12 + 4 * size_t(n);
+        uint32_t k = 0;
+        for (int a = 0; a < 3; ++a) {
+            uint32_t ka = 0;
+            if (!header(p, ka, flags) || flags != 128 || (a && ka != k))
+                return 0;
+            k = ka;
+            p += 12 + size_t(k) * (a == 0 ? 12 : 4);
+        }
+        if (p + 104 > end)
+            return 0;
+        const size_t place = p + 52;
+        p += 100;
+        const uint32_t kind = u32At(p);
+        p += 4;
+        uint32_t clips = 0, clipFlags = 0;
+        if (!header(p, clips, clipFlags))
+            return 0;
+        p += 12;
+        std::snprintf(line, sizeof line, "%*s%s: %u vertices, origin (%g %g %g), kind %u, %u clips:", depth * 2, "",
+                      name.c_str(), k, double(f32At(place + 36)), double(f32At(place + 40)), double(f32At(place + 44)),
+                      kind, clips);
+        out.push_back(line);
+        std::string keys;
+        for (uint32_t c = 0; c < clips; ++c) {
+            uint32_t np = 0, nr = 0, fp = 0, fr = 0;
+            if (!header(p, np, fp) || p + 12 + 16 * size_t(np) > end)
+                return 0;
+            const size_t pos = p + 12;
+            p = pos + 16 * size_t(np);
+            if (!header(p, nr, fr) || p + 12 + 10 * size_t(nr) + 8 > end)
+                return 0;
+            const size_t rot = p + 12;
+            p = rot + 10 * size_t(nr) + 8;
+            if (c < 6) {
+                std::snprintf(line, sizeof line, " %u/%u", np, nr);
+                keys += line;
+                if (np)
+                    keys += "(to " + std::to_string(f32At(pos + 16 * size_t(np - 1))).substr(0, 5) + "s)";
+            }
+            // The first clips with several rotation keys: their bytes, for
+            // working out the encoding.
+            if (nr >= 3 && shownKeys < 3) {
+                ++shownKeys;
+                out.push_back(std::string(size_t(depth) * 2 + 4, ' ') + "clip " + std::to_string(c) +
+                              " rotation keys (time: bytes):");
+                for (uint32_t j = 0; j < nr && j < 24; ++j) {
+                    const size_t e = rot + 10 * size_t(j);
+                    int w = std::snprintf(line, sizeof line, "%*s%.4f:", depth * 2 + 6, "", double(f32At(e)));
+                    for (size_t b = 4; b < 10; ++b)
+                        w += std::snprintf(line + w, sizeof line - size_t(w), " %02x", data[e + b - base]);
+                    out.push_back(line);
+                }
+            }
+        }
+        out.push_back(std::string(size_t(depth) * 2 + 2, ' ') + "keys (position/rotation) of the first clips:" + keys);
+        ++bones;
+        uint32_t children = 0, childFlags = 0;
+        if (!header(p, children, childFlags) || childFlags != 4)
+            return p; // the last bone (or something else follows)
+        p += 12;
+        for (uint32_t ch = 0; ch < children; ++ch) {
+            const size_t next = bone(p, depth + 1);
+            if (!next)
+                return 0;
+            p = next;
+        }
+        return p;
+    };
+    out.push_back("Bones (offsets from the properties' end: first at +" + std::to_string(first - start) + "):");
+    const size_t stop = bone(first, 1);
+    out.push_back(std::to_string(bones) + " bones read" +
+                  (stop ? ", ending at +" + std::to_string(stop - start) : std::string(", then something not understood")));
     return out;
 }
 

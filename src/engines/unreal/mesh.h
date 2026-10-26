@@ -79,4 +79,9 @@ bool isMeshClass(std::string_view className);
 // every place the standard tail could start and hold together.
 std::vector<std::string> describeMeshLayout(const Package& package, int exportIndex);
 
+// For a mesh built on a skeleton: its bones as a tree, each with its
+// vertices, placement and animation clips (key counts, times, and the
+// first rotation keys' bytes, their encoding not yet worked out).
+std::vector<std::string> describeBones(const Package& package, int exportIndex);
+
 } // namespace reluva::unreal

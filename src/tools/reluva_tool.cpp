@@ -4592,8 +4592,11 @@ int cmdUeProbe(int argc, char** argv) {
                         m.animFrames);
         if (!err && m.bones)
             std::printf("  posed from %d bones (their reference pose, for all frames)\n", m.bones);
-        if (!range)
+        if (!range && !(!err && m.bones))
             for (const std::string& l : describeMeshLayout(pkg, index))
+                std::printf("%s\n", l.c_str());
+        if (!range)
+            for (const std::string& l : describeBones(pkg, index))
                 std::printf("%s\n", l.c_str());
     }
 

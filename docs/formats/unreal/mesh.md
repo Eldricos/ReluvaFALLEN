@@ -114,7 +114,12 @@ before them the mesh's name and its textures' file names:
 | 12 floats | a 4x3 offset (identity so far) |
 | i32 | 7 |
 | 12 floats | the bone's 4x3 placement: rows X, Y, Z, then the origin |
-| i32, then keys | the bone's animation (`(m, m, 1)`, `(1, 1, 32)` records...), not read yet |
+| i32 | 7 for root, 4 for the others so far |
+| `(c, c, f)` | c clips: as many as the mesh has animations, it seems (GrigSentryDrone 30 of 30) |
+| per clip: `(n, n, f)` and n x (time, x, y, z) floats | position keys, times in seconds |
+| per clip: `(m, m, f)` and m x (float time, 6 bytes) | rotation keys, their 6 bytes' encoding not worked out yet |
+| per clip: 8 bytes | (0, 0), (0, 1), (1, 1) seen |
+| `(h, h, 4)` | h children, whose records follow, depth first (root: 1, the pelvis; the pelvis: 3) |
 
 A vertex is the weighted sum of `p * offset * placement` (row vectors) over
 its bones, in the same units as the packed vertices after Scale and Origin.
