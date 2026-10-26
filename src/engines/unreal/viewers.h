@@ -244,7 +244,12 @@ private:
         MeshLight light;
         int anim = -1; // into the mesh's animations
         float startFraction = 0;
+        std::string label; // the actor's and its mesh's names
+        gfx::Vec3 at{};    // where it stands, the renderer's axes
+        bool skeletal = false; // its mesh is posed from bones or keyframed
     };
+    void jumpToMeshActor(bool skeletalOnly);
+    int jump_ = -1; // the mesh actor last jumped to (G / H)
     std::vector<Mesh> meshes_;
     std::vector<GpuMesh> gpuMeshes_;
     std::vector<MeshDraw> meshActors_;

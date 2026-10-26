@@ -119,6 +119,7 @@ void MapViewer::unload() {
     gpuMeshes_.clear();
     meshes_.clear();
     meshActors_.clear();
+    jump_ = -1;
     sky_.reset();
     for (gfx::TextureId t : textures_)
         renderer_->destroyTexture(t);
@@ -387,6 +388,9 @@ void MapViewer::load(int index) {
         const Mesh& mesh = meshes_[size_t(it->second)];
         MeshDraw d;
         d.mesh = size_t(it->second);
+        d.label = a.name + " (" + a.mesh.package->path(a.mesh.exportIndex + 1) + ")";
+        d.at = toWorld(a.location);
+        d.skeletal = mesh.bones > 0 || mesh.keyFrames > 0;
         d.placement = meshPlacement(a.location, a.rotation, a.drawScale, a.prePivot);
         for (size_t k = 0; k < std::max<size_t>(mesh.textures.size(), 8); ++k) {
             ObjectRef tex = k < a.multiSkins.size() ? a.multiSkins[k] : ObjectRef{};
@@ -536,6 +540,8 @@ void MapViewer::handleEvent(const Event& ev) {
             showSky_ = !showSky_;
         else if (ev.key == 'n')
             animate_ = !animate_;
+        else if (ev.key == 'g' || ev.key == 'h')
+            jumpToMeshActor(ev.key == 'h');
         else if (ev.key == 'm' || ev.key == 'y') {
             if (ev.key == 'm')
                 ctx_.meshTurn = MeshTurn((int(ctx_.meshTurn) + 1) % 3);
@@ -648,6 +654,25 @@ void MapViewer::update(uint64_t nowMs) {
     renderer_->endFrame(&overlay_);
 }
 
+// Puts the camera before the next placed mesh (or the next whose mesh is
+// posed from bones or keyframed), looking at it along X.
+void MapViewer::jumpToMeshActor(bool skeletalOnly) {
+    const int n = int(meshActors_.size());
+    for (int step = 1; step <= n; ++step) {
+        const int i = (jump_ + step) % n;
+        const MeshDraw& d = meshActors_[size_t(i)];
+        if (skeletalOnly && !d.skeletal)
+            continue;
+        jump_ = i;
+        const GpuMesh& g = gpuMeshes_[d.mesh];
+        const float back = std::max(120.0f, g.radius * 3);
+        pos_ = {d.at[0] - back, d.at[1], d.at[2] + back * 0.25f};
+        yaw_ = 0;
+        pitch_ = -0.24f;
+        return;
+    }
+}
+
 gfx::Mat4 MapViewer::moverTransform(const MoverDraw& d) const {
     const Mover& m = d.mover;
     // Where it is between its two keyframes.
@@ -744,6 +769,12 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
                   pos_[0], -pos_[1], pos_[2], fps_, !hasLightmaps_ ? "none" : lightmaps_ ? "on" : "off", lightScale_,
                   displayGamma_);
     lines.push_back(where);
+    if (jump_ >= 0 && size_t(jump_) < meshActors_.size()) {
+        const MeshDraw& d = meshActors_[size_t(jump_)];
+        std::snprintf(where, sizeof where, "mesh actor %d of %zu: %s, at %.0f %.0f %.0f (G next, H next posed from bones)",
+                      jump_ + 1, meshActors_.size(), d.label.c_str(), d.at[0], -d.at[1], d.at[2]);
+        lines.push_back(where);
+    }
     const int lh = font::kLineHeight;
     size_t widest = 0;
     for (const std::string& l : lines)

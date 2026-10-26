@@ -307,92 +307,228 @@ std::optional<std::array<Vec3f, 3>> importAxes(const std::vector<uint8_t>& data,
 }
 
 // Meshes built on a skeleton (The Fallen's characters) keep no packed
-// vertices: the block has a record per bone instead (see mesh.md):
-//   (n, n, 8) and n i32s; (k, k, 128) and k float xyz, the bone's
-//   vertices in its own space; (k, k, 128) and k float weights; (k, k,
-//   128) and k i32s, which of the frame's vertices each is; 12 floats, a
-//   4x3 offset; an i32; 12 floats, the bone's 4x3 placement (rows: X, Y,
-//   Z axes, then the origin); then its animation keys, not read yet.
-// A vertex is the weighted sum of where its bones put it (p * offset *
-// placement, as row vectors: KiraCellLight's one bone, "root", turns its
-// float vertices into exactly its packed ones so). That pose, by Scale
-// and Origin back into packed units, for every frame. Returns the bones.
-int poseFromBones(const std::vector<uint8_t>& data, size_t base, size_t from, size_t to, const MeshTail& t,
-                  std::vector<Vec3f>& out) {
-    auto u32At = [&](size_t at) {
+// vertices: the block has a record per bone instead, a tree written depth
+// first (see mesh.md):
+//   u16 length and the bone's name; (n, n, 8) and n i32s;
+//   (k, k, 128) and k float xyz, the bone's vertices in its own space;
+//   (k, k, 128) and k float weights; (k, k, 128) and k i32s, which of the
+//   frame's vertices each is; 12 floats, a 4x3 offset; an i32; 12 floats,
+//   the bone's 4x3 placement in its parent's space (rows: X, Y, Z axes,
+//   then the origin); an i32; (c, c, f) and c clips, each (n, n, f) and n
+//   position keys (time, xyz), (m, m, f) and m rotation keys (time, 6
+//   bytes), and 8 bytes; then (h, h, 4) and its h children's records.
+struct BoneRecord {
+    std::string name;
+    int parent = -1;
+    uint32_t vertices = 0;
+    size_t positions = 0, weights = 0, indices = 0; // file offsets of the arrays
+    std::array<float, 12> offset{}, placement{};
+    uint32_t kind = 0, clips = 0;
+    size_t clipsAt = 0; // the first clip
+    size_t end = 0;     // past its own fields (before its children)
+};
+
+struct BoneReader {
+    const std::vector<uint8_t>& data;
+    size_t base, from, to;
+    size_t failedAt = 0; // where a record didn't hold together
+
+    uint32_t u32(size_t at) const {
         const uint8_t* p = data.data() + (at - base);
         return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
-    };
-    auto f32At = [&](size_t at) {
-        const uint32_t bits = u32At(at);
+    }
+    float f32(size_t at) const {
+        const uint32_t bits = u32(at);
         float f;
         std::memcpy(&f, &bits, 4);
         return f;
-    };
-    auto header = [&](size_t at, uint32_t flags, uint32_t& n) {
-        if (at + 12 > to)
+    }
+    bool header(size_t at, uint32_t& n, uint32_t& flags) const {
+        if (at < from || at + 12 > to)
             return false;
-        n = u32At(at);
-        return u32At(at + 4) == n && u32At(at + 8) == flags;
-    };
+        n = u32(at);
+        flags = u32(at + 8);
+        return u32(at + 4) == n && n < 1000000;
+    }
+    bool name(size_t at, std::string& out) const {
+        if (at < from || at + 2 > to)
+            return false;
+        const size_t len = size_t(data[at - base]) | size_t(data[at - base + 1]) << 8;
+        if (len == 0 || len > 64 || at + 2 + len > to)
+            return false;
+        out.assign(reinterpret_cast<const char*>(data.data() + (at - base) + 2), len);
+        return std::all_of(out.begin(), out.end(), [](char c) { return c >= 32 && c < 127; });
+    }
+
+    // The first bone from `start`: a name just before an (n, n, 8) header
+    // that the vertex arrays follow. 0 if there's none.
+    size_t first(size_t start = 0) const {
+        for (size_t at = std::max(start, from); at + 24 < to; ++at) {
+            uint32_t n = 0, flags = 0, k = 0, kf = 0;
+            if (!header(at, n, flags) || flags != 8 || n == 0 || n > 64)
+                continue;
+            if (!header(at + 12 + 4 * size_t(n), k, kf) || kf != 128)
+                continue;
+            for (size_t len = 1; len <= 64 && at >= std::max(start, from) + len + 2; ++len) {
+                std::string s;
+                if (name(at - 2 - len, s) && s.size() == len)
+                    return at - 2 - len;
+            }
+        }
+        return 0;
+    }
+
+    // Every bone: the tree from the first, and where a record in it isn't
+    // understood, the trees found after it (their parents lost). Returns
+    // whether the first tree read whole.
+    bool all(std::vector<BoneRecord>& out) {
+        size_t at = first();
+        bool whole = true;
+        size_t firstFailure = 0;
+        while (at) {
+            const size_t end = bone(at, -1, out);
+            if (!end) {
+                whole = false;
+                if (!firstFailure)
+                    firstFailure = failedAt;
+            }
+            at = first(end ? end : failedAt + 1);
+        }
+        if (firstFailure)
+            failedAt = firstFailure;
+        return whole;
+    }
+
+    // A bone and its children, depth first, into `out`; where they end,
+    // or 0 (and failedAt) if they don't hold together.
+    size_t bone(size_t at, int parent, std::vector<BoneRecord>& out) {
+        BoneRecord b;
+        b.parent = parent;
+        uint32_t n = 0, flags = 0;
+        if (out.size() > 4096 || !name(at, b.name)) {
+            failedAt = at;
+            return 0;
+        }
+        size_t p = at + 2 + b.name.size();
+        if (!header(p, n, flags) || flags != 8) {
+            failedAt = at;
+            return 0;
+        }
+        p += 12 + 4 * size_t(n);
+        size_t* arrays[3] = {&b.positions, &b.weights, &b.indices};
+        for (int a = 0; a < 3; ++a) {
+            uint32_t k = 0;
+            if (!header(p, k, flags) || flags != 128 || (a && k != b.vertices)) {
+                failedAt = at;
+                return 0;
+            }
+            b.vertices = k;
+            *arrays[a] = p + 12;
+            p += 12 + size_t(k) * (a == 0 ? 12 : 4);
+        }
+        if (p + 104 + 12 > to) {
+            failedAt = at;
+            return 0;
+        }
+        for (size_t c = 0; c < 12; ++c) {
+            b.offset[c] = f32(p + 4 * c);
+            b.placement[c] = f32(p + 52 + 4 * c);
+        }
+        p += 100;
+        b.kind = u32(p);
+        p += 4;
+        if (!header(p, b.clips, flags)) {
+            failedAt = at;
+            return 0;
+        }
+        p += 12;
+        b.clipsAt = p;
+        for (uint32_t c = 0; c < b.clips; ++c) {
+            uint32_t np = 0, nr = 0;
+            if (!header(p, np, flags) || p + 12 + 16 * size_t(np) > to) {
+                failedAt = at;
+                return 0;
+            }
+            p += 12 + 16 * size_t(np);
+            if (!header(p, nr, flags) || p + 12 + 10 * size_t(nr) + 8 > to) {
+                failedAt = at;
+                return 0;
+            }
+            p += 12 + 10 * size_t(nr) + 8;
+        }
+        b.end = p;
+        const int self = int(out.size());
+        out.push_back(b);
+        uint32_t children = 0;
+        if (!header(p, children, flags) || (children && flags != 4))
+            return p; // no children (what follows is something else)
+        p += 12;
+        for (uint32_t ch = 0; ch < children; ++ch)
+            if ((p = bone(p, self, out)) == 0)
+                return 0;
+        return p;
+    }
+};
+
+// 4x3 matrices as row vectors use them: p * m is p's rows X, Y, Z summed
+// and the origin added.
+using Mat43 = std::array<float, 12>;
+Vec3f times(const Mat43& m, const Vec3f& v) {
+    return {v[0] * m[0] + v[1] * m[3] + v[2] * m[6] + m[9], v[0] * m[1] + v[1] * m[4] + v[2] * m[7] + m[10],
+            v[0] * m[2] + v[1] * m[5] + v[2] * m[8] + m[11]};
+}
+// a then b.
+Mat43 then(const Mat43& a, const Mat43& b) {
+    Mat43 out{};
+    for (size_t row = 0; row < 4; ++row)
+        for (size_t c = 0; c < 3; ++c) {
+            float v = row == 3 ? b[9 + c] : 0;
+            for (size_t k = 0; k < 3; ++k)
+                v += a[row * 3 + k] * b[k * 3 + c];
+            out[row * 3 + c] = v;
+        }
+    return out;
+}
+
+// A vertex is the weighted sum of where its bones put it: p * offset *
+// the bone's placement * its parents' placements, up to the root (as
+// row vectors; KiraCellLight's one bone, "root", turns its float vertices
+// into exactly its packed ones so). That pose, by Scale and Origin back
+// into packed units, for every frame. Returns the bones, 0 if the block
+// isn't a skeleton.
+int poseFromBones(const std::vector<uint8_t>& data, size_t base, size_t from, size_t to, const MeshTail& t,
+                  std::vector<Vec3f>& out) {
+    BoneReader r{data, base, from, to};
+    std::vector<BoneRecord> bones;
+    r.all(bones);
+    if (bones.empty())
+        return 0;
     const auto frame = size_t(t.frameVerts);
     std::vector<Vec3f> sum(frame, Vec3f{});
     std::vector<float> weight(frame, 0);
-    int bones = 0;
-    for (size_t at = from; at + 12 <= to; ++at) {
-        uint32_t n = 0, k = 0, k2 = 0, k3 = 0;
-        if (!header(at, 8, n) || n == 0 || n > 64)
-            continue;
-        size_t p = at + 12 + 4 * size_t(n);
-        if (!header(p, 128, k) || k > frame)
-            continue;
-        const size_t positions = p + 12;
-        p = positions + 12 * size_t(k);
-        if (!header(p, 128, k2) || k2 != k)
-            continue;
-        const size_t weights = p + 12;
-        p = weights + 4 * size_t(k);
-        if (!header(p, 128, k3) || k3 != k)
-            continue;
-        const size_t indices = p + 12;
-        p = indices + 4 * size_t(k);
-        if (p + 100 > to)
-            continue;
-        float offset[12], place[12];
-        bool ok = true;
-        for (size_t c = 0; c < 12; ++c) {
-            offset[c] = f32At(p + 4 * c);
-            place[c] = f32At(p + 52 + 4 * c);
-            ok = ok && sane(offset[c]) && sane(place[c]);
-        }
-        for (uint32_t j = 0; j < k && ok; ++j)
-            ok = u32At(indices + 4 * size_t(j)) < frame;
-        if (!ok)
-            continue;
-        auto times = [](const float* m, const Vec3f& v) {
-            return Vec3f{v[0] * m[0] + v[1] * m[3] + v[2] * m[6] + m[9], v[0] * m[1] + v[1] * m[4] + v[2] * m[7] + m[10],
-                         v[0] * m[2] + v[1] * m[5] + v[2] * m[8] + m[11]};
-        };
-        for (uint32_t j = 0; j < k; ++j) {
-            const Vec3f local{f32At(positions + 12 * size_t(j)), f32At(positions + 12 * size_t(j) + 4),
-                              f32At(positions + 12 * size_t(j) + 8)};
-            const float w = f32At(weights + 4 * size_t(j));
-            if (!sane(w) || !sane(local[0]) || !sane(local[1]) || !sane(local[2]))
+    std::vector<Mat43> world(bones.size());
+    for (size_t i = 0; i < bones.size(); ++i) {
+        const BoneRecord& b = bones[i];
+        world[i] = b.parent >= 0 ? then(b.placement, world[size_t(b.parent)]) : b.placement;
+        const Mat43 m = then(b.offset, world[i]);
+        for (uint32_t j = 0; j < b.vertices; ++j) {
+            const size_t v = r.u32(b.indices + 4 * size_t(j));
+            const float w = r.f32(b.weights + 4 * size_t(j));
+            const Vec3f local{r.f32(b.positions + 12 * size_t(j)), r.f32(b.positions + 12 * size_t(j) + 4),
+                              r.f32(b.positions + 12 * size_t(j) + 8)};
+            if (v >= frame || !sane(w) || !sane(local[0]) || !sane(local[1]) || !sane(local[2]))
                 continue;
-            const Vec3f placed = times(place, times(offset, local));
-            const size_t v = u32At(indices + 4 * size_t(j));
+            const Vec3f placed = times(m, local);
             for (size_t a = 0; a < 3; ++a)
                 sum[v][a] += w * placed[a];
             weight[v] += w;
         }
-        ++bones;
-        at = p + 99;
     }
-    // Most vertices have to be placed, or this isn't a skeleton.
+    // Most vertices have to be placed, or this isn't the mesh's skeleton.
     size_t placed = 0;
     for (float w : weight)
         placed += w > 0;
-    if (bones == 0 || placed * 10 < frame * 9)
+    if (placed * 10 < frame * 9)
         return 0;
     out.assign(frame * size_t(t.animFrames), Vec3f{});
     for (size_t v = 0; v < frame; ++v)
@@ -400,7 +536,18 @@ int poseFromBones(const std::vector<uint8_t>& data, size_t base, size_t from, si
             out[v][a] = (weight[v] > 0 ? sum[v][a] / weight[v] : 0) / t.scale[a] + t.origin[a];
     for (size_t f = 1; f < size_t(t.animFrames); ++f)
         std::copy(out.begin(), out.begin() + std::ptrdiff_t(frame), out.begin() + std::ptrdiff_t(f * frame));
-    return bones;
+    return int(bones.size());
+}
+
+// A rotation key's 6 bytes: x, y and z as 11, 11 and 10 bits (0 to the
+// top of each standing for -1 to 1, as packed vertices' are), then w - 1
+// as a signed 16-bit fraction of 32767. Checked: x^2+y^2+z^2+w^2 comes to
+// 1 on every key looked at, and a bone's keys turn it smoothly.
+std::array<float, 4> rotationKey(const uint8_t* p) {
+    const uint32_t xyz = uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
+    const auto w = int16_t(uint16_t(p[4] | p[5] << 8));
+    return {float(xyz & 0x7ff) / 2047 * 2 - 1, float((xyz >> 11) & 0x7ff) / 2047 * 2 - 1,
+            float(xyz >> 22) / 1023 * 2 - 1, 1 + float(w) / 32767};
 }
 
 // The turn most of The Fallen's imported meshes' float copies show
@@ -638,7 +785,7 @@ std::vector<std::string> describeBones(const Package& package, int index) {
     std::vector<uint8_t> data;
     if (package.readExport(index, data))
         return out;
-    const size_t base = size_t(package.exports()[size_t(index)].serialOffset), end = base + data.size();
+    const size_t base = size_t(package.exports()[size_t(index)].serialOffset);
     size_t start = base;
     {
         Reader r(data, base);
@@ -647,137 +794,62 @@ std::vector<std::string> describeBones(const Package& package, int index) {
             return out;
         start = r.pos();
     }
-    auto u32At = [&](size_t at) {
-        const uint8_t* p = data.data() + (at - base);
-        return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
-    };
-    auto f32At = [&](size_t at) {
-        const uint32_t bits = u32At(at);
-        float f;
-        std::memcpy(&f, &bits, 4);
-        return f;
-    };
-    auto header = [&](size_t at, uint32_t& n, uint32_t& flags) {
-        if (at + 12 > end)
-            return false;
-        n = u32At(at);
-        flags = u32At(at + 8);
-        return u32At(at + 4) == n && n < 100000;
-    };
-    // A name: u16 length and that many printable characters.
-    auto nameAt = [&](size_t at, std::string& name) {
-        if (at + 2 > end)
-            return false;
-        const size_t len = size_t(data[at - base]) | size_t(data[at - base + 1]) << 8;
-        if (len == 0 || len > 64 || at + 2 + len > end)
-            return false;
-        name.assign(reinterpret_cast<const char*>(data.data() + (at - base) + 2), len);
-        return std::all_of(name.begin(), name.end(), [](char c) { return c >= 32 && c < 127; });
-    };
-    // The first bone: a name just before an (n, n, 8) header that the
-    // vertex arrays follow.
-    size_t first = 0;
-    for (size_t at = start; at + 24 < end && !first; ++at) {
-        uint32_t n = 0, flags = 0, k = 0, kf = 0;
-        if (!header(at, n, flags) || flags != 8 || n == 0 || n > 64)
-            continue;
-        if (!header(at + 12 + 4 * size_t(n), k, kf) || kf != 128)
-            continue;
-        for (size_t len = 1; len <= 64 && len + 2 <= at - start; ++len) {
-            std::string name;
-            if (nameAt(at - 2 - len, name) && name.size() == len) {
-                first = at - 2 - len;
-                break;
-            }
-        }
-    }
+    BoneReader r{data, base, start, base + data.size()};
+    const size_t first = r.first();
     if (!first)
         return out;
+    std::vector<BoneRecord> bones;
+    const bool whole = r.all(bones);
+    out.push_back("Bones (offsets from the properties' end; the first at +" + std::to_string(first - start) + "):");
+    std::vector<int> depth(bones.size(), 0);
     char line[256];
-    int bones = 0, shownKeys = 0;
-    // One bone and its children, depth first; returns where it ends, 0 if
-    // it doesn't hold together.
-    std::function<size_t(size_t, int)> bone = [&](size_t at, int depth) -> size_t {
-        std::string name;
-        if (!nameAt(at, name))
-            return 0;
-        size_t p = at + 2 + name.size();
-        uint32_t n = 0, flags = 0;
-        if (!header(p, n, flags) || flags != 8)
-            return 0;
-        p += 12 + 4 * size_t(n);
-        uint32_t k = 0;
-        for (int a = 0; a < 3; ++a) {
-            uint32_t ka = 0;
-            if (!header(p, ka, flags) || flags != 128 || (a && ka != k))
-                return 0;
-            k = ka;
-            p += 12 + size_t(k) * (a == 0 ? 12 : 4);
-        }
-        if (p + 104 > end)
-            return 0;
-        const size_t place = p + 52;
-        p += 100;
-        const uint32_t kind = u32At(p);
-        p += 4;
-        uint32_t clips = 0, clipFlags = 0;
-        if (!header(p, clips, clipFlags))
-            return 0;
-        p += 12;
-        std::snprintf(line, sizeof line, "%*s%s: %u vertices, origin (%g %g %g), kind %u, %u clips:", depth * 2, "",
-                      name.c_str(), k, double(f32At(place + 36)), double(f32At(place + 40)), double(f32At(place + 44)),
-                      kind, clips);
+    int shown = 0;
+    for (size_t i = 0; i < bones.size(); ++i) {
+        const BoneRecord& b = bones[i];
+        depth[i] = b.parent >= 0 ? depth[size_t(b.parent)] + 1 : 1;
+        const int d = depth[i] * 2;
+        std::snprintf(line, sizeof line, "%*s%s: %u vertices, origin (%g %g %g), kind %u, %u clips", d, "",
+                      b.name.c_str(), b.vertices, double(b.placement[9]), double(b.placement[10]),
+                      double(b.placement[11]), b.kind, b.clips);
         out.push_back(line);
         std::string keys;
-        for (uint32_t c = 0; c < clips; ++c) {
-            uint32_t np = 0, nr = 0, fp = 0, fr = 0;
-            if (!header(p, np, fp) || p + 12 + 16 * size_t(np) > end)
-                return 0;
+        size_t p = b.clipsAt;
+        for (uint32_t c = 0; c < b.clips; ++c) {
+            const uint32_t np = r.u32(p);
             const size_t pos = p + 12;
             p = pos + 16 * size_t(np);
-            if (!header(p, nr, fr) || p + 12 + 10 * size_t(nr) + 8 > end)
-                return 0;
+            const uint32_t nr = r.u32(p);
             const size_t rot = p + 12;
             p = rot + 10 * size_t(nr) + 8;
             if (c < 6) {
                 std::snprintf(line, sizeof line, " %u/%u", np, nr);
                 keys += line;
-                if (np)
-                    keys += "(to " + std::to_string(f32At(pos + 16 * size_t(np - 1))).substr(0, 5) + "s)";
             }
-            // The first clips with several rotation keys: their bytes, for
-            // working out the encoding.
-            if (nr >= 3 && shownKeys < 3) {
-                ++shownKeys;
-                out.push_back(std::string(size_t(depth) * 2 + 4, ' ') + "clip " + std::to_string(c) +
-                              " rotation keys (time: bytes):");
-                for (uint32_t j = 0; j < nr && j < 24; ++j) {
-                    const size_t e = rot + 10 * size_t(j);
-                    int w = std::snprintf(line, sizeof line, "%*s%.4f:", depth * 2 + 6, "", double(f32At(e)));
-                    for (size_t b = 4; b < 10; ++b)
-                        w += std::snprintf(line + w, sizeof line - size_t(w), " %02x", data[e + b - base]);
+            // A few clips' keys, decoded, for checking.
+            if (nr >= 3 && shown < 3) {
+                ++shown;
+                out.push_back(std::string(size_t(d) + 4, ' ') + "clip " + std::to_string(c) +
+                              " rotation keys (time: x y z w):");
+                for (uint32_t j = 0; j < nr && j < 12; ++j) {
+                    const auto q = rotationKey(data.data() + (rot + 10 * size_t(j) + 4 - base));
+                    std::snprintf(line, sizeof line, "%*s%.4f: %.3f %.3f %.3f %.3f", d + 6, "",
+                                  double(r.f32(rot + 10 * size_t(j))), double(q[0]), double(q[1]), double(q[2]),
+                                  double(q[3]));
                     out.push_back(line);
                 }
             }
         }
-        out.push_back(std::string(size_t(depth) * 2 + 2, ' ') + "keys (position/rotation) of the first clips:" + keys);
-        ++bones;
-        uint32_t children = 0, childFlags = 0;
-        if (!header(p, children, childFlags) || childFlags != 4)
-            return p; // the last bone (or something else follows)
-        p += 12;
-        for (uint32_t ch = 0; ch < children; ++ch) {
-            const size_t next = bone(p, depth + 1);
-            if (!next)
-                return 0;
-            p = next;
-        }
-        return p;
-    };
-    out.push_back("Bones (offsets from the properties' end: first at +" + std::to_string(first - start) + "):");
-    const size_t stop = bone(first, 1);
-    out.push_back(std::to_string(bones) + " bones read" +
-                  (stop ? ", ending at +" + std::to_string(stop - start) : std::string(", then something not understood")));
+        out.push_back(std::string(size_t(d) + 2, ' ') + "keys (position/rotation) of the first clips:" + keys);
+    }
+    if (whole) {
+        out.push_back(std::to_string(bones.size()) + " bones, all in one tree");
+    } else {
+        int w = std::snprintf(line, sizeof line, "%zu bones; at +%zu a record not understood (the bones after it have lost their parents):",
+                              bones.size(), r.failedAt - start);
+        for (size_t k = 0; k < 48 && r.failedAt + k < base + data.size(); ++k)
+            w += std::snprintf(line + w, sizeof line - size_t(w), " %02x", data[r.failedAt + k - base]);
+        out.push_back(line);
+    }
     return out;
 }
 

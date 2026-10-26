@@ -834,20 +834,35 @@ static std::vector<uint8_t> meshData(PackageWriter& w, bool lod, int32_t texture
         // vertex arrays: (count, count, 1) and the packed vertices.
         o.u32(1), o.u16(4), o.u8('n'), o.u8('a'), o.u8('m'), o.u8('e'), o.u32(3), o.f32(0.5f);
         if (importBlock == 4) {
-            // A skeleton of one bone: its vertices (the first frame's, by
-            // Scale 2), weights and indices, an offset and its placement,
-            // both identity but for the placement's origin, (0, 0, 10).
-            o.u32(1), o.u32(1), o.u32(8), o.u32(0);
-            o.u32(3), o.u32(3), o.u32(128);
-            o.vec(-6, 0, -20), o.vec(20, 0, -20), o.vec(0, 20, -20);
-            o.u32(3), o.u32(3), o.u32(128), o.f32(1), o.f32(1), o.f32(1);
-            o.u32(3), o.u32(3), o.u32(128), o.u32(0), o.u32(1), o.u32(2);
-            for (int m = 0; m < 2; ++m) {
-                o.vec(1, 0, 0), o.vec(0, 1, 0), o.vec(0, 0, 1), o.vec(0, 0, m ? 20.0f : 0.0f);
-                if (m == 0)
-                    o.u32(7);
-            }
-            o.u32(4), o.u32(1), o.u32(1), o.u32(1); // keys, not read
+            // A skeleton: "root", no vertices, placed 10 up, and its one
+            // child "b", placed 10 up from it, with the first frame's
+            // vertices (by Scale 2) 20 below it, their weights and indices.
+            auto bone = [&](const char* name, bool verts, bool child) {
+                o.u16(uint16_t(std::strlen(name)));
+                for (const char* c = name; *c; ++c)
+                    o.u8(uint8_t(*c));
+                o.u32(1), o.u32(1), o.u32(8), o.u32(0);
+                const uint32_t k = verts ? 3 : 0;
+                o.u32(k), o.u32(k), o.u32(128);
+                if (verts)
+                    o.vec(-6, 0, -20), o.vec(20, 0, -20), o.vec(0, 20, -20);
+                o.u32(k), o.u32(k), o.u32(128);
+                if (verts)
+                    o.f32(1), o.f32(1), o.f32(1);
+                o.u32(k), o.u32(k), o.u32(128);
+                if (verts)
+                    o.u32(0), o.u32(1), o.u32(2);
+                for (int m = 0; m < 2; ++m) {
+                    o.vec(1, 0, 0), o.vec(0, 1, 0), o.vec(0, 0, 1), o.vec(0, 0, m ? 10.0f : 0.0f);
+                    o.u32(m ? 4 : 7);
+                }
+                o.u32(1), o.u32(1), o.u32(1); // a clip, without keys
+                o.u32(0), o.u32(0), o.u32(32), o.u32(0), o.u32(0), o.u32(32), o.u32(0), o.u32(0);
+                if (child)
+                    o.u32(1), o.u32(1), o.u32(4);
+            };
+            bone("root", false, true);
+            bone("b", true, false);
         } else if (importBlock == 1) {
             o.u32(6), o.u32(6), o.u32(1);
             o.bytes(verts.b);
@@ -951,7 +966,7 @@ static void testImportedMeshBlock() {
         CHECK(!p.openMemory(w.build(), "Meshes"));
         Mesh m;
         const Error err = readMesh(p, 0, m);
-        CHECK(!err && m.bones == 1 && m.verts.size() == 6);
+        CHECK(!err && m.bones == 2 && m.verts.size() == 6);
         if (!err && m.verts.size() == 6)
             CHECK((m.verts[0] == Vec3f{-3, 0, 0}) && (m.verts[2] == Vec3f{0, 10, 0}) && m.verts[5] == m.verts[2] &&
                   m.importAxes && !m.importAxesGuessed);

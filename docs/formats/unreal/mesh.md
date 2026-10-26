@@ -117,12 +117,25 @@ before them the mesh's name and its textures' file names:
 | i32 | 7 for root, 4 for the others so far |
 | `(c, c, f)` | c clips: as many as the mesh has animations, it seems (GrigSentryDrone 30 of 30) |
 | per clip: `(n, n, f)` and n x (time, x, y, z) floats | position keys, times in seconds |
-| per clip: `(m, m, f)` and m x (float time, 6 bytes) | rotation keys, their 6 bytes' encoding not worked out yet |
+| per clip: `(m, m, f)` and m x (float time, 6 bytes) | rotation keys: a quaternion, below |
 | per clip: 8 bytes | (0, 0), (0, 1), (1, 1) seen |
 | `(h, h, 4)` | h children, whose records follow, depth first (root: 1, the pelvis; the pelvis: 3) |
 
-A vertex is the weighted sum of `p * offset * placement` (row vectors) over
-its bones, in the same units as the packed vertices after Scale and Origin.
+A bone's placement is in its parent's space (the origins go up a spine
+by a few units each: BajFanatic's spine 5.7 above the pelvis, its head
+1.75 above the neck), so a vertex is the weighted sum, over its bones, of
+`p * offset * placement * parent's placement * ...` up to the root (row
+vectors), in the same units as the packed vertices after Scale and Origin.
+A leaf's `(h, h, 4)` may be missing; where a record isn't understood, the
+records found after it are read as trees of their own (their parents
+lost), and ue-probe shows the bytes there.
+
+A rotation key's 6 bytes are a quaternion: x, y and z packed as 11, 11
+and 10 bits (0 to the top of each standing for -1 to 1, as packed
+vertices are), then w - 1 as a signed 16-bit fraction of 32767. On every
+key looked at (BajFanatic's pelvis and spine, GrigSentryDrone's Dummy05)
+x²+y²+z²+w² comes to 1 within the rounding, and a bone's keys turn it
+smoothly (Dummy05's clip 0 from rest out to 28 degrees and back).
 Checked on KiraCellLight, which has one bone, `root`, holding what was
 taken for a float copy: posed so, its vertices are its packed ones to
 within their rounding, and its placement is the turn that was fitted (so
