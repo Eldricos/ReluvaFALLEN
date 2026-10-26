@@ -781,7 +781,10 @@ static void testActors() {
 
 // A two-frame triangle mesh as the package's first export (its data at file
 // offset 64, which its lazy arrays' end offsets need), classic or LOD.
-static std::vector<uint8_t> meshData(PackageWriter& w, bool lod, int32_t textureRef) {
+// `importBlock`: as The Fallen stores them, the vertices not in their lazy
+// array but in a block after the textures (1: one array of all frames'
+// vertices; 2: one per frame).
+static std::vector<uint8_t> meshData(PackageWriter& w, bool lod, int32_t textureRef, int importBlock = 0) {
     const size_t base = 64;
     Bytes o;
     endProps(o, w);
@@ -806,7 +809,10 @@ static std::vector<uint8_t> meshData(PackageWriter& w, bool lod, int32_t texture
         verts.u32(packed(10, 0, z));
         verts.u32(packed(0, 10, z));
     }
-    lazy(6, verts.b);
+    if (importBlock)
+        lazy(0, {});
+    else
+        lazy(6, verts.b);
     Bytes tris;
     if (!lod) {
         tris.u16(0), tris.u16(1), tris.u16(2);
@@ -823,6 +829,22 @@ static std::vector<uint8_t> meshData(PackageWriter& w, bool lod, int32_t texture
     o.f32(0), o.f32(0), o.f32(0), o.f32(10);
     lazy(0, {}); // vertex links
     o.index(1), o.index(textureRef);
+    if (importBlock) {
+        // Some of the block's other contents (names, counts), then the
+        // vertex arrays: (count, count, 1) and the packed vertices.
+        o.u32(1), o.u16(4), o.u8('n'), o.u8('a'), o.u8('m'), o.u8('e'), o.u32(3), o.f32(0.5f);
+        if (importBlock == 1) {
+            o.u32(6), o.u32(6), o.u32(1);
+            o.bytes(verts.b);
+        } else {
+            for (int f = 0; f < 2; ++f) {
+                o.u32(3), o.u32(3), o.u32(1);
+                o.bytes(std::vector<uint8_t>(verts.b.begin() + f * 12, verts.b.begin() + f * 12 + 12));
+                o.u32(0), o.u32(64);
+            }
+        }
+        o.u32(14), o.u32(14), o.u32(256);
+    }
     o.index(0), o.index(0);
     o.i32(3), o.i32(2);
     o.u32(0), o.u32(0);
@@ -870,6 +892,38 @@ static void testMeshes() {
         const MeshAnimSeq* wave = m.findAnim("wave");
         CHECK(wave && wave->numFrames == 2 && wave->rate == 10);
     }
+}
+
+static void testImportedMeshBlock() {
+    // The Fallen's layout, both ways of keeping the vertices.
+    for (int block : {1, 2}) {
+        PackageWriter w;
+        const int32_t meshClass = w.addImport("Engine", "Class", 0, "LodMesh");
+        const int32_t texClass = w.addImport("Engine", "Class", 0, "Texture");
+        w.addExport(meshClass, 0, "Triangle", meshData(w, true, 2, block));
+        w.addExport(texClass, 0, "Skin", {});
+        Package p;
+        CHECK(!p.openMemory(w.build(), "Meshes"));
+        Mesh m;
+        const Error err = readMesh(p, 0, m);
+        CHECK(!err);
+        if (err) {
+            std::fprintf(stderr, "%s\n", err.message.c_str());
+            continue;
+        }
+        CHECK(m.importBlock > 0 && m.frameVerts == 3 && m.animFrames == 2 && m.verts.size() == 6);
+        CHECK((m.verts[0] == Vec3f{-3, 0, 0}) && (m.verts[5] == Vec3f{0, 10, 5}) && m.tris.size() == 1);
+        CHECK((m.scale == Vec3f{2, 2, 2}) && m.trailingBytes == 0 && m.findAnim("Wave"));
+    }
+    PackageWriter w;
+    const int32_t meshClass = w.addImport("Engine", "Class", 0, "Mesh");
+    w.addExport(meshClass, 0, "Triangle", meshData(w, false, 0, 1));
+    Package p;
+    CHECK(!p.openMemory(w.build(), "Meshes"));
+    // A Mesh with the block and its triangles where they usually are reads
+    // too (The Fallen's own have none there, and are refused for now).
+    Mesh m;
+    CHECK(!readMesh(p, 0, m) && m.importBlock > 0 && m.tris.size() == 1 && m.verts.size() == 6);
 }
 
 static void testClassDefaultsAndMeshActors() {
@@ -938,6 +992,7 @@ int main() {
     testStreamedSounds();
     testActors();
     testMeshes();
+    testImportedMeshBlock();
     testClassDefaultsAndMeshActors();
     testMapExtension();
     if (failures) {

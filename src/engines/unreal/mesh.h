@@ -44,6 +44,10 @@ struct Mesh {
     Vec3f scale{1, 1, 1}, origin{};
     Rotator rotOrigin;
     size_t trailingBytes = 0; // left after the last field read
+    // The Fallen's layout: how many bytes of imported-model block (holding
+    // the vertices) came between the textures and the standard fields; 0
+    // for the standard layout.
+    size_t importBlock = 0;
 
     const MeshAnimSeq* findAnim(std::string_view name) const;
 };
