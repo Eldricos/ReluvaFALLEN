@@ -58,7 +58,7 @@ const char* meshTurnName(MeshTurn turn) {
     }
 }
 
-Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn) {
+Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn, int yawQuarters) {
     out = GpuMesh{};
     // The mesh's own placement: less Origin, scaled by Scale, turned by RotOrigin.
     const std::array<Vec3f, 3> axes = rotationAxes(mesh.rotOrigin);
@@ -72,6 +72,9 @@ Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, Mesh
             auto at = [&](size_t row, size_t col) { return t ? m[col][row] : m[row][col]; };
             s = {at(0, 0) * s[0] + at(0, 1) * s[1] + at(0, 2) * s[2], at(1, 0) * s[0] + at(1, 1) * s[1] + at(1, 2) * s[2],
                  at(2, 0) * s[0] + at(2, 1) * s[1] + at(2, 2) * s[2]};
+            // A quarter turn of yaw takes X to Y: (x, y) to (-y, x).
+            for (int q = 0; q < (yawQuarters % 4 + 4) % 4; ++q)
+                s = {-s[1], s[0], s[2]};
         }
         Vec3f p{};
         for (size_t k = 0; k < 3; ++k)

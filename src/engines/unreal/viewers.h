@@ -57,6 +57,7 @@ struct ViewerContext {
     audio::Mixer* mixer = nullptr; // none if the system has no audio
     // How imported-model meshes are turned, on both 3D pages (M changes it).
     MeshTurn meshTurn = MeshTurn::Reverse;
+    int meshYawQuarters = kImportYawQuarters; // and about Z (Y changes it)
 };
 
 class Page {

@@ -40,7 +40,12 @@ enum class MeshTurn { None, FloatCopy, Reverse };
 const char* meshTurnName(MeshTurn turn);
 
 // Uploads a mesh; positions are placed by its Scale, Origin and RotOrigin.
-Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn = MeshTurn::Reverse);
+// Imported meshes are also turned about Z by `yawQuarters` quarter turns
+// (each 16384 of yaw): with only the turn above, The Fallen's face their
+// right; 3 (three quarters, i.e. a quarter turn back) faces them ahead.
+constexpr int kImportYawQuarters = 3;
+Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn = MeshTurn::Reverse,
+                 int yawQuarters = kImportYawQuarters);
 
 // Where an actor puts its mesh: Location + PrePivot, turned by Rotation,
 // scaled by DrawScale; then into the renderer's axes (Y negated).

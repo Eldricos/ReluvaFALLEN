@@ -73,6 +73,11 @@ where none fitted, even about the middles. Those have no float copy: their
 chairs did, so they're given the usual turn (KiraCellLight's) and the
 same opposite-way drawing.
 
+Turned so, they stand up but face their right (in CM05_Kira and the
+rest): imported meshes are also given three quarter turns of yaw (a
+quarter turn back), to face ahead along X. The viewers' **Y** key steps
+through the four.
+
 **Keyframed meshes.** Many animated meshes keep fewer `(FrameVerts,
 FrameVerts, 1)` vertex arrays than they have frames: ARD_AmmoCrate 2 for
 100 frames (its whole export is 8550 bytes, too small for 100), and

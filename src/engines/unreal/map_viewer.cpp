@@ -369,7 +369,7 @@ void MapViewer::load(int index) {
             GpuMesh gpu;
             Error err = readMesh(*a.mesh.package, a.mesh.exportIndex, mesh);
             if (!err)
-                err = uploadMesh(*renderer_, mesh, gpu, ctx_.meshTurn);
+                err = uploadMesh(*renderer_, mesh, gpu, ctx_.meshTurn, ctx_.meshYawQuarters);
             int at = -1;
             if (err) {
                 ++badMeshes;
@@ -480,7 +480,8 @@ void MapViewer::load(int index) {
     const auto turned = std::count_if(meshes_.begin(), meshes_.end(), [](const Mesh& m) { return bool(m.importAxes); });
     if (turned)
         info_.push_back(std::to_string(turned) + " imported meshes turned from their packed vertices: drawn " +
-                        meshTurnName(ctx_.meshTurn) + " (M changes)");
+                        meshTurnName(ctx_.meshTurn) + " (M changes), then " +
+                        std::to_string(ctx_.meshYawQuarters * 90) + " degrees of yaw (Y changes)");
     if (!firstBadMesh.empty())
         info_.push_back("First unreadable mesh: " + firstBadMesh);
     info_.push_back("Not drawn yet: sprites, lights' effects (flicker, pulse...), movers' own lighting");
@@ -535,8 +536,11 @@ void MapViewer::handleEvent(const Event& ev) {
             showSky_ = !showSky_;
         else if (ev.key == 'n')
             animate_ = !animate_;
-        else if (ev.key == 'm') {
-            ctx_.meshTurn = MeshTurn((int(ctx_.meshTurn) + 1) % 3);
+        else if (ev.key == 'm' || ev.key == 'y') {
+            if (ev.key == 'm')
+                ctx_.meshTurn = MeshTurn((int(ctx_.meshTurn) + 1) % 3);
+            else
+                ctx_.meshYawQuarters = (ctx_.meshYawQuarters + 1) % 4;
             // Kept where it is: only the meshes need uploading again, but
             // the level loads quickly enough to just load it again.
             const auto pos = pos_;

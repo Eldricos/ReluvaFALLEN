@@ -94,7 +94,7 @@ void MeshViewer::show() {
     info_.push_back(pkg->className(index + 1) + " " + name + "  " + browser_.where());
     Error err = readMesh(*pkg, index, mesh_);
     if (!err)
-        err = uploadMesh(*renderer_, mesh_, gpu_, ctx_.meshTurn);
+        err = uploadMesh(*renderer_, mesh_, gpu_, ctx_.meshTurn, ctx_.meshYawQuarters);
     if (err) {
         error_ = err.message;
         return;
@@ -122,10 +122,11 @@ void MeshViewer::show() {
     info_.push_back(line);
     if (mesh_.importAxes) {
         const auto& a = *mesh_.importAxes;
-        std::snprintf(line, sizeof line, "%s (rows %g %g %g / %g %g %g / %g %g %g); drawn %s (M changes)",
+        std::snprintf(line, sizeof line, "%s (rows %g %g %g / %g %g %g / %g %g %g); drawn %s (M), yaw %d (Y)",
                       mesh_.importAxesGuessed ? "no float copy, usual turn" : "float copy turned",
                       double(a[0][0]), double(a[0][1]), double(a[0][2]), double(a[1][0]), double(a[1][1]),
-                      double(a[1][2]), double(a[2][0]), double(a[2][1]), double(a[2][2]), meshTurnName(ctx_.meshTurn));
+                      double(a[1][2]), double(a[2][0]), double(a[2][1]), double(a[2][2]), meshTurnName(ctx_.meshTurn),
+                      ctx_.meshYawQuarters * 90);
         info_.push_back(line);
     }
     if (mesh_.keyFrames)
@@ -156,8 +157,11 @@ void MeshViewer::handleEvent(const Event& ev) {
             resetView();
         } else if (ev.key == 'i') {
             showInfo_ = !showInfo_;
-        } else if (ev.key == 'm') {
-            ctx_.meshTurn = MeshTurn((int(ctx_.meshTurn) + 1) % 3);
+        } else if (ev.key == 'm' || ev.key == 'y') {
+            if (ev.key == 'm')
+                ctx_.meshTurn = MeshTurn((int(ctx_.meshTurn) + 1) % 3);
+            else
+                ctx_.meshYawQuarters = (ctx_.meshYawQuarters + 1) % 4;
             const float yaw = yaw_, pitch = pitch_, distance = distance_;
             show();
             yaw_ = yaw;
