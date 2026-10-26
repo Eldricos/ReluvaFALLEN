@@ -261,6 +261,7 @@ private:
         float startFraction = 0;
         std::string label; // the actor's and its mesh's names
         gfx::Vec3 at{};    // where it stands, the renderer's axes
+        float drawScale = 1;
         bool skeletal = false; // its mesh is posed from bones
     };
     void jumpToMeshActor(bool skeletalOnly);

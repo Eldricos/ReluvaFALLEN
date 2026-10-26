@@ -415,6 +415,7 @@ void MapViewer::load(int index) {
         d.label = a.name + " (" + a.mesh.package->path(a.mesh.exportIndex + 1) +
                   (mesh.bones ? ", " + std::to_string(mesh.bones) + " bones" : std::string()) + ")";
         d.at = toWorld(a.location);
+        d.drawScale = a.drawScale;
         d.skeletal = mesh.bones > 0;
         d.placement = meshPlacement(a.location, a.rotation, a.drawScale, a.prePivot);
         for (size_t k = 0; k < std::max<size_t>(mesh.textures.size(), 8); ++k) {
@@ -714,8 +715,11 @@ void MapViewer::jumpToMeshActor(bool skeletalOnly) {
         if (skeletalOnly && !d.skeletal)
             continue;
         jump_ = i;
+        // Back from it by its size as placed (The Fallen's Arachnids are
+        // drawn at 0.03 of their mesh: backing off by the mesh's own size
+        // went through the walls).
         const GpuMesh& g = gpuMeshes_[d.mesh];
-        const float back = std::max(120.0f, g.radius * 3);
+        const float back = std::clamp(g.radius * std::fabs(d.drawScale) * 3, 30.0f, 400.0f);
         pos_ = {d.at[0] - back, d.at[1], d.at[2] + back * 0.25f};
         yaw_ = 0;
         pitch_ = -0.24f;
