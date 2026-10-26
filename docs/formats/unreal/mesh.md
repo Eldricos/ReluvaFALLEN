@@ -10,6 +10,35 @@ array near the start, so the change is likely early in the layout.
 `reluva-tool ue-probe <game folder> <mesh>` maps a mesh's data (where
 its lazy arrays sit, its first and last bytes) to work it out.
 
+### What The Fallen changes (worked out so far)
+
+From `ue-probe` dumps of ARD.u's ARDSecurityCameraBaseMesh and
+ARD_KiraCellLight_On (LodMeshes) and Shared.u's Female (a Mesh),
+version 73, October 2026:
+
+- **As documented**: the bounding box and sphere; the lazy vertex and
+  triangle arrays; the animation sequences (Female's 274, names, frames
+  and 30 fps rates all read); connects, the second box and sphere, vertex
+  links and textures. In a LodMesh everything from the faces to the end
+  too: KiraCellLight's faces, 24 collapse-wedge entries, 24 wedges (each
+  of vertices 0-11 twice), 3 materials (one unlit, 0x00400000), no special
+  faces, 12 model and 0 special vertices, the level-of-detail settings,
+  no remap entries, 12 old frame vertices, ending exactly at the end.
+- **Empty**: the vertex and triangle lazy arrays, in all three. The
+  vertices are kept elsewhere.
+- **Inserted** after the textures, where the per-frame bounding boxes
+  were: what looks like the model as imported. KiraCellLight's begins:
+  i32 1; a string with a 16-bit length ("covered lightbusted on"); i32 12
+  (its vertex count); f32 0.2456; i32 2 and i32 2 (its materials); i32
+  64; per material its image file and group (`CoveredLightBustedOn_01.pcx`,
+  `NOGROUP`, 16-bit lengths) and i32 triangle count (8, 6); i32 3, 3, 10;
+  some floats; i32 14 twice (its triangles); then 20-byte entries
+  starting (2, 1, 0), (5, 4, 3), (8, 7, 6), which look like triangles.
+  ARDSecurityCameraBaseMesh's is the same shape (no name, 30, one
+  material of 46 triangles). The rest of this block, presumably holding
+  the vertex positions, is still to be read from a whole dump
+  (`ue-probe ... -all`).
+
 Sources: public community documentation of the UE1 mesh formats (as for
 [package.md](package.md)). Mesh importer settings (Scale, Origin,
 RotOrigin) as UnrealEd's `#exec MESHMAP`/`MESH` documentation describes

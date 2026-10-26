@@ -96,8 +96,9 @@
 //   reluva-tool ue-info <package>                  a package's header, exports by class, imports by package
 //   reluva-tool ue-exports <package> [filter]      list exports: class, path, size, offset, flags
 //   reluva-tool ue-props <package> <export>        an export's properties, and the bytes after them
-//   reluva-tool ue-probe <package | game folder> <export>  map an export's data: where lazy arrays sit, what the
-//                                                  mesh reader makes of it, its first and last bytes
+//   reluva-tool ue-probe <package | game folder> <export> [-all]  map an export's data: where lazy arrays sit,
+//                                                  what the mesh reader makes of it, its first and last
+//                                                  bytes (-all: every byte)
 //   reluva-tool ue-extract <game folder> <package> <export>  write a texture as .tga, a sound or music
 //                                                  as the file it holds
 
@@ -4490,8 +4491,9 @@ int cmdUeProps(int argc, char** argv) {
 // starts with the file offset just past it, so it can be told anywhere),
 // what the mesh reader makes of it, and the bytes at its start and end.
 int cmdUeProbe(int argc, char** argv) {
-    if (argc != 4) {
-        std::fprintf(stderr, "usage: reluva-tool ue-probe <package | game folder> <export>\n");
+    const bool all = argc == 5 && std::strcmp(argv[4], "-all") == 0;
+    if (argc != 4 && !all) {
+        std::fprintf(stderr, "usage: reluva-tool ue-probe <package | game folder> <export> [-all]\n");
         return 2;
     }
     using namespace reluva::unreal;
@@ -4568,6 +4570,11 @@ int cmdUeProbe(int argc, char** argv) {
             std::printf("\n");
         }
     };
+    if (all) {
+        std::printf("\nEvery byte after the properties:\n");
+        dump(start, end);
+        return 0;
+    }
     std::printf("\nThe first bytes after the properties:\n");
     dump(start, std::min(end, start + 512));
     if (end > start + 512) {
@@ -4961,7 +4968,7 @@ int main(int argc, char** argv) {
                  "  reluva-tool ue-exports <package> [filter]\n"
                  "  reluva-tool ue-props <package> <export>\n"
                  "  reluva-tool ue-extract <game folder> <package name> <export>\n"
-                 "  reluva-tool ue-probe <package | game folder> <export>\n"
+                 "  reluva-tool ue-probe <package | game folder> <export> [-all]\n"
 #endif
                  "");
     return 2;
