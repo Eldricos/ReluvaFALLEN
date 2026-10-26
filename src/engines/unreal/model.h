@@ -85,11 +85,17 @@ struct Model {
     size_t trailingBytes = 0;    // left over after the last field read
     std::string lightingError;
     bool hasLighting() const { return lightingError.empty(); }
+    // Read without validating: why the BSP (nodes, surfaces, vertices)
+    // didn't hold together and was dropped.
+    std::string geometryError;
 };
 
 // Reads a model: its geometry (an error if that fails), then its zones,
-// lightmaps and lights (into lightingError if those fail).
-Error readModel(const Package& package, int exportIndex, Model& out);
+// lightmaps and lights (into lightingError if those fail). Without
+// `validate`, a BSP whose indices don't hold together is dropped (see
+// geometryError) rather than failing, for when only what follows is
+// wanted (a mover's Polys: one of The Fallen's movers has such a brush).
+Error readModel(const Package& package, int exportIndex, Model& out, bool validate = true);
 
 // The model a level is drawn from: of the package's models, the one with
 // the most nodes (brushes' own models have none). -1 if there's none.

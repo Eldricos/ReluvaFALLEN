@@ -149,7 +149,9 @@ std::vector<Mover> findMovers(const PackageSet& packages, const Package& package
             continue;
         }
         Model model;
-        if (Error err = readModel(*brush.package, brush.exportIndex, model)) {
+        // Only its Polys are drawn, so a brush with a broken BSP of its own
+        // (M07_SiskoL3A's Mover128) still does.
+        if (Error err = readModel(*brush.package, brush.exportIndex, model, false)) {
             fail(err.message);
             continue;
         }

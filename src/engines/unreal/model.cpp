@@ -121,7 +121,7 @@ void readLighting(Reader& r, Model& out) {
 
 } // namespace
 
-Error readModel(const Package& package, int index, Model& out) {
+Error readModel(const Package& package, int index, Model& out, bool validate) {
     out = Model{};
     std::vector<uint8_t> data;
     if (Error err = package.readExport(index, data))
@@ -216,23 +216,36 @@ Error readModel(const Package& package, int index, Model& out) {
 
     // Check the indices hold together, which they won't if the layout
     // above is off for this game's version.
-    const auto points = int32_t(out.points.size()), vectors = int32_t(out.vectors.size());
-    for (const BspNode& node : out.nodes) {
-        if (node.vertexCount == 0)
-            continue;
-        if (node.surf < 0 || size_t(node.surf) >= out.surfs.size() || node.vertPool < 0 ||
-            size_t(node.vertPool) + node.vertexCount > out.verts.size())
-            return Error::fail(what + ": a node's surface or vertices are out of range");
-        for (int k = 0; k < node.vertexCount; ++k) {
-            const int32_t p = out.verts[size_t(node.vertPool + k)].point;
-            if (p < 0 || p >= points)
-                return Error::fail(what + ": a vertex's point is out of range");
+    auto check = [&]() -> std::string {
+        const auto points = int32_t(out.points.size()), vectors = int32_t(out.vectors.size());
+        for (const BspNode& node : out.nodes) {
+            if (node.vertexCount == 0)
+                continue;
+            if (node.surf < 0 || size_t(node.surf) >= out.surfs.size() || node.vertPool < 0 ||
+                size_t(node.vertPool) + node.vertexCount > out.verts.size())
+                return "a node's surface or vertices are out of range";
+            for (int k = 0; k < node.vertexCount; ++k) {
+                const int32_t p = out.verts[size_t(node.vertPool + k)].point;
+                if (p < 0 || p >= points)
+                    return "a vertex's point is out of range";
+            }
         }
+        for (const BspSurf& s : out.surfs)
+            if (s.base < 0 || s.base >= points || s.normal < 0 || s.normal >= vectors || s.textureU < 0 ||
+                s.textureU >= vectors || s.textureV < 0 || s.textureV >= vectors)
+                return "a surface's vectors are out of range";
+        return {};
+    };
+    if (std::string bad = check(); !bad.empty()) {
+        if (validate)
+            return Error::fail(what + ": " + bad);
+        // Wanted for what follows (a brush's Polys): the BSP is dropped
+        // so nothing draws from it.
+        out.geometryError = bad;
+        out.nodes.clear();
+        out.surfs.clear();
+        out.verts.clear();
     }
-    for (const BspSurf& s : out.surfs)
-        if (s.base < 0 || s.base >= points || s.normal < 0 || s.normal >= vectors || s.textureU < 0 ||
-            s.textureU >= vectors || s.textureV < 0 || s.textureV >= vectors)
-            return Error::fail(what + ": a surface's vectors are out of range");
 
     r.seek(afterVerts);
     readLighting(r, out);

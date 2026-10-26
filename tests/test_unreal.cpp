@@ -483,6 +483,22 @@ static void testModel() {
     const LightmapAtlas capped = buildLightmaps(m, bright);
     if (capped.pages.size() == 1)
         CHECK(capped.pages[0].pixel(1, 1)[0] == 128 && capped.pages[0].pixel(5, 5)[0] == 16);
+    // A model whose BSP doesn't hold together: refused, or read without it.
+    {
+        PackageWriter bad = w;
+        // The node's vertex count (4) at its place in Model1's data: make
+        // it 9, past the 4 vertices.
+        std::vector<uint8_t>& d = bad.exports[3].data;
+        const size_t nodesAt = 1 + 25 + 16 + 1 + 36 + 1 + 48 + 1 + 16 + 8 + 1 + 7;
+        CHECK(d[nodesAt + 2] == 4);
+        d[nodesAt + 2] = 9;
+        Package pb;
+        CHECK(!pb.openMemory(bad.build(), "Bad"));
+        Model strict, lenient;
+        CHECK(readModel(pb, 3, strict));
+        CHECK(!readModel(pb, 3, lenient, false) && !lenient.geometryError.empty() && lenient.nodes.empty() &&
+              lenient.hasLighting() && lenient.lightMaps.size() == 1);
+    }
     // Invisible surfaces aren't drawn.
     m.surfs[0].polyFlags = polyflag::Invisible;
     CHECK(levelPolygons(m).empty());

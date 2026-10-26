@@ -1,9 +1,12 @@
 # Unreal Engine 1: movers and the sky zone
 
 Status: **implemented** (`src/engines/unreal/actors.cpp`, drawn by the
-Maps page), tested on a level built by the unit tests. **Not yet checked
-on The Fallen's maps**: `reluva-tool ue-check` reports each map's movers
-and sky zone, and any mover that doesn't read.
+Maps page). **Checked on The Fallen** (`reluva-tool ue-check`, October
+2026): 2103 movers over the 74 maps, all reading (one, M07_SiskoL3A's
+Mover128, has a brush whose own BSP doesn't hold together; its Polys are
+fine, so that BSP is skipped); 58 maps have a sky zone. In the Maps page
+the skies look right in every map, and movers sit, turn and move as in
+the original.
 
 Sources: public community documentation of the UE1 formats and of
 UnrealEd's brush, mover and zone properties (as for
@@ -44,9 +47,10 @@ R's columns, for pitch p, yaw y, roll r: forward
 `(sin r sin p cos y - cos r sin y, sin r sin p sin y + cos r cos y, -sin r cos p)`,
 up `(-(cos r sin p cos y + sin r sin y), cos y sin r - cos r sin p sin y, cos r cos p)`.
 
-A brush's Model has no BSP of its own (every array empty) but the same
-layout as a level's ([model.md](model.md)); its Polys reference is read
-from there.
+A brush's Model has the same layout as a level's ([model.md](model.md)),
+its BSP usually empty; its Polys reference is read from there. The BSP
+isn't used for movers, so one that doesn't hold together is dropped
+rather than refusing the mover.
 
 ### Polys
 
