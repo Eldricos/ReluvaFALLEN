@@ -108,8 +108,12 @@ brightness setting), not in the lighting. The Maps page now multiplies
 colours by 0.88 and raises the frame to the power 1.3 (`-`/`=` change the
 power), which gives that curve. With it matched, the lighting itself
 (falloff, brightness unit) is compared again. Rough: the two cameras
-weren't in exactly the same place, and the original's brightness setting
-for that shot isn't known.
+weren't in exactly the same place. The original's brightness setting for
+that shot was `Brightness=0.500000` (`[WinDrv.WindowsClient]` in its
+`DS9.ini`), the middle of its slider, so the 0.88 / 1.3 curve is what
+that setting gives. How other settings change it isn't known yet: a
+screenshot of the same place at another Brightness (say 1.0) would show
+it, and then the curve can follow the player's setting.
 
 ## Drawing
 
