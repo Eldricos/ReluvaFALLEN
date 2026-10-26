@@ -152,3 +152,22 @@ its BaseReference, Bomb, SuicideLunge and SuicideRun (50 frames; the other
 314 animations it lists run past those and are left out). So every frame
 is posed from the keys, interpolated (slerp for rotations), and drawn as
 ordinary vertex animation.
+
+
+**Shared animation sets.** The humanoids (Leeta, Nog, Rom, the Klingons,
+BajFanatic, Obsidian_Snow...) keep a frame or a few of their own and list
+some 270-320 animations past them (BaseRelax, BaseReady, CrchWalkF...).
+Those are in three Mesh exports in Shared.u with a skeleton (the same
+Biped bone names) and clips but no vertices: Male (274 clips, 10256
+frames end to end), MaleTwo (111, 2490) and Female (4, 69). A character's
+list is one of theirs (Leeta's is Female's, the Klingons' Male's,
+BajFanatic's MaleTwo's), and an animation in it is a clip of a set whose
+frames it is exactly: the Male-list ones on Male's timeline (BaseRelax at
+409), MaleTwo's own on MaleTwo's (its BaseRelax at 324). The viewer gives
+a character the clips its placed actors play, posing the character's own
+bones with the set's keys for the bones of the same name (rendered in
+checking: Leeta and BajFanatic standing in BaseRelax, a Klingon and
+BajFanatic in CrchWalkF). On The Fallen's levels: 277 placed characters'
+animations come from the sets, 61 are their own, and 103 (the Grigari
+drones' "BaseReady", from their class) aren't in their mesh's list at all;
+the viewer plays their idle.

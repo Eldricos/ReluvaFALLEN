@@ -146,6 +146,7 @@
 #include "engines/unreal/texture.h"
 #endif
 #include <map>
+#include <optional>
 #include <memory>
 #include <set>
 
@@ -4732,6 +4733,8 @@ int cmdUeCheck(int argc, char** argv) {
     std::map<std::string, std::pair<int, std::string>> meshTurns; // turn: how many, an example
     std::map<std::string, bool> meshReads;     // placed actors' meshes: whether they read
     std::map<std::string, int> meshBones;      // and how many bones they're posed from
+    std::map<std::string, int> animPlayed;     // "mesh anim": 0 not found, 1 its own, 2 borrowed
+    std::optional<std::vector<AnimationSet>> animationSets;
     std::map<std::string, int> unreadPlaced;   // those that don't: how many actors use them
     auto record = [&](const std::string& what, const reluva::Error& err) {
         Tally& t = tallies[what];
@@ -4783,7 +4786,12 @@ int cmdUeCheck(int argc, char** argv) {
                 if (!err && m.trailingBytes)
                     err = reluva::Error::fail(pkg->path(int32_t(i) + 1) + ": " + std::to_string(m.trailingBytes) +
                                               " bytes after the last field read");
-                record(cls == "lodmesh" ? "meshes (LodMesh)" : "meshes (Mesh)", err);
+                // The Fallen's shared animations are Meshes without vertices.
+                AnimationSet animations;
+                if (err && cls == "mesh" && !readAnimationSet(*pkg, int(i), animations))
+                    record("animation sets (skeleton and clips, no vertices)", reluva::Error::success());
+                else
+                    record(cls == "lodmesh" ? "meshes (LodMesh)" : "meshes (Mesh)", err);
                 if (!err && m.vertexBytes != 4)
                     ++tallies["meshes with 8-byte vertices"].ok;
                 // Which way imported-model meshes' float copies are turned
@@ -4874,6 +4882,36 @@ int cmdUeCheck(int argc, char** argv) {
                     if (!it->second) {
                         ++meshless;
                         ++unreadPlaced[mesh];
+                    } else if (meshBones[mesh] && !a.animSequence.empty()) {
+                        // A character's animation: its own, or one borrowed
+                        // from the shared animation sets.
+                        const std::string key = mesh + " " + a.animSequence;
+                        auto played = animPlayed.find(key);
+                        if (played == animPlayed.end()) {
+                            Mesh m;
+                            readMesh(*a.mesh.package, a.mesh.exportIndex, m);
+                            int how = m.findAnim(a.animSequence) ? 1 : 0;
+                            if (!how) {
+                                if (!animationSets)
+                                    animationSets = findAnimationSets(set);
+                                how = borrowNamedAnimation(*a.mesh.package, a.mesh.exportIndex, *animationSets,
+                                                           a.animSequence, m)
+                                          ? 2
+                                          : 0;
+                                const std::string lower = reluva::fs::toLower(a.animSequence);
+                                if (!how && std::none_of(m.otherAnims.begin(), m.otherAnims.end(), [&](const auto& s) {
+                                        return reluva::fs::toLower(s.name) == lower;
+                                    }))
+                                    how = 3; // its mesh doesn't list it at all
+                            }
+                            played = animPlayed.emplace(key, how).first;
+                        }
+                        record(played->second == 1   ? "characters' animations (their own)"
+                               : played->second == 2 ? "characters' animations (from shared sets)"
+                               : played->second == 3 ? "characters' animations (not in their mesh's list; idle shown)"
+                                                     : "characters' animations",
+                               played->second ? reluva::Error::success()
+                                              : reluva::Error::fail(name + ": " + a.name + " (" + key + ")"));
                     }
                 }
                 std::printf("    mesh actors: %d (%d with the mesh from class defaults), %d hidden, %d unreadable, "

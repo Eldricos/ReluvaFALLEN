@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -66,12 +67,50 @@ struct Mesh {
     int bones = 0;
     bool bonesAnimated = false;
     int droppedAnims = 0; // animations left out, their frames past the mesh's
+    std::vector<MeshAnimSeq> otherAnims; // those animations
 
     const MeshAnimSeq* findAnim(std::string_view name) const;
 };
 
 // Reads a Mesh or LodMesh export.
 Error readMesh(const Package& package, int exportIndex, Mesh& out);
+
+// The Fallen's shared animations: Mesh exports with a skeleton and no
+// vertices (Male, Female, MaleTwo in Shared.u), whose clips, end to end,
+// are the frames characters' animations past their own frames point into
+// (see mesh.md).
+class AnimationSet {
+public:
+    AnimationSet();
+    ~AnimationSet();
+    AnimationSet(AnimationSet&&) noexcept;
+    AnimationSet& operator=(AnimationSet&&) noexcept;
+    int frames() const; // its clips' frames together
+    // The clip whose frames a sequence's are exactly, or -1.
+    int clipFor(int32_t startFrame, int32_t numFrames) const;
+
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+};
+Error readAnimationSet(const Package& package, int exportIndex, AnimationSet& out);
+
+// Adds an animation to a mesh built on a skeleton (read from `package`'s
+// `exportIndex`): `set`'s clip `clip`, its bones' keys given to the mesh's
+// bones of the same names, as frames after the mesh's; the animation is
+// `seq` over them.
+Error borrowAnimation(const Package& package, int exportIndex, const AnimationSet& set, int clip,
+                      const MeshAnimSeq& seq, Mesh& mesh);
+
+// Every animation set in the packages' .u files (Mesh exports with a
+// skeleton, clips and no vertices).
+class PackageSet;
+std::vector<AnimationSet> findAnimationSets(const PackageSet& packages);
+
+// For a mesh built on a skeleton: borrows the animation `name` (one of
+// those its frames don't have, Mesh::otherAnims) from the set with a clip
+// for exactly its frames. Whether one did.
+bool borrowNamedAnimation(const Package& package, int exportIndex, const std::vector<AnimationSet>& sets,
+                          std::string_view name, Mesh& mesh);
 
 bool isMeshClass(std::string_view className);
 

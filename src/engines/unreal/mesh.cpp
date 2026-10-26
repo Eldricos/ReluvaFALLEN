@@ -3,6 +3,8 @@
 
 #include "engines/unreal/mesh.h"
 
+#include "engines/unreal/package_set.h"
+
 #include "common/fs.h"
 
 #include <algorithm>
@@ -632,11 +634,15 @@ struct BonePoser {
         return std::max(1, int(std::lround(last * 30)));
     }
     // Bone b's placement in its parent at time t of clip c.
-    Mat43 local(const BoneRecord& b, size_t c, float t) const {
+    Mat43 local(const BoneRecord& b, size_t c, float t) const { return localWith(b, r, b, c, t); }
+
+    // The same with another skeleton's keys for it (`keys`, read by
+    // `kr`): an animation set's (below), the bones matched by name.
+    static Mat43 localWith(const BoneRecord& b, const BoneReader& r, const BoneRecord& keys, size_t c, float t) {
         Mat43 m = b.placement;
-        if (c >= b.clipList.size())
+        if (c >= keys.clipList.size())
             return m;
-        const BoneRecord::Clip& k = b.clipList[c];
+        const BoneRecord::Clip& k = keys.clipList[c];
         if (k.nRotations) {
             size_t i = 0;
             while (i + 1 < k.nRotations && r.f32(k.rotations + 10 * (i + 1)) <= t)
@@ -675,6 +681,41 @@ struct BonePoser {
     }
 };
 
+// One frame of a skeleton's vertices into `out` (frameVerts of them, in
+// packed units by Scale and Origin), each bone placed in its parent by
+// `local(i)`. Returns how many vertices some bone placed.
+template <class Local>
+size_t poseVertices(const BoneReader& r, const std::vector<BoneRecord>& bones, size_t frame, const Vec3f& scale,
+                    const Vec3f& origin, Vec3f* out, Local&& local) {
+    std::vector<Vec3f> sum(frame, Vec3f{});
+    std::vector<float> weight(frame, 0);
+    std::vector<Mat43> world(bones.size());
+    for (size_t i = 0; i < bones.size(); ++i) {
+        const BoneRecord& b = bones[i];
+        const Mat43 m = local(i);
+        world[i] = b.parent >= 0 ? then(m, world[size_t(b.parent)]) : m;
+        for (uint32_t j = 0; j < b.vertices; ++j) {
+            const size_t v = r.u32(b.indices + 4 * size_t(j));
+            const float w = r.f32(b.weights + 4 * size_t(j));
+            const Vec3f p{r.f32(b.positions + 12 * size_t(j)), r.f32(b.positions + 12 * size_t(j) + 4),
+                          r.f32(b.positions + 12 * size_t(j) + 8)};
+            if (v >= frame || !sane(w) || !sane(p[0]) || !sane(p[1]) || !sane(p[2]))
+                continue;
+            const Vec3f placed = times(world[i], p);
+            for (size_t a = 0; a < 3; ++a)
+                sum[v][a] += w * placed[a];
+            weight[v] += w;
+        }
+    }
+    size_t placed = 0;
+    for (size_t v = 0; v < frame; ++v) {
+        placed += weight[v] > 0;
+        for (size_t a = 0; a < 3; ++a)
+            out[v][a] = (weight[v] > 0 ? sum[v][a] / weight[v] : 0) / scale[a] + origin[a];
+    }
+    return placed;
+}
+
 // A vertex is the weighted sum of where its bones put it: p * the bone's
 // placement * its parents', up to the root (as row vectors; KiraCellLight's
 // one bone, "root", turns its float vertices into exactly its packed ones
@@ -706,42 +747,15 @@ int poseFromBones(const std::vector<uint8_t>& data, size_t base, size_t from, si
     animated = clipsRead && frames.size() == size_t(t.animFrames);
     const auto frame = size_t(t.frameVerts);
     out.assign(frame * size_t(t.animFrames), Vec3f{});
-    std::vector<Vec3f> sum(frame);
-    std::vector<float> weight(frame);
-    std::vector<Mat43> world(bones.size());
     const size_t posed = animated ? frames.size() : 1;
     for (size_t f = 0; f < posed; ++f) {
-        std::fill(sum.begin(), sum.end(), Vec3f{});
-        std::fill(weight.begin(), weight.end(), 0.0f);
-        for (size_t i = 0; i < bones.size(); ++i) {
-            const BoneRecord& b = bones[i];
-            const Mat43 m = clipsRead ? poser.local(b, animated ? frames[f].first : 0, animated ? frames[f].second : 0)
-                                      : b.placement;
-            world[i] = b.parent >= 0 ? then(m, world[size_t(b.parent)]) : m;
-            for (uint32_t j = 0; j < b.vertices; ++j) {
-                const size_t v = r.u32(b.indices + 4 * size_t(j));
-                const float w = r.f32(b.weights + 4 * size_t(j));
-                const Vec3f local{r.f32(b.positions + 12 * size_t(j)), r.f32(b.positions + 12 * size_t(j) + 4),
-                                  r.f32(b.positions + 12 * size_t(j) + 8)};
-                if (v >= frame || !sane(w) || !sane(local[0]) || !sane(local[1]) || !sane(local[2]))
-                    continue;
-                const Vec3f placed = times(world[i], local);
-                for (size_t a = 0; a < 3; ++a)
-                    sum[v][a] += w * placed[a];
-                weight[v] += w;
-            }
-        }
-        if (f == 0) {
-            // Most vertices have to be placed, or this isn't the mesh's skeleton.
-            size_t placed = 0;
-            for (float w : weight)
-                placed += w > 0;
-            if (placed * 10 < frame * 9)
-                return 0;
-        }
-        for (size_t v = 0; v < frame; ++v)
-            for (size_t a = 0; a < 3; ++a)
-                out[f * frame + v][a] = (weight[v] > 0 ? sum[v][a] / weight[v] : 0) / t.scale[a] + t.origin[a];
+        const size_t placed = poseVertices(r, bones, frame, t.scale, t.origin, out.data() + f * frame, [&](size_t i) {
+            return clipsRead ? poser.local(bones[i], animated ? frames[f].first : 0, animated ? frames[f].second : 0)
+                             : bones[i].placement;
+        });
+        // Most vertices have to be placed, or this isn't the mesh's skeleton.
+        if (f == 0 && placed * 10 < frame * 9)
+            return 0;
     }
     for (size_t f = posed; f < size_t(t.animFrames); ++f)
         std::copy(out.begin(), out.begin() + std::ptrdiff_t(frame), out.begin() + std::ptrdiff_t(f * frame));
@@ -940,12 +954,171 @@ Error readMesh(const Package& package, int index, Mesh& out) {
                 return fail("a triangle's vertex is out of range");
     // Animations whose frames run past the mesh's are left out (The
     // Fallen's JadziaDax has a test one like that), not the whole mesh.
+    // The Fallen's characters list many of those: another mesh's.
+    for (const MeshAnimSeq& a : out.anims)
+        if (a.startFrame < 0 || a.numFrames < 0 || a.startFrame + a.numFrames > out.animFrames)
+            out.otherAnims.push_back(a);
     const size_t anims = out.anims.size();
     std::erase_if(out.anims, [&](const MeshAnimSeq& a) {
         return a.startFrame < 0 || a.numFrames < 0 || a.startFrame + a.numFrames > out.animFrames;
     });
     out.droppedAnims = int(anims - out.anims.size());
     return Error::success();
+}
+
+struct AnimationSet::Impl {
+    std::vector<uint8_t> data;
+    size_t base = 0, from = 0, to = 0;
+    std::vector<BoneRecord> bones;
+    std::vector<int> clipStart, clipFrames; // per clip
+    BoneReader reader() const { return BoneReader{data, base, from, to}; }
+};
+
+AnimationSet::AnimationSet() = default;
+AnimationSet::~AnimationSet() = default;
+AnimationSet::AnimationSet(AnimationSet&&) noexcept = default;
+AnimationSet& AnimationSet::operator=(AnimationSet&&) noexcept = default;
+
+int AnimationSet::frames() const {
+    return impl && !impl->clipStart.empty() ? impl->clipStart.back() + impl->clipFrames.back() : 0;
+}
+
+int AnimationSet::clipFor(int32_t startFrame, int32_t numFrames) const {
+    if (!impl)
+        return -1;
+    const auto it = std::lower_bound(impl->clipStart.begin(), impl->clipStart.end(), startFrame);
+    if (it == impl->clipStart.end() || *it != startFrame)
+        return -1;
+    const auto c = size_t(it - impl->clipStart.begin());
+    return impl->clipFrames[c] == numFrames ? int(c) : -1;
+}
+
+namespace {
+
+// An export's data after its properties, and the skeleton in it.
+Error readBones(const Package& package, int index, std::vector<uint8_t>& data, size_t& from,
+                std::vector<BoneRecord>& bones) {
+    if (Error err = package.readExport(index, data))
+        return err;
+    const size_t base = size_t(package.exports()[size_t(index)].serialOffset);
+    Reader r(data, base);
+    PropertyList props;
+    if (Error err = beginObject(package, index, r, props))
+        return err;
+    from = r.pos();
+    BoneReader br{data, base, from, base + data.size()};
+    br.all(bones);
+    if (bones.empty())
+        return Error::fail(package.path(index + 1) + ": no skeleton");
+    return Error::success();
+}
+
+} // namespace
+
+Error readAnimationSet(const Package& package, int index, AnimationSet& out) {
+    auto impl = std::make_unique<AnimationSet::Impl>();
+    if (Error err = readBones(package, index, impl->data, impl->from, impl->bones))
+        return err;
+    impl->base = size_t(package.exports()[size_t(index)].serialOffset);
+    impl->to = impl->base + impl->data.size();
+    const size_t clips = impl->bones[0].clipList.size();
+    for (const BoneRecord& b : impl->bones)
+        if (b.clipList.size() != clips)
+            return Error::fail(package.path(index + 1) + ": its bones' clips don't agree");
+    const BoneReader r = impl->reader();
+    const BonePoser poser{r, impl->bones};
+    int start = 0;
+    for (size_t c = 0; c < clips; ++c) {
+        impl->clipStart.push_back(start);
+        impl->clipFrames.push_back(poser.clipFrames(c));
+        start += impl->clipFrames.back();
+    }
+    if (clips == 0)
+        return Error::fail(package.path(index + 1) + ": no clips");
+    out.impl = std::move(impl);
+    return Error::success();
+}
+
+Error borrowAnimation(const Package& package, int index, const AnimationSet& set, int clip, const MeshAnimSeq& seq,
+                      Mesh& mesh) {
+    if (!set.impl || clip < 0 || size_t(clip) >= set.impl->clipFrames.size())
+        return Error::fail("no such clip");
+    std::vector<uint8_t> data;
+    size_t from = 0;
+    std::vector<BoneRecord> bones;
+    if (Error err = readBones(package, index, data, from, bones))
+        return err;
+    const size_t base = size_t(package.exports()[size_t(index)].serialOffset);
+    const BoneReader r{data, base, from, base + data.size()};
+    const BoneReader sr = set.impl->reader();
+    // The set's bone for each of the mesh's, by name.
+    std::vector<const BoneRecord*> keys(bones.size(), nullptr);
+    size_t matched = 0;
+    for (size_t i = 0; i < bones.size(); ++i)
+        for (const BoneRecord& sb : set.impl->bones)
+            if (sb.name == bones[i].name) {
+                keys[i] = &sb;
+                ++matched;
+                break;
+            }
+    if (matched * 2 < bones.size())
+        return Error::fail(package.path(index + 1) + ": its bones aren't the set's");
+    const auto frame = size_t(mesh.frameVerts);
+    const int n = set.impl->clipFrames[size_t(clip)];
+    const size_t first = mesh.verts.size();
+    mesh.verts.resize(first + frame * size_t(n));
+    for (int f = 0; f < n; ++f)
+        poseVertices(r, bones, frame, mesh.scale, mesh.origin, mesh.verts.data() + first + size_t(f) * frame,
+                     [&](size_t i) {
+                         return keys[i] ? BonePoser::localWith(bones[i], sr, *keys[i], size_t(clip), float(f) / 30)
+                                        : bones[i].placement;
+                     });
+    MeshAnimSeq a = seq;
+    a.startFrame = mesh.animFrames;
+    a.numFrames = n;
+    mesh.anims.push_back(a);
+    mesh.animFrames += n;
+    return Error::success();
+}
+
+std::vector<AnimationSet> findAnimationSets(const PackageSet& packages) {
+    std::vector<AnimationSet> out;
+    for (const std::string& name : packages.names(".u")) {
+        const Package* p = packages.get(name);
+        if (!p)
+            continue;
+        for (size_t i = 0; i < p->exports().size(); ++i) {
+            if (fs::toLower(p->className(int32_t(i) + 1)) != "mesh")
+                continue;
+            AnimationSet set;
+            if (readAnimationSet(*p, int(i), set))
+                continue;
+            uint32_t vertices = 0;
+            for (const BoneRecord& b : set.impl->bones)
+                vertices += b.vertices;
+            if (vertices == 0)
+                out.push_back(std::move(set));
+        }
+    }
+    return out;
+}
+
+bool borrowNamedAnimation(const Package& package, int index, const std::vector<AnimationSet>& sets,
+                          std::string_view name, Mesh& mesh) {
+    if (!mesh.bones || mesh.findAnim(name))
+        return false;
+    const std::string wanted = fs::toLower(name);
+    for (const MeshAnimSeq& seq : mesh.otherAnims) {
+        if (fs::toLower(seq.name) != wanted)
+            continue;
+        for (const AnimationSet& set : sets)
+            if (const int clip = set.clipFor(seq.startFrame, seq.numFrames); clip >= 0) {
+                const MeshAnimSeq copy = seq; // mesh.otherAnims may not survive the borrowing
+                return !borrowAnimation(package, index, set, clip, copy, mesh);
+            }
+        return false;
+    }
+    return false;
 }
 
 std::vector<std::string> describeMeshLayout(const Package& package, int index) {

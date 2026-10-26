@@ -947,6 +947,71 @@ static void testMeshes() {
     }
 }
 
+static void testAnimationSet() {
+    // A shared animation set: a Mesh with a skeleton ("root" and its child
+    // "b", no vertices) and one clip, whose only key turns "b" a quarter
+    // turn about Z. A character built on bones of the same names borrows it.
+    PackageWriter w;
+    const int32_t meshClass = w.addImport("Engine", "Class", 0, "Mesh");
+    const int32_t lodClass = w.addImport("Engine", "Class", 0, "LodMesh");
+    Bytes s;
+    endProps(s, w);
+    auto bone = [&](const char* name, bool key, bool child) {
+        s.u16(uint16_t(std::strlen(name)));
+        for (const char* c = name; *c; ++c)
+            s.u8(uint8_t(*c));
+        s.u32(1), s.u32(1), s.u32(8), s.u32(0);
+        for (int a = 0; a < 3; ++a)
+            s.u32(0), s.u32(0), s.u32(128);
+        for (int m = 0; m < 2; ++m) {
+            s.vec(1, 0, 0), s.vec(0, 1, 0), s.vec(0, 0, 1), s.vec(0, 0, m ? 10.0f : 0.0f);
+            s.u32(m ? 4 : 7);
+        }
+        s.u32(1), s.u32(1), s.u32(1);    // a clip
+        s.u32(0), s.u32(0), s.u32(32);   // no position keys
+        s.u32(key ? 1 : 0), s.u32(key ? 1 : 0), s.u32(32);
+        if (key) {
+            // A quarter turn about Z: x, y 0 (1023.5 of 2047), z sin 45
+            // degrees, w - 1 = cos 45 degrees - 1.
+            const uint32_t z = uint32_t(std::lround((0.70710678 + 1) / 2 * 1023));
+            s.f32(0), s.u32(1023u | 1023u << 11 | z << 22), s.u16(uint16_t(int16_t(std::lround((0.70710678 - 1) * 32767))));
+        }
+        s.u32(0), s.u32(0);
+        s.u32(child ? 1 : 0), s.u32(child ? 1 : 0), s.u32(4);
+    };
+    auto last = [&] {
+        s.vec(1, 0, 0), s.vec(0, 1, 0), s.vec(0, 0, 1), s.vec(0, 0, 0);
+        s.u32(7);
+        for (int k = 0; k < 10; ++k)
+            s.f32(0);
+        for (int a = 0; a < 2; ++a)
+            s.u32(0), s.u32(0), s.u32(1);
+    };
+    bone("root", false, true);
+    bone("b", true, false);
+    last();
+    last();
+    // The character first: its data holds file offsets for the first export.
+    w.addExport(lodClass, 0, "Character", meshData(w, true, 2, 4));
+    w.addExport(meshClass, 0, "Male", s.b);
+    Package p;
+    CHECK(!p.openMemory(w.build(), "Shared"));
+    AnimationSet set;
+    const Error err = readAnimationSet(p, 1, set);
+    CHECK(!err && set.frames() == 1 && set.clipFor(0, 1) == 0 && set.clipFor(0, 2) == -1);
+    Mesh m;
+    CHECK(!readMesh(p, 0, m) && m.bones == 2);
+    MeshAnimSeq seq;
+    seq.name = "Turned";
+    CHECK(!borrowAnimation(p, 0, set, 0, seq, m));
+    CHECK(m.animFrames == 3 && m.verts.size() == 9 && m.findAnim("Turned") && m.findAnim("Turned")->startFrame == 2);
+    if (m.verts.size() == 9) {
+        // (-3, 0, 0) turned a quarter about Z: (0, +-3, 0).
+        const Vec3f& v = m.verts[6];
+        CHECK(std::fabs(v[0]) < 0.05f && std::fabs(std::fabs(v[1]) - 3) < 0.05f && std::fabs(v[2]) < 0.05f);
+    }
+}
+
 static void testImportedMeshBlock() {
     // The Fallen's layout, both ways of keeping the vertices.
     for (int block : {1, 2}) {
@@ -1087,6 +1152,7 @@ int main() {
     testActors();
     testMeshes();
     testImportedMeshBlock();
+    testAnimationSet();
     testClassDefaultsAndMeshActors();
     testMapExtension();
     if (failures) {

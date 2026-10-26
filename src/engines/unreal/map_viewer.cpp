@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <tuple>
 
 namespace reluva::unreal {
@@ -361,14 +362,33 @@ void MapViewer::load(int index) {
     ClassDefaults defaults(ctx_.packages);
     MeshActorStats meshStats;
     std::map<std::pair<const Package*, int>, int> meshIndex; // -1: unreadable
-    int badMeshes = 0;
+    int badMeshes = 0, borrowed = 0;
     std::string firstBadMesh;
-    for (const MeshActor& a : findMeshActors(ctx_.packages, *pkg, defaults, &meshStats)) {
+    const std::vector<MeshActor> meshActors = findMeshActors(ctx_.packages, *pkg, defaults, &meshStats);
+    // The animations each mesh's actors play.
+    std::map<std::pair<const Package*, int>, std::set<std::string>> wanted;
+    for (const MeshActor& a : meshActors)
+        if (!a.animSequence.empty())
+            wanted[{a.mesh.package, a.mesh.exportIndex}].insert(a.animSequence);
+    for (const MeshActor& a : meshActors) {
         auto it = meshIndex.find({a.mesh.package, a.mesh.exportIndex});
         if (it == meshIndex.end()) {
             Mesh mesh;
             GpuMesh gpu;
             Error err = readMesh(*a.mesh.package, a.mesh.exportIndex, mesh);
+            // Characters' animations past their own frames, from the shared
+            // animation sets (read the first time one's needed).
+            if (!err && mesh.bones)
+                for (const std::string& seq : wanted[{a.mesh.package, a.mesh.exportIndex}]) {
+                    if (mesh.findAnim(seq))
+                        continue;
+                    if (!animationSets_) {
+                        const auto t0 = Clock::now();
+                        animationSets_ = findAnimationSets(ctx_.packages);
+                        animationSetsMs_ = int(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count());
+                    }
+                    borrowed += borrowNamedAnimation(*a.mesh.package, a.mesh.exportIndex, *animationSets_, seq, mesh);
+                }
             if (!err)
                 err = uploadMesh(*renderer_, mesh, gpu, ctx_.meshTurn, ctx_.meshYawQuarters);
             int at = -1;
@@ -422,8 +442,16 @@ void MapViewer::load(int index) {
         const float len = std::sqrt(toward[0] * toward[0] + toward[1] * toward[1] + toward[2] * toward[2]);
         d.light.direction = len > 0 ? toWorld(Vec3f{toward[0] / len, toward[1] / len, toward[2] / len})
                                     : gfx::Vec3{0, 0, 1};
-        if (const MeshAnimSeq* anim = mesh.findAnim(a.animSequence))
+        if (const MeshAnimSeq* anim = mesh.findAnim(a.animSequence)) {
             d.anim = int(anim - mesh.anims.data());
+        } else if (mesh.bones) {
+            // A character naming an animation its mesh doesn't have (the
+            // Grigari drones' "BaseReady"): its idle, as the game's scripts
+            // would play something.
+            for (size_t k = 0; k < mesh.anims.size() && d.anim < 0; ++k)
+                if (fs::toLower(mesh.anims[k].name).find("idle") != std::string::npos && mesh.anims[k].numFrames > 1)
+                    d.anim = int(k);
+        }
         d.startFraction = a.animFrame;
         meshActors_.push_back(std::move(d));
     }
@@ -487,6 +515,10 @@ void MapViewer::load(int index) {
         info_.push_back(std::to_string(turned) + " imported meshes turned from their packed vertices: drawn " +
                         meshTurnName(ctx_.meshTurn) + " (M changes), then " +
                         std::to_string(ctx_.meshYawQuarters * 90) + " degrees of yaw (Y changes)");
+    if (borrowed)
+        info_.push_back(std::to_string(borrowed) + " animations given to characters from " +
+                        std::to_string(animationSets_ ? animationSets_->size() : 0) +
+                        " shared animation sets (read in " + std::to_string(animationSetsMs_) + " ms)");
     if (!firstBadMesh.empty())
         info_.push_back("First unreadable mesh: " + firstBadMesh);
     info_.push_back("Not drawn yet: sprites, lights' effects (flicker, pulse...), movers' own lighting");
