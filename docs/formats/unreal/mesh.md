@@ -99,48 +99,56 @@ array either; they're presumably the block's triangle and corner arrays
 (with texture coordinates somewhere in it), not read yet. The Fallen has
 9 such meshes (Female, Male...).
 
-**Meshes built on a skeleton** (BajFanatic, GrigSentryDrone, Obsidian_Snow
-and the other characters that keep no packed vertices). The block holds a
-record per bone (names like `root`, `Bip01_Pelvis`, `Bip01_Spine`), and
-before them the mesh's name and its textures' file names:
+**Meshes built on a skeleton** (BajFanatic, GrigSentryDrone, Obsidian_Snow,
+the corpses and the other characters that keep no packed vertices). Worked
+out on the game's own files (October 2026); every one of the 402 skeletons
+reads whole, and all 21 meshes with no packed vertices animate.
+
+The block holds the bones as a tree, written depth first, before it the
+mesh's name and textures' file names, after it its body parts' names
+(`(3, 3, 10)` and "FullBody", "LowerTorso", "UpperTorso"). A bone:
 
 | Field | |
 |---|---|
-| i32 4, u16 length and the bone's name | |
+| u16 length and the bone's name | `root`, `Bip01_Pelvis`... (some empty, some ending in a tab) |
 | `(n, n, 8)` and n i32 | (0, 1) seen; not used |
-| `(k, k, 128)` and k float xyz | the bone's vertices, in its own space |
+| `(k, k, 128)` and k float xyz | the bone's vertices, in its own space (none for keyframed meshes' bones, whose packed frames have them) |
 | `(k, k, 128)` and k float | their weights (a vertex shared by bones has some under 1) |
 | `(k, k, 128)` and k i32 | which of the frame's vertices each is |
-| 12 floats | a 4x3 offset (identity so far) |
+| 12 floats | a 4x3 matrix ("offset"; not used: see below) |
 | i32 | 7 |
-| 12 floats | the bone's 4x3 placement: rows X, Y, Z, then the origin |
-| i32 | 7 for root, 4 for the others so far |
-| `(c, c, f)` | c clips: as many as the mesh has animations, it seems (GrigSentryDrone 30 of 30) |
-| per clip: `(n, n, f)` and n x (time, x, y, z) floats | position keys, times in seconds |
+| 12 floats | the bone's placement in its parent's space: rows X, Y, Z, then the origin |
+| i32 | 7 for root, 4 for most, 0 for some |
+| `(c, c, f)` | c clips, one per animation |
+| per clip: `(n, n, f)` and n x (time, x, y, z) floats | position keys: times in seconds, an offset to the placement's origin |
 | per clip: `(m, m, f)` and m x (float time, 6 bytes) | rotation keys: a quaternion, below |
 | per clip: 8 bytes | (0, 0), (0, 1), (1, 1) seen |
-| `(h, h, 4)` | h children, whose records follow, depth first (root: 1, the pelvis; the pelvis: 3) |
-
-A bone's placement is in its parent's space (the origins go up a spine
-by a few units each: BajFanatic's spine 5.7 above the pelvis, its head
-1.75 above the neck), so a vertex is the weighted sum, over its bones, of
-`p * offset * placement * parent's placement * ...` up to the root (row
-vectors), in the same units as the packed vertices after Scale and Origin.
-Each bone is found by its own fields (as the vertices need nothing
-else); the tree only gives their parents. A leaf's `(h, h, 4)` may be
-missing; a bone whose clips aren't understood keeps its children's
-parents unknown (they're placed from the root), and ue-probe shows the
-bytes there. (Reading the bones only by walking the tree lost every bone
-after one not understood, and with them whole characters.)
+| `(h, h, 4)` | h children, whose records follow |
+| after the children: 12 floats, i32 7, 10 floats, two `(n, n, f)` and n i32 | a matrix (identity), what may be joint limits (+-30 degrees), links to other bones (usually none) |
 
 A rotation key's 6 bytes are a quaternion: x, y and z packed as 11, 11
 and 10 bits (0 to the top of each standing for -1 to 1, as packed
-vertices are), then w - 1 as a signed 16-bit fraction of 32767. On every
-key looked at (BajFanatic's pelvis and spine, GrigSentryDrone's Dummy05)
-x²+y²+z²+w² comes to 1 within the rounding, and a bone's keys turn it
-smoothly (Dummy05's clip 0 from rest out to 28 degrees and back).
-Checked on KiraCellLight, which has one bone, `root`, holding what was
-taken for a float copy: posed so, its vertices are its packed ones to
-within their rounding, and its placement is the turn that was fitted (so
-the "float copy" turns are bones' placements). Characters are drawn in
-that reference pose, with the usual turn, until the keys are read.
+vertices are), then w - 1 as a signed 16-bit fraction of 32767
+(x²+y²+z²+w² comes to 1 on every key).
+
+**Posing.** A bone's place at time t of a clip: turned by its rotation
+key's quaternion taken as rows of a matrix (i.e. by its conjugate, as row
+vectors turn), then by its placement's turn, at its placement's origin
+plus its position key; then its parent's, up to the root. A vertex is the
+weighted sum, over its bones, of its position there (`p * bone * parent *
+...`, row vectors), in the same units as packed vertices after Scale and
+Origin (KiraCellLight's one bone, `root`, gives exactly its packed
+vertices so). Checked on BajFanatic by where the bones put the vertices
+they share, which should agree: with the placements alone (and the
+"offset" applied) 5.4 units apart on average, without the offset 1.5,
+with clip 0's first keys 0.03, so the vertices are bound in that pose
+(BajFanatic's is a T-pose) and the placements are just a pose.
+
+**Clips and frames.** Clip i is the mesh's i-th animation in frame order;
+its length in frames is its last key's time at 30 frames a second (one
+frame if all its keys are at 0). They add up to the mesh's frames exactly:
+GrigSentryDrone's 30 clips its 30 animations' 1626 frames, BajFanatic's 4
+its BaseReference, Bomb, SuicideLunge and SuicideRun (50 frames; the other
+314 animations it lists run past those and are left out). So every frame
+is posed from the keys, interpolated (slerp for rotations), and drawn as
+ordinary vertex animation.

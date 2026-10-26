@@ -862,11 +862,29 @@ static std::vector<uint8_t> meshData(PackageWriter& w, bool lod, int32_t texture
                 else
                     o.u32(1), o.u32(1), o.u32(1);
                 o.u32(0), o.u32(0), o.u32(32), o.u32(0), o.u32(0), o.u32(32), o.u32(0), o.u32(0);
-                if (child)
-                    o.u32(1), o.u32(1), o.u32(4);
+                o.u32(child ? 1 : 0), o.u32(child ? 1 : 0), o.u32(4); // children
+            };
+            // After a bone's children: a matrix, 7, 10 floats and two
+            // arrays of i32s.
+            auto last = [&](int links) {
+                o.vec(1, 0, 0), o.vec(0, 1, 0), o.vec(0, 0, 1), o.vec(0, 0, 0);
+                o.u32(7);
+                for (int k = 0; k < 10; ++k)
+                    o.f32(0);
+                for (int a = 0; a < 2; ++a) {
+                    o.u32(uint32_t(links)), o.u32(uint32_t(links)), o.u32(1);
+                    for (int k = 0; k < links; ++k)
+                        o.u32(3);
+                }
             };
             bone("root", false, true);
             bone("b", true, false);
+            last(1);
+            last(0);
+            // What follows the bones: body parts' names.
+            o.u32(1), o.u32(1), o.u32(10), o.u16(8);
+            for (char c : std::string("FullBody"))
+                o.u8(uint8_t(c));
         } else if (importBlock == 1) {
             o.u32(6), o.u32(6), o.u32(1);
             o.bytes(verts.b);
@@ -974,6 +992,8 @@ static void testImportedMeshBlock() {
         if (!err && m.verts.size() == 6)
             CHECK((m.verts[0] == Vec3f{-3, 0, 0}) && (m.verts[2] == Vec3f{0, 10, 0}) && m.verts[5] == m.verts[2] &&
                   m.importAxes && !m.importAxesGuessed);
+        const auto lines = describeBones(p, 0);
+        CHECK(!lines.empty() && lines.back().find("all in one tree") != std::string::npos);
     }
     {
         // A bone whose clips aren't understood is still found, and placed

@@ -130,8 +130,9 @@ void MeshViewer::show() {
         info_.push_back(line);
     }
     if (mesh_.bones)
-        info_.push_back("posed from " + std::to_string(mesh_.bones) +
-                        " bones: their reference pose (their animation keys not read yet)");
+        info_.push_back("posed from " + std::to_string(mesh_.bones) + " bones: " +
+                        (mesh_.bonesAnimated ? "every frame from their animation keys"
+                                             : "the pose they're bound in (their keys don't match the frames)"));
     if (mesh_.keyFrames)
         info_.push_back(std::to_string(mesh_.keyFrames) + " of its " + std::to_string(mesh_.animFrames) +
                         " frames of vertices found (keyframes not worked out yet): the first is shown");

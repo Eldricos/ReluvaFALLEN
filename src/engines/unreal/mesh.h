@@ -61,9 +61,10 @@ struct Mesh {
     // until the rest is worked out. 0: every frame was found.
     int keyFrames = 0;
     // The Fallen's meshes built on a skeleton: how many bones they were
-    // posed from (their reference pose, for every frame until their keys
-    // are read). 0 for the others.
+    // posed from (0 for the others), and whether every frame was posed
+    // from their animation keys (else all are the pose they're bound in).
     int bones = 0;
+    bool bonesAnimated = false;
     int droppedAnims = 0; // animations left out, their frames past the mesh's
 
     const MeshAnimSeq* findAnim(std::string_view name) const;

@@ -326,6 +326,11 @@ struct BoneRecord {
     std::array<float, 12> offset{}, placement{};
     uint32_t kind = 0, clips = 0;
     size_t clipsAt = 0; // the first clip
+    struct Clip {
+        size_t positions = 0, rotations = 0; // file offsets of the keys
+        uint32_t nPositions = 0, nRotations = 0;
+    };
+    std::vector<Clip> clipList; // when they read
     size_t start = 0;   // where its record starts (its name)
     size_t end = 0;     // past its own fields (before its children); 0: its clips didn't read
 };
@@ -355,11 +360,12 @@ struct BoneReader {
     bool name(size_t at, std::string& out) const {
         if (at < from || at + 2 > to)
             return false;
+        // Some are empty (GrigariMarauder's), some end in a tab (VortaFeMale's "Box03").
         const size_t len = size_t(data[at - base]) | size_t(data[at - base + 1]) << 8;
-        if (len == 0 || len > 64 || at + 2 + len > to)
+        if (len > 64 || at + 2 + len > to)
             return false;
         out.assign(reinterpret_cast<const char*>(data.data() + (at - base) + 2), len);
-        return std::all_of(out.begin(), out.end(), [](char c) { return c >= 32 && c < 127; });
+        return std::all_of(out.begin(), out.end(), [](char c) { return c == '\t' || (c >= 32 && c < 127); });
     }
 
     // The first bone from `start`: a name just before an (n, n, 8) header
@@ -392,15 +398,18 @@ struct BoneReader {
         if (!header(p, n, flags) || flags != 8 || n > 64)
             return false;
         p += 12 + 4 * size_t(n);
+        // Keyframed meshes' bones (ARD_AmmoCrate's) keep weights and
+        // indices but no positions, which their packed frames have: such a
+        // bone places no vertices.
         size_t* arrays[3] = {&b.positions, &b.weights, &b.indices};
+        uint32_t counts[3] = {};
         for (int a = 0; a < 3; ++a) {
-            uint32_t k = 0;
-            if (!header(p, k, flags) || flags != 128 || (a && k != b.vertices))
+            if (!header(p, counts[a], flags) || flags != 128 || (a == 2 && counts[2] != counts[1]))
                 return false;
-            b.vertices = k;
             *arrays[a] = p + 12;
-            p += 12 + size_t(k) * (a == 0 ? 12 : 4);
+            p += 12 + size_t(counts[a]) * (a == 0 ? 12 : 4);
         }
+        b.vertices = counts[0] == counts[1] ? counts[0] : 0;
         if (p + 104 > to)
             return false;
         for (size_t c = 0; c < 12; ++c) {
@@ -417,24 +426,30 @@ struct BoneReader {
             return true;
         p += 12;
         b.clipsAt = p;
+        std::vector<BoneRecord::Clip> clips;
         for (uint32_t c = 0; c < b.clips; ++c) {
-            uint32_t np = 0, nr = 0;
-            if (!header(p, np, flags) || p + 12 + 16 * size_t(np) > to)
+            BoneRecord::Clip k;
+            if (!header(p, k.nPositions, flags) || p + 12 + 16 * size_t(k.nPositions) > to)
                 return true;
-            p += 12 + 16 * size_t(np);
-            if (!header(p, nr, flags) || p + 12 + 10 * size_t(nr) + 8 > to)
+            k.positions = p + 12;
+            p += 12 + 16 * size_t(k.nPositions);
+            if (!header(p, k.nRotations, flags) || p + 12 + 10 * size_t(k.nRotations) + 8 > to)
                 return true;
-            p += 12 + 10 * size_t(nr) + 8;
+            k.rotations = p + 12;
+            p += 12 + 10 * size_t(k.nRotations) + 8;
+            clips.push_back(k);
         }
+        b.clipList = std::move(clips);
         b.end = p;
         return true;
     }
 
     // Every bone, in file order, each found by its own fields; then their
     // parents, from each bone's children ((h, h, 4) after its clips, their
-    // records following depth first). A bone whose clips or children
-    // aren't understood keeps its own children unknown (they're placed as
-    // if at the root; failedAt says where). Returns whether all were.
+    // records following depth first, then the bone's last fields). A bone
+    // whose clips or children aren't understood keeps its own children
+    // unknown (they're placed as if at the root; failedAt says where).
+    // Returns whether all were.
     bool all(std::vector<BoneRecord>& out) {
         out.clear();
         for (size_t at = first(); at; at = first(at + 1)) {
@@ -452,35 +467,78 @@ struct BoneReader {
         // Where bone i's subtree ends, 0 if that's not known.
         std::function<size_t(int, int)> subtree = [&](int i, int depth) -> size_t {
             reached[size_t(i)] = true;
-            const BoneRecord& b = out[size_t(i)];
-            if (!b.end || depth > 256) {
+            const size_t start = out[size_t(i)].start, end = out[size_t(i)].end;
+            if (!end || depth > 256) {
                 if (!failedAt)
-                    failedAt = b.start;
+                    failedAt = start;
                 return 0;
             }
             uint32_t children = 0, flags = 0;
-            size_t p = b.end;
-            if (!header(p, children, flags) || (children && flags != 4))
-                return p; // a leaf
+            size_t p = end;
+            if (!header(p, children, flags) || flags != 4) {
+                if (!failedAt)
+                    failedAt = p;
+                return 0;
+            }
             p += 12;
             for (uint32_t c = 0; c < children; ++c) {
-                const auto it = byStart.find(p);
+                auto it = byStart.find(p);
                 if (it == byStart.end()) {
-                    if (!failedAt)
-                        failedAt = p;
-                    return 0;
+                    // A bone the search for names missed (an empty name).
+                    BoneRecord nb;
+                    if (!record(p, nb)) {
+                        if (!failedAt)
+                            failedAt = p;
+                        return 0;
+                    }
+                    out.push_back(nb);
+                    reached.push_back(false);
+                    it = byStart.emplace(p, int(out.size() - 1)).first;
                 }
                 out[size_t(it->second)].parent = i;
                 if ((p = subtree(it->second, depth + 1)) == 0)
                     return 0;
+            }
+            // After its children, the bone's last fields: a 4x3 matrix
+            // (identity so far), an i32 7, 2 floats (+-1e38), 2 more, 6
+            // (joint limits? +-30 degrees), then two arrays of i32s
+            // (usually empty).
+            if (p + 92 > to || u32(p + 48) != 7) {
+                if (!failedAt)
+                    failedAt = p;
+                return 0;
+            }
+            p += 92;
+            for (int a = 0; a < 2; ++a) {
+                uint32_t n = 0;
+                if (!header(p, n, flags) || p + 12 + 4 * size_t(n) > to) {
+                    if (!failedAt)
+                        failedAt = p;
+                    return 0;
+                }
+                p += 12 + 4 * size_t(n);
             }
             return p;
         };
         for (size_t i = 0; i < out.size(); ++i)
             if (!reached[i])
                 subtree(int(i), 0);
-        // Parents come before their children in file order, so a bone's
-        // parent is always placed first.
+        // In file order, where parents come before their children (so a
+        // bone's parent is always placed first).
+        std::vector<size_t> order(out.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            order[i] = i;
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return out[a].start < out[b].start; });
+        std::vector<int> newIndex(out.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            newIndex[order[i]] = int(i);
+        std::vector<BoneRecord> sorted;
+        for (size_t i : order) {
+            sorted.push_back(out[i]);
+            if (sorted.back().parent >= 0)
+                sorted.back().parent = newIndex[size_t(sorted.back().parent)];
+        }
+        out = std::move(sorted);
         return failedAt == 0;
     }
 };
@@ -505,55 +563,6 @@ Mat43 then(const Mat43& a, const Mat43& b) {
     return out;
 }
 
-// A vertex is the weighted sum of where its bones put it: p * offset *
-// the bone's placement * its parents' placements, up to the root (as
-// row vectors; KiraCellLight's one bone, "root", turns its float vertices
-// into exactly its packed ones so). That pose, by Scale and Origin back
-// into packed units, for every frame. Returns the bones, 0 if the block
-// isn't a skeleton.
-int poseFromBones(const std::vector<uint8_t>& data, size_t base, size_t from, size_t to, const MeshTail& t,
-                  std::vector<Vec3f>& out) {
-    BoneReader r{data, base, from, to};
-    std::vector<BoneRecord> bones;
-    r.all(bones);
-    if (bones.empty())
-        return 0;
-    const auto frame = size_t(t.frameVerts);
-    std::vector<Vec3f> sum(frame, Vec3f{});
-    std::vector<float> weight(frame, 0);
-    std::vector<Mat43> world(bones.size());
-    for (size_t i = 0; i < bones.size(); ++i) {
-        const BoneRecord& b = bones[i];
-        world[i] = b.parent >= 0 ? then(b.placement, world[size_t(b.parent)]) : b.placement;
-        const Mat43 m = then(b.offset, world[i]);
-        for (uint32_t j = 0; j < b.vertices; ++j) {
-            const size_t v = r.u32(b.indices + 4 * size_t(j));
-            const float w = r.f32(b.weights + 4 * size_t(j));
-            const Vec3f local{r.f32(b.positions + 12 * size_t(j)), r.f32(b.positions + 12 * size_t(j) + 4),
-                              r.f32(b.positions + 12 * size_t(j) + 8)};
-            if (v >= frame || !sane(w) || !sane(local[0]) || !sane(local[1]) || !sane(local[2]))
-                continue;
-            const Vec3f placed = times(m, local);
-            for (size_t a = 0; a < 3; ++a)
-                sum[v][a] += w * placed[a];
-            weight[v] += w;
-        }
-    }
-    // Most vertices have to be placed, or this isn't the mesh's skeleton.
-    size_t placed = 0;
-    for (float w : weight)
-        placed += w > 0;
-    if (placed * 10 < frame * 9)
-        return 0;
-    out.assign(frame * size_t(t.animFrames), Vec3f{});
-    for (size_t v = 0; v < frame; ++v)
-        for (size_t a = 0; a < 3; ++a)
-            out[v][a] = (weight[v] > 0 ? sum[v][a] / weight[v] : 0) / t.scale[a] + t.origin[a];
-    for (size_t f = 1; f < size_t(t.animFrames); ++f)
-        std::copy(out.begin(), out.begin() + std::ptrdiff_t(frame), out.begin() + std::ptrdiff_t(f * frame));
-    return int(bones.size());
-}
-
 // A rotation key's 6 bytes: x, y and z as 11, 11 and 10 bits (0 to the
 // top of each standing for -1 to 1, as packed vertices' are), then w - 1
 // as a signed 16-bit fraction of 32767. Checked: x^2+y^2+z^2+w^2 comes to
@@ -563,6 +572,180 @@ std::array<float, 4> rotationKey(const uint8_t* p) {
     const auto w = int16_t(uint16_t(p[4] | p[5] << 8));
     return {float(xyz & 0x7ff) / 2047 * 2 - 1, float((xyz >> 11) & 0x7ff) / 2047 * 2 - 1,
             float(xyz >> 22) / 1023 * 2 - 1, 1 + float(w) / 32767};
+}
+
+// A quaternion's turn as a row-vector matrix: the usual (column-vector)
+// rotation matrix of it, taken as rows, which turns row vectors by its
+// conjugate. That's how the keys are meant (below).
+Mat43 rotation(std::array<float, 4> q) {
+    const float n = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    if (n <= 0)
+        return {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+    const float x = q[0] / n, y = q[1] / n, z = q[2] / n, w = q[3] / n;
+    return {1 - 2 * (y * y + z * z), 2 * (x * y - z * w),     2 * (x * z + y * w),
+            2 * (x * y + z * w),     1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+            2 * (x * z - y * w),     2 * (y * z + x * w),     1 - 2 * (x * x + y * y),
+            0, 0, 0};
+}
+
+std::array<float, 4> slerp(std::array<float, 4> a, std::array<float, 4> b, float t) {
+    float dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    if (dot < 0) {
+        for (float& c : b)
+            c = -c;
+        dot = -dot;
+    }
+    float wa = 1 - t, wb = t;
+    if (dot < 0.9995f) {
+        const float th = std::acos(std::min(dot, 1.0f)), s = std::sin(th);
+        wa = std::sin((1 - t) * th) / s;
+        wb = std::sin(t * th) / s;
+    }
+    return {a[0] * wa + b[0] * wb, a[1] * wa + b[1] * wb, a[2] * wa + b[2] * wb, a[3] * wa + b[3] * wb};
+}
+
+// The Fallen's skeletal animation: a clip per animation, in the order of
+// their frames, each clip's keys in seconds at 30 frames a second (a clip
+// with no keys after 0 is one frame). A bone at time t in a clip turns by
+// its rotation key's conjugate, then by its placement's turn, from its
+// placement's origin moved by its position key (in its parent's space).
+// Checked on BajFanatic: in clip 0 at time 0 the bones put every vertex
+// shared between bones in the same place to within 0.03 units (with the
+// placements alone, 1.5), so the vertices are bound in that pose; clips
+// match the animations' frame counts exactly (BajFanatic's 4 its 50
+// frames, GrigSentryDrone's 30 its 1626).
+struct BonePoser {
+    const BoneReader& r;
+    const std::vector<BoneRecord>& bones;
+    // A clip's length in frames: its last key's time.
+    int clipFrames(size_t c) const {
+        float last = 0;
+        for (const BoneRecord& b : bones) {
+            if (c >= b.clipList.size())
+                continue;
+            const BoneRecord::Clip& k = b.clipList[c];
+            if (k.nPositions)
+                last = std::max(last, r.f32(k.positions + 16 * size_t(k.nPositions - 1)));
+            if (k.nRotations)
+                last = std::max(last, r.f32(k.rotations + 10 * size_t(k.nRotations - 1)));
+        }
+        return std::max(1, int(std::lround(last * 30)));
+    }
+    // Bone b's placement in its parent at time t of clip c.
+    Mat43 local(const BoneRecord& b, size_t c, float t) const {
+        Mat43 m = b.placement;
+        if (c >= b.clipList.size())
+            return m;
+        const BoneRecord::Clip& k = b.clipList[c];
+        if (k.nRotations) {
+            size_t i = 0;
+            while (i + 1 < k.nRotations && r.f32(k.rotations + 10 * (i + 1)) <= t)
+                ++i;
+            auto q = rotationKey(r.data.data() + (k.rotations + 10 * i + 4 - r.base));
+            if (i + 1 < k.nRotations) {
+                const float t0 = r.f32(k.rotations + 10 * i), t1 = r.f32(k.rotations + 10 * (i + 1));
+                if (t1 > t0 && t > t0)
+                    q = slerp(q, rotationKey(r.data.data() + (k.rotations + 10 * (i + 1) + 4 - r.base)),
+                              std::min(1.0f, (t - t0) / (t1 - t0)));
+            }
+            Mat43 turn = b.placement;
+            turn[9] = turn[10] = turn[11] = 0;
+            m = then(rotation(q), turn);
+            m[9] = b.placement[9];
+            m[10] = b.placement[10];
+            m[11] = b.placement[11];
+        }
+        if (k.nPositions) {
+            size_t i = 0;
+            while (i + 1 < k.nPositions && r.f32(k.positions + 16 * (i + 1)) <= t)
+                ++i;
+            Vec3f d{r.f32(k.positions + 16 * i + 4), r.f32(k.positions + 16 * i + 8), r.f32(k.positions + 16 * i + 12)};
+            if (i + 1 < k.nPositions) {
+                const float t0 = r.f32(k.positions + 16 * i), t1 = r.f32(k.positions + 16 * (i + 1));
+                if (t1 > t0 && t > t0) {
+                    const float f = std::min(1.0f, (t - t0) / (t1 - t0));
+                    for (size_t a = 0; a < 3; ++a)
+                        d[a] += f * (r.f32(k.positions + 16 * (i + 1) + 4 + 4 * a) - d[a]);
+                }
+            }
+            for (size_t a = 0; a < 3; ++a)
+                m[9 + a] += sane(d[a]) ? d[a] : 0;
+        }
+        return m;
+    }
+};
+
+// A vertex is the weighted sum of where its bones put it: p * the bone's
+// placement * its parents', up to the root (as row vectors; KiraCellLight's
+// one bone, "root", turns its float vertices into exactly its packed ones
+// so). The "offset" matrix isn't part of it: with it, bones disagree
+// about shared vertices by 5 units, without it by 1.5, and with the keys
+// (above) by 0.03. Every frame posed so when the clips add up to the
+// mesh's frames, else every frame in clip 0's first pose. Back into packed
+// units by Scale and Origin. Returns the bones (0 if the block isn't a
+// skeleton); `animated` says whether the frames were posed from the clips.
+int poseFromBones(const std::vector<uint8_t>& data, size_t base, size_t from, size_t to, const MeshTail& t,
+                  std::vector<Vec3f>& out, bool& animated) {
+    BoneReader r{data, base, from, to};
+    std::vector<BoneRecord> bones;
+    r.all(bones);
+    animated = false;
+    if (bones.empty())
+        return 0;
+    const BonePoser poser{r, bones};
+    // Which clip and time each frame is.
+    const size_t clips = bones[0].clipList.size();
+    bool clipsRead = clips > 0;
+    for (const BoneRecord& b : bones)
+        clipsRead = clipsRead && b.clipList.size() == clips;
+    std::vector<std::pair<size_t, float>> frames;
+    if (clipsRead)
+        for (size_t c = 0; c < clips; ++c)
+            for (int f = 0, n = poser.clipFrames(c); f < n; ++f)
+                frames.push_back({c, float(f) / 30});
+    animated = clipsRead && frames.size() == size_t(t.animFrames);
+    const auto frame = size_t(t.frameVerts);
+    out.assign(frame * size_t(t.animFrames), Vec3f{});
+    std::vector<Vec3f> sum(frame);
+    std::vector<float> weight(frame);
+    std::vector<Mat43> world(bones.size());
+    const size_t posed = animated ? frames.size() : 1;
+    for (size_t f = 0; f < posed; ++f) {
+        std::fill(sum.begin(), sum.end(), Vec3f{});
+        std::fill(weight.begin(), weight.end(), 0.0f);
+        for (size_t i = 0; i < bones.size(); ++i) {
+            const BoneRecord& b = bones[i];
+            const Mat43 m = clipsRead ? poser.local(b, animated ? frames[f].first : 0, animated ? frames[f].second : 0)
+                                      : b.placement;
+            world[i] = b.parent >= 0 ? then(m, world[size_t(b.parent)]) : m;
+            for (uint32_t j = 0; j < b.vertices; ++j) {
+                const size_t v = r.u32(b.indices + 4 * size_t(j));
+                const float w = r.f32(b.weights + 4 * size_t(j));
+                const Vec3f local{r.f32(b.positions + 12 * size_t(j)), r.f32(b.positions + 12 * size_t(j) + 4),
+                                  r.f32(b.positions + 12 * size_t(j) + 8)};
+                if (v >= frame || !sane(w) || !sane(local[0]) || !sane(local[1]) || !sane(local[2]))
+                    continue;
+                const Vec3f placed = times(world[i], local);
+                for (size_t a = 0; a < 3; ++a)
+                    sum[v][a] += w * placed[a];
+                weight[v] += w;
+            }
+        }
+        if (f == 0) {
+            // Most vertices have to be placed, or this isn't the mesh's skeleton.
+            size_t placed = 0;
+            for (float w : weight)
+                placed += w > 0;
+            if (placed * 10 < frame * 9)
+                return 0;
+        }
+        for (size_t v = 0; v < frame; ++v)
+            for (size_t a = 0; a < 3; ++a)
+                out[f * frame + v][a] = (weight[v] > 0 ? sum[v][a] / weight[v] : 0) / t.scale[a] + t.origin[a];
+    }
+    for (size_t f = posed; f < size_t(t.animFrames); ++f)
+        std::copy(out.begin(), out.begin() + std::ptrdiff_t(frame), out.begin() + std::ptrdiff_t(f * frame));
+    return int(bones.size());
 }
 
 // The turn most of The Fallen's imported meshes' float copies show
@@ -700,11 +883,25 @@ Error readMesh(const Package& package, int index, Mesh& out) {
                 continue;
             std::vector<Vec3f> verts;
             int keys = 0, bones = 0;
+            bool animated = false;
             const size_t base = size_t(package.exports()[size_t(index)].serialOffset);
             if (!findVertexBlock(data, base, afterTextures, at, candidate, verts, keys) &&
-                (bones = poseFromBones(data, base, afterTextures, at, candidate, verts)) == 0)
+                (bones = poseFromBones(data, base, afterTextures, at, candidate, verts, animated)) == 0)
                 continue;
+            // Keyframed (some frames of vertices only): its bones, if they
+            // animate every frame, do better.
+            if (keys) {
+                std::vector<Vec3f> posed;
+                bool all = false;
+                if (const int n = poseFromBones(data, base, afterTextures, at, candidate, posed, all); n && all) {
+                    verts = std::move(posed);
+                    bones = n;
+                    animated = true;
+                    keys = 0;
+                }
+            }
             out.bones = bones;
+            out.bonesAnimated = animated;
             tail = std::move(candidate);
             out.verts = std::move(verts);
             out.keyFrames = keys;

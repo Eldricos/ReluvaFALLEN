@@ -4591,7 +4591,8 @@ int cmdUeProbe(int argc, char** argv) {
             std::printf("  %d of its %d frames of vertices found (the first is shown for all)\n", m.keyFrames,
                         m.animFrames);
         if (!err && m.bones)
-            std::printf("  posed from %d bones (their reference pose, for all frames)\n", m.bones);
+            std::printf("  posed from %d bones (%s)\n", m.bones,
+                        m.bonesAnimated ? "every frame, from their animation keys" : "the pose they're bound in, for all frames");
         if (!range && !(!err && m.bones))
             for (const std::string& l : describeMeshLayout(pkg, index))
                 std::printf("%s\n", l.c_str());
@@ -4804,7 +4805,8 @@ int cmdUeCheck(int argc, char** argv) {
                     if (m.keyFrames)
                         ++tallies["meshes keyframed (first frame shown)"].ok;
                     if (m.bones)
-                        ++tallies["meshes posed from bones (reference pose shown)"].ok;
+                        ++tallies[m.bonesAnimated ? "meshes posed from bones (animated)"
+                                                  : "meshes posed from bones (bound pose shown)"].ok;
                 }
             }
         }
