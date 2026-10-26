@@ -96,7 +96,7 @@
 //   reluva-tool ue-info <package>                  a package's header, exports by class, imports by package
 //   reluva-tool ue-exports <package> [filter]      list exports: class, path, size, offset, flags
 //   reluva-tool ue-props <package> <export>        an export's properties, and the bytes after them
-//   reluva-tool ue-probe <package | game folder> <export> [-all]  map an export's data: where lazy arrays sit,
+//   reluva-tool ue-probe <package | game folder> <export> [-all | -at <offset> <bytes>]  map an export's data: where lazy arrays sit,
 //                                                  what the mesh reader makes of it, its first and last
 //                                                  bytes (-all: every byte)
 //   reluva-tool ue-extract <game folder> <package> <export>  write a texture as .tga, a sound or music
@@ -4502,10 +4502,14 @@ int cmdUeProps(int argc, char** argv) {
 // what the mesh reader makes of it, and the bytes at its start and end.
 int cmdUeProbe(int argc, char** argv) {
     const bool all = argc == 5 && std::strcmp(argv[4], "-all") == 0;
-    if (argc != 4 && !all) {
-        std::fprintf(stderr, "usage: reluva-tool ue-probe <package | game folder> <export> [-all]\n");
+    // -at <offset> <bytes>: just those bytes, offsets from the properties' end.
+    const bool range = argc == 7 && std::strcmp(argv[4], "-at") == 0;
+    if (argc != 4 && !all && !range) {
+        std::fprintf(stderr, "usage: reluva-tool ue-probe <package | game folder> <export> [-all | -at <offset> <bytes>]\n");
         return 2;
     }
+    const size_t rangeAt = range ? size_t(std::strtoull(argv[5], nullptr, 10)) : 0;
+    const size_t rangeBytes = range ? size_t(std::strtoull(argv[6], nullptr, 10)) : 0;
     using namespace reluva::unreal;
     // A package file, or a game folder whose packages are searched for the export.
     Package own;
@@ -4586,8 +4590,9 @@ int cmdUeProbe(int argc, char** argv) {
         if (!err && m.keyFrames)
             std::printf("  %d of its %d frames of vertices found (the first is shown for all)\n", m.keyFrames,
                         m.animFrames);
-        for (const std::string& l : describeMeshLayout(pkg, index))
-            std::printf("%s\n", l.c_str());
+        if (!range)
+            for (const std::string& l : describeMeshLayout(pkg, index))
+                std::printf("%s\n", l.c_str());
     }
 
     auto dump = [&](size_t from, size_t to) {
@@ -4598,6 +4603,12 @@ int cmdUeProbe(int argc, char** argv) {
             std::printf("\n");
         }
     };
+    if (range) {
+        const size_t from = std::min(end, start + rangeAt);
+        std::printf("\nBytes +%zu to +%zu:\n", from - start, std::min(end, from + rangeBytes) - start);
+        dump(from, std::min(end, from + rangeBytes));
+        return 0;
+    }
     if (all) {
         std::printf("\nEvery byte after the properties:\n");
         dump(start, end);
@@ -5047,7 +5058,7 @@ int main(int argc, char** argv) {
                  "  reluva-tool ue-exports <package> [filter]\n"
                  "  reluva-tool ue-props <package> <export>\n"
                  "  reluva-tool ue-extract <game folder> <package name> <export>\n"
-                 "  reluva-tool ue-probe <package | game folder> <export> [-all]\n"
+                 "  reluva-tool ue-probe <package | game folder> <export> [-all | -at <offset> <bytes>]\n"
 #endif
                  "");
     return 2;

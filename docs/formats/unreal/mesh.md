@@ -98,3 +98,12 @@ A Mesh (not LodMesh) in this layout has no triangles in their standard
 array either; they're presumably the block's triangle and corner arrays
 (with texture coordinates somewhere in it), not read yet. The Fallen has
 9 such meshes (Female, Male...).
+
+**Meshes built from parts** (BajFanatic, GrigSentryDrone, Obsidian_Snow:
+the most placed of those that don't read yet). No `(FrameVerts,
+FrameVerts, 1)` packed vertices at all; instead a run of records, one per
+part, each with a `(k, k, 128)` array of k float xyz positions (12 bytes
+each), another of k floats (all 1.0: weights), and a run of `(1, 1, 32)`
+arrays, keys of a track by the look of them. The parts' k add up to about
+FrameVerts (BajFanatic: 392). Still to be worked out: whether the
+positions are in the part's own space, and the keys' layout.
