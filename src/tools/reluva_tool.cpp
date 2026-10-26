@@ -4386,19 +4386,25 @@ bool openUnrealPackage(const char* file, reluva::unreal::Package& pkg) {
 }
 
 // An export by number, or by name (its own or its dotted path).
+// Classes and packages (texture groups) share names with what's in them.
+bool isContainerClass(const std::string& cls) {
+    const std::string c = reluva::fs::toLower(cls);
+    return c == "class" || c == "package";
+}
+
 int findUnrealExport(const reluva::unreal::Package& pkg, const std::string& which) {
     if (!which.empty() && std::all_of(which.begin(), which.end(), [](char c) { return std::isdigit(uint8_t(c)); }))
         return std::atoi(which.c_str()) < int(pkg.exports().size()) ? std::atoi(which.c_str()) : -1;
     const std::string wanted = reluva::fs::toLower(which);
     // By path or name: a class and its mesh are often named alike, even in
-    // one package (ARD_AmmoCrate), so a class is taken only if nothing
-    // else has the name.
+    // one package (ARD_AmmoCrate), so a class (or package) is taken only if
+    // nothing else has the name.
     int classIndex = -1;
     for (size_t i = 0; i < pkg.exports().size(); ++i) {
         if (reluva::fs::toLower(pkg.path(int32_t(i) + 1)) != wanted &&
             reluva::fs::toLower(pkg.objectName(int32_t(i) + 1)) != wanted)
             continue;
-        if (reluva::fs::toLower(pkg.className(int32_t(i) + 1)) != "class")
+        if (!isContainerClass(pkg.className(int32_t(i) + 1)))
             return int(i);
         if (classIndex < 0)
             classIndex = int(i);
@@ -4527,11 +4533,11 @@ int cmdUeProbe(int argc, char** argv) {
         for (const std::string& name : set.names()) {
             const Package* p = set.get(name);
             const int at = p ? findUnrealExport(*p, argv[3]) : -1;
-            if (at < 0 || (found && reluva::fs::toLower(p->className(at + 1)) == "class"))
+            if (at < 0 || (found && isContainerClass(p->className(at + 1))))
                 continue;
             found = p;
             index = at;
-            if (reluva::fs::toLower(p->className(at + 1)) != "class")
+            if (!isContainerClass(p->className(at + 1)))
                 break;
         }
     } else if (openUnrealPackage(argv[2], own)) {

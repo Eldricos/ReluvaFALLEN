@@ -66,6 +66,9 @@ struct Mesh {
     // from their animation keys (else all are the pose they're bound in).
     int bones = 0;
     bool bonesAnimated = false;
+    // The Fallen's frames filled from their clips by name (vertex keys or
+    // bones; see mesh.md), 0 if none.
+    int framesFromClips = 0;
     int droppedAnims = 0; // animations left out, their frames past the mesh's
     std::vector<MeshAnimSeq> otherAnims; // those animations
 

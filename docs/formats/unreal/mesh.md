@@ -174,3 +174,22 @@ the viewer plays their idle. Nearly all placed characters ask for a
 one-frame pose (BaseRelax, BaseReady), which the game's scripts follow
 with an idle loop, so the viewer plays Idle1 (IdleReady1 for a ready pose)
 in its place; every humanoid list has both.
+
+**Clips by name, and vertex keys.** Before the bones the block names the
+mesh's own animations, in clip order: `(c, c, 4)` and c x (u16 length and
+name, f32 seconds, i32 2, u16 length and group). After them another
+`(c, c, 4)` holds a run of vertex keys per clip, most empty: `(k, k, 5)`
+and k x (f32 time, `(n, n, 1)` and n packed vertices, `(m, m, 64)` and m x
+12 bytes, a 24-byte bounding box). A clip with keys is vertex animation
+(ARD_AmmoCrate's 2 keys over 100 frames, the creatures, Quark's Blink,
+Eyebrows and Phonemes); the others are the bones' clip of the same index.
+Each of the mesh's animations is the clip of its name, its frames at
+their times (30 a second), between keys blended. The per-frame vertex
+arrays found earlier are these keys, which is why "keyframed" meshes had
+fewer than their frames, and why taking them in order as frames went
+wrong where a clip's keys aren't one a frame (Baj_ImpulseShip's 2-key
+one-frame Hover shifted everything after it). Checked: the 243 meshes
+that keep one array of every frame match the clips to within a packed
+unit; the 180 that keep only keys or bones are now filled every frame
+from them; the 38 glass and debris fragments in Shared.u have an i32 0
+before their standard fields and otherwise read as standard meshes.

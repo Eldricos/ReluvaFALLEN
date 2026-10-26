@@ -184,8 +184,9 @@ Vec3f unpackVertex(uint32_t p) {
 // first is used for every frame, and `keys` says how many were found
 // (0 when every frame was).
 bool findVertexBlock(const std::vector<uint8_t>& data, size_t base, size_t from, size_t to, const MeshTail& t,
-                     std::vector<Vec3f>& out, int& keys) {
+                     std::vector<Vec3f>& out, int& keys, bool& perFrame) {
     keys = 0;
+    perFrame = false;
     const auto frame = uint32_t(t.frameVerts), total = uint32_t(t.frameVerts) * uint32_t(t.animFrames);
     auto u32At = [&](size_t at) {
         const uint8_t* p = data.data() + (at - base);
@@ -203,6 +204,9 @@ bool findVertexBlock(const std::vector<uint8_t>& data, size_t base, size_t from,
             take(at, total);
             return true;
         }
+    // One array per frame, it seemed; they're really the clips' vertex
+    // keys (see findClipTable), so as many as the frames needn't be them.
+    perFrame = true;
     for (size_t at = from; at + 12 <= to; ++at) {
         if (!block(at, frame))
             continue;
@@ -762,6 +766,147 @@ int poseFromBones(const std::vector<uint8_t>& data, size_t base, size_t from, si
     return int(bones.size());
 }
 
+// The Fallen's clips by name: before the bones, a table of the mesh's own
+// animations, (c, c, 4) and c x (u16 length and name, f32 seconds, i32 2,
+// u16 length and group), and after it another (c, c, 4) and c runs of
+// vertex keys for them (most empty): (k, k, 5) and k x (f32 time,
+// (n, n, 1) and n packed vertices (FrameVerts), (m, m, 64) and m x 12
+// bytes, a 24-byte bounding box). A clip with vertex keys is that vertex
+// animation (an ammo crate, a creature, a face's Blink or Phonemes); the
+// others are the bones' clip of the same index. Checked: ARD_TortureMachine's
+// 10 runs last its 10 animations' 400 frames; Quark's 5 clips are
+// BarFidget, BaseReference, Blink, Eyebrows and Phonemes, the last three
+// with vertex keys (2, 3 and 8), the bones holding still there.
+struct NamedClip {
+    std::string name;
+    std::vector<std::pair<float, size_t>> keys; // time, file offset of its packed vertices
+};
+
+std::vector<NamedClip> findClipTable(const BoneReader& r, size_t frameVerts) {
+    auto header = [&](size_t at, uint32_t flags, uint32_t& n) {
+        uint32_t f = 0;
+        return r.header(at, n, f) && f == flags;
+    };
+    for (size_t at = r.from; at + 12 < r.to; ++at) {
+        uint32_t c = 0;
+        if (!header(at, 4, c) || c == 0 || c > 4096)
+            continue;
+        // The names.
+        std::vector<NamedClip> clips(c);
+        size_t p = at + 12;
+        bool ok = true;
+        for (NamedClip& clip : clips) {
+            std::string group;
+            if (!r.name(p, clip.name) || clip.name.empty() || p + 2 + clip.name.size() + 8 > r.to) {
+                ok = false;
+                break;
+            }
+            p += 2 + clip.name.size();
+            const float seconds = r.f32(p);
+            p += 8;
+            if (!sane(seconds) || seconds < 0 || !r.name(p, group)) {
+                ok = false;
+                break;
+            }
+            p += 2 + group.size();
+        }
+        if (!ok)
+            continue;
+        // Its vertex keys: the next (c, c, 4) whose runs read.
+        for (size_t q = p; q + 12 < r.to; ++q) {
+            uint32_t c2 = 0;
+            if (!header(q, 4, c2) || c2 != c)
+                continue;
+            size_t k = q + 12;
+            bool runs = true;
+            for (NamedClip& clip : clips) {
+                clip.keys.clear();
+                uint32_t n = 0;
+                if (!header(k, 5, n)) {
+                    runs = false;
+                    break;
+                }
+                k += 12;
+                for (uint32_t j = 0; j < n && runs; ++j) {
+                    uint32_t v = 0, m = 0;
+                    if (k + 4 > r.to || !header(k + 4, 1, v) || v != frameVerts) {
+                        runs = false;
+                        break;
+                    }
+                    clip.keys.push_back({r.f32(k), k + 16});
+                    k += 16 + 4 * size_t(v);
+                    if (!header(k, 64, m) || k + 12 + 12 * size_t(m) + 24 > r.to) {
+                        runs = false;
+                        break;
+                    }
+                    k += 12 + 12 * size_t(m) + 24;
+                }
+            }
+            if (runs)
+                return clips;
+        }
+        return {};
+    }
+    return {};
+}
+
+// Fills the frames of a mesh's own animations from its named clips: each
+// frame at its time in the clip (30 a second), from the clip's vertex keys
+// (between two, blended) or else from its bones. Returns the frames filled.
+int framesFromClips(const std::vector<uint8_t>& data, size_t base, size_t from, size_t to, Mesh& mesh) {
+    const BoneReader r{data, base, from, to};
+    const std::vector<NamedClip> clips = findClipTable(r, size_t(mesh.frameVerts));
+    if (clips.empty())
+        return 0;
+    std::vector<BoneRecord> bones;
+    BoneReader(r).all(bones);
+    bool bonesUsable = !bones.empty();
+    for (const BoneRecord& b : bones)
+        bonesUsable = bonesUsable && b.clipList.size() == clips.size();
+    const BonePoser poser{r, bones};
+    const auto frame = size_t(mesh.frameVerts);
+    int filled = 0;
+    std::vector<Vec3f> pose(frame);
+    for (const MeshAnimSeq& a : mesh.anims) {
+        if (a.startFrame < 0 || a.numFrames <= 0 || a.startFrame + a.numFrames > mesh.animFrames)
+            continue;
+        size_t c = 0;
+        while (c < clips.size() && fs::toLower(clips[c].name) != fs::toLower(a.name))
+            ++c;
+        if (c == clips.size())
+            continue;
+        const NamedClip& clip = clips[c];
+        for (int f = 0; f < a.numFrames; ++f) {
+            const float t = float(f) / 30;
+            Vec3f* out = mesh.verts.data() + size_t(a.startFrame + f) * frame;
+            if (!clip.keys.empty()) {
+                size_t i = 0;
+                while (i + 1 < clip.keys.size() && clip.keys[i + 1].first <= t)
+                    ++i;
+                float blend = 0;
+                if (i + 1 < clip.keys.size() && clip.keys[i + 1].first > clip.keys[i].first && t > clip.keys[i].first)
+                    blend = std::min(1.0f, (t - clip.keys[i].first) / (clip.keys[i + 1].first - clip.keys[i].first));
+                for (size_t v = 0; v < frame; ++v) {
+                    Vec3f p = unpackVertex(r.u32(clip.keys[i].second + 4 * v));
+                    if (blend > 0) {
+                        const Vec3f q = unpackVertex(r.u32(clip.keys[i + 1].second + 4 * v));
+                        for (size_t k = 0; k < 3; ++k)
+                            p[k] += blend * (q[k] - p[k]);
+                    }
+                    out[v] = p;
+                }
+                ++filled;
+            } else if (bonesUsable &&
+                       poseVertices(r, bones, frame, mesh.scale, mesh.origin, pose.data(),
+                                    [&](size_t i) { return poser.local(bones[i], c, t); }) * 10 >= frame * 9) {
+                std::copy(pose.begin(), pose.end(), out);
+                ++filled;
+            }
+        }
+    }
+    return filled;
+}
+
 // The turn most of The Fallen's imported meshes' float copies show
 // (159 of 180 that have one); for those without one to fit.
 constexpr std::array<Vec3f, 3> kUsualImportAxes{Vec3f{1, 0, 0}, Vec3f{0, 0, 1}, Vec3f{0, -1, 0}};
@@ -873,6 +1018,8 @@ Error readMesh(const Package& package, int index, Mesh& out) {
     for (int32_t& t : out.textures)
         t = r.index();
     const size_t afterTextures = r.pos();
+    size_t blockEnd = 0;     // where an imported-model block ends
+    bool vertexKeys = false; // its vertices were the clips' keys, not every frame
 
     // The standard layout: the tail right here, the vertices read above.
     MeshTail tail;
@@ -889,6 +1036,7 @@ Error readMesh(const Package& package, int index, Mesh& out) {
         // from the end back (the block can be large; the tail is near the end).
         const size_t end = r.end();
         bool found = false;
+        blockEnd = 0;
         for (size_t at = end; at-- > afterTextures && !found;) {
             Reader c = r;
             c.seek(at);
@@ -897,9 +1045,18 @@ Error readMesh(const Package& package, int index, Mesh& out) {
                 continue;
             std::vector<Vec3f> verts;
             int keys = 0, bones = 0;
-            bool animated = false;
+            bool animated = false, perFrame = false;
             const size_t base = size_t(package.exports()[size_t(index)].serialOffset);
-            if (!findVertexBlock(data, base, afterTextures, at, candidate, verts, keys) &&
+            // The standard vertices, and a few bytes before the standard
+            // fields (Shared.u's glass and debris fragments have an i32 0).
+            if (!out.verts.empty() && out.verts.size() == size_t(candidate.frameVerts) * size_t(candidate.animFrames)) {
+                tail = std::move(candidate);
+                out.importBlock = at - afterTextures;
+                blockEnd = at;
+                found = true;
+                break;
+            }
+            if (!findVertexBlock(data, base, afterTextures, at, candidate, verts, keys, perFrame) &&
                 (bones = poseFromBones(data, base, afterTextures, at, candidate, verts, animated)) == 0)
                 continue;
             // Keyframed (some frames of vertices only): its bones, if they
@@ -919,8 +1076,10 @@ Error readMesh(const Package& package, int index, Mesh& out) {
             tail = std::move(candidate);
             out.verts = std::move(verts);
             out.keyFrames = keys;
+            vertexKeys = perFrame && bones == 0;
             out.vertexBytes = 4;
             out.importBlock = at - afterTextures;
+            blockEnd = at;
             out.importAxes = importAxes(data, size_t(package.exports()[size_t(index)].serialOffset), afterTextures, at,
                                         out, tail);
             if (!out.importAxes) {
@@ -952,6 +1111,17 @@ Error readMesh(const Package& package, int index, Mesh& out) {
         for (int32_t v : t.vertex)
             if (v < 0 || v >= out.frameVerts)
                 return fail("a triangle's vertex is out of range");
+    // The Fallen's clips by name: every frame of the mesh's own animations
+    // from their vertex keys or bones (better than what's above where the
+    // vertices were only some keyframes).
+    if (blockEnd && (out.keyFrames || out.bones || vertexKeys || std::getenv("RELUVA_CLIPS_ALWAYS"))) {
+        const size_t base = size_t(package.exports()[size_t(index)].serialOffset);
+        if (const int filled = framesFromClips(data, base, afterTextures, blockEnd, out); filled > 0) {
+            out.framesFromClips = filled;
+            out.keyFrames = 0;
+        }
+    }
+
     // Animations whose frames run past the mesh's are left out (The
     // Fallen's JadziaDax has a test one like that), not the whole mesh.
     // The Fallen's characters list many of those: another mesh's.
