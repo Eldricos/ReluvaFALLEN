@@ -86,6 +86,31 @@ For each sample, its position on the surface's plane, then:
 The 128 brightness unit, the linear falloff and the cone's angle are the
 first things to tune against the original.
 
+## Compared with the original (TrainingRoom, October 2026)
+
+A screenshot of the original and one of the Maps page from about the same
+place, sampled over matching areas (0-255, averaged):
+
+| Area | Reluva | Original |
+|---|---|---|
+| Light strip (unlit surface) | 133 182 190 | 99 124 148 |
+| Ceiling light panel (unlit) | 126 149 106 | 84 107 78 |
+| Upper cabinets | 52 72 82 | 27 33 41 |
+| Wall beside the door | 38 51 53 | 22 27 30 |
+| Floor | 25 35 42 | 13 16 20 |
+| Ceiling arch | 25 33 35 | 7 8 11 |
+
+Even the unlit surfaces, which lighting doesn't touch, were brighter, and
+the darker the area the larger the gap. One curve fits every row:
+original = 0.85 x Reluva^1.31 (colours 0-1). So most of the difference
+was in how the finished frame is shown (the original's gamma or
+brightness setting), not in the lighting. The Maps page now multiplies
+colours by 0.88 and raises the frame to the power 1.3 (`-`/`=` change the
+power), which gives that curve. With it matched, the lighting itself
+(falloff, brightness unit) is compared again. Rough: the two cameras
+weren't in exactly the same place, and the original's brightness setting
+for that shot isn't known.
+
 ## Drawing
 
 Lightmaps are packed into 1024x1024 pages, each with a one-texel border

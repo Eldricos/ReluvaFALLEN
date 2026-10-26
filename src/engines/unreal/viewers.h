@@ -12,7 +12,8 @@
 //           go faster, R back to the player start, I to show or hide the
 //           info, T for textures or plain shading, L for the level's
 //           lightmaps or shading by facing, [ and ] to dim or brighten
-//           the lightmaps (to compare with the original).
+//           the lightmaps, - and = to change the display's contrast (its
+//           gamma; to compare with the original).
 // Textures: Left/Right step through a package's textures, PageUp/PageDown
 //           pick the package (.utx, then maps' own, then .u).
 // Sounds:   Left/Right step, PageUp/PageDown pick the package, Space plays.
@@ -182,6 +183,10 @@ private:
     bool textured_ = true;
     bool lightmaps_ = true;  // drawn with the lightmaps (else shaded by facing)
     float lightScale_ = 1;   // the lightmaps' brightness, [ and ]
+    // How the finished frame is shown: colours times kExposure, then
+    // raised to displayGamma_ (- and =). Fitted to the original's
+    // screenshots: see lighting.md.
+    float displayGamma_ = 1.3f;
     bool hasLightmaps_ = false;
 
     // Fly camera, in the renderer's world: Unreal's axes with Y negated

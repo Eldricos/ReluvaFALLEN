@@ -31,6 +31,9 @@ constexpr int kFrameH = 720;
 constexpr float kPi = 3.14159265358979f;
 constexpr float kSpeed = 400;    // units per second
 constexpr float kEyeHeight = 27; // above a PlayerStart's location, roughly a player's eyes
+// The frame's colours are multiplied by this before the display gamma; with
+// a gamma of 1.3 it matches the original's screenshots (lighting.md).
+constexpr float kExposure = 0.88f;
 
 enum Held { Forward, Back, Left, Right, Up, Down, Fast };
 
@@ -310,6 +313,10 @@ void MapViewer::handleEvent(const Event& ev) {
             lightScale_ = std::max(0.1f, lightScale_ / 1.25f);
         else if (ev.key == ']')
             lightScale_ = std::min(8.0f, lightScale_ * 1.25f);
+        else if (ev.key == '-')
+            displayGamma_ = std::max(0.5f, displayGamma_ - 0.05f);
+        else if (ev.key == '=')
+            displayGamma_ = std::min(2.5f, displayGamma_ + 0.05f);
     } else if (ev.type == EventType::MouseDown && ev.button == MouseButton::Left) {
         dragging_ = true;
         lastX_ = ev.mouseX;
@@ -348,6 +355,8 @@ void MapViewer::update(uint64_t nowMs) {
     const float fovY = 2 * std::atan(std::tan(kPi / 4) / aspect);
     const gfx::Mat4 viewProj =
         gfx::multiply(gfx::perspective(fovY, aspect, 4, 65536), gfx::lookAlong(pos_, forward, {0, 0, 1}));
+    // The renderer raises colours to 1 / its gamma.
+    renderer_->setGamma(1 / displayGamma_);
     renderer_->beginFrame(viewProj, pos_, {20, 24, 40});
     for (const Batch& b : batches_) {
         gfx::DrawCall call;
@@ -362,6 +371,8 @@ void MapViewer::update(uint64_t nowMs) {
             call.texture = textured_ ? b.texture : 0;
             // With a lightmap the second pass lights it; else shading by facing.
             call.rgbSource = lit(b) ? gfx::ColorSource::Constant : gfx::ColorSource::Vertex;
+            if (!(b.polyFlags & polyflag::Modulated)) // those multiply what's there, so stay as they are
+                call.color = {kExposure, kExposure, kExposure, 1};
         }
         if (b.polyFlags & polyflag::Masked)
             call.state.alphaTest = gfx::AlphaTest::Ge128;
@@ -410,10 +421,11 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
     const size_t errorLine = error_.empty() ? size_t(-1) : lines.size();
     if (!error_.empty())
         lines.push_back(error_);
-    char where[160];
+    char where[200];
     // Shown in Unreal's own coordinates.
-    std::snprintf(where, sizeof where, "at %.0f %.0f %.0f, %.0f fps; lightmaps %s, brightness x%.2f", pos_[0],
-                  -pos_[1], pos_[2], fps_, !hasLightmaps_ ? "none" : lightmaps_ ? "on" : "off", lightScale_);
+    std::snprintf(where, sizeof where, "at %.0f %.0f %.0f, %.0f fps; lightmaps %s, brightness x%.2f, display gamma %.2f",
+                  pos_[0], -pos_[1], pos_[2], fps_, !hasLightmaps_ ? "none" : lightmaps_ ? "on" : "off", lightScale_,
+                  displayGamma_);
     lines.push_back(where);
     const int lh = font::kLineHeight;
     size_t widest = 0;
