@@ -1,10 +1,14 @@
 # Unreal Engine 1: meshes (Mesh, LodMesh)
 
-Status: **implemented** (`src/engines/unreal/mesh.cpp`, drawn by
-`mesh_render.cpp` in the Maps and Meshes pages), tested on meshes built by
-the unit tests. **Not yet checked on The Fallen's**: `reluva-tool
-ue-check` reads every mesh and reports any that don't read or leave bytes
-over.
+Status: **implemented** for the layout below (`src/engines/unreal/mesh.cpp`,
+drawn by `mesh_render.cpp` in the Maps and Meshes pages), tested on
+meshes built by the unit tests. **The Fallen's meshes differ**: on its
+data (`ue-check`, October 2026) none of its 455 LodMeshes and 9 Meshes
+read. Some fail with plausible frame counts read near the end
+(ARDSecurityCameraBaseMesh: 45 frames of 46 vertices) but an empty vertex
+array near the start, so the change is likely early in the layout.
+`reluva-tool ue-probe <game folder> <mesh>` maps a mesh's data (where
+its lazy arrays sit, its first and last bytes) to work it out.
 
 Sources: public community documentation of the UE1 mesh formats (as for
 [package.md](package.md)). Mesh importer settings (Scale, Origin,

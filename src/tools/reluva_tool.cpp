@@ -96,6 +96,8 @@
 //   reluva-tool ue-info <package>                  a package's header, exports by class, imports by package
 //   reluva-tool ue-exports <package> [filter]      list exports: class, path, size, offset, flags
 //   reluva-tool ue-props <package> <export>        an export's properties, and the bytes after them
+//   reluva-tool ue-probe <package | game folder> <export>  map an export's data: where lazy arrays sit, what the
+//                                                  mesh reader makes of it, its first and last bytes
 //   reluva-tool ue-extract <game folder> <package> <export>  write a texture as .tga, a sound or music
 //                                                  as the file it holds
 
@@ -4484,6 +4486,97 @@ int cmdUeProps(int argc, char** argv) {
     return 0;
 }
 
+// Maps an export's data after its properties: where lazy arrays sit (each
+// starts with the file offset just past it, so it can be told anywhere),
+// what the mesh reader makes of it, and the bytes at its start and end.
+int cmdUeProbe(int argc, char** argv) {
+    if (argc != 4) {
+        std::fprintf(stderr, "usage: reluva-tool ue-probe <package | game folder> <export>\n");
+        return 2;
+    }
+    using namespace reluva::unreal;
+    // A package file, or a game folder whose packages are searched for the export.
+    Package own;
+    PackageSet set;
+    const Package* found = nullptr;
+    int index = -1;
+    if (std::filesystem::is_directory(argv[2])) {
+        if (reluva::Error err = set.open(argv[2], "DS9.ini")) {
+            std::fprintf(stderr, "%s\n", err.message.c_str());
+            return 1;
+        }
+        for (const std::string& name : set.names())
+            if (const Package* p = set.get(name); p && (index = findUnrealExport(*p, argv[3])) >= 0) {
+                found = p;
+                break;
+            }
+    } else if (openUnrealPackage(argv[2], own)) {
+        found = &own;
+        index = findUnrealExport(own, argv[3]);
+    }
+    if (!found || index < 0) {
+        std::fprintf(stderr, "No export %s\n", argv[3]);
+        return 1;
+    }
+    const Package& pkg = *found;
+    std::printf("In %s\n", pkg.file().string().c_str());
+    std::vector<uint8_t> data;
+    if (reluva::Error err = pkg.readExport(index, data)) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    const Export& e = pkg.exports()[size_t(index)];
+    const size_t base = size_t(e.serialOffset), end = base + data.size();
+    Reader r(data, base);
+    PropertyList props;
+    if (reluva::Error err = beginObject(pkg, index, r, props))
+        std::printf("properties: %s\n", err.message.c_str());
+    const size_t start = r.pos();
+    std::printf("%d: %s %s, version %d, %zu bytes at %zu; %zu properties, then %zu bytes from file offset %zu "
+                "(+0 below)\n",
+                index, pkg.className(index + 1).c_str(), pkg.path(index + 1).c_str(), pkg.version(), data.size(), base,
+                props.items.size(), end - start, start);
+    for (const Property& p : props.items)
+        std::printf("  %s (%s) = %s\n", p.name.c_str(), p.structName.empty() ? typeName(p.type) : p.structName.c_str(),
+                    describe(pkg, p).c_str());
+
+    std::printf("\nLazy arrays (i32 end offset, compact count, elements):\n");
+    for (size_t p = start; p + 5 <= end; ++p) {
+        Reader a(data.data() + (p - base), end - p, p);
+        const size_t stop = a.u32();
+        const int32_t n = a.index();
+        const size_t first = a.pos();
+        if (!a.ok() || n < 0 || stop < first || stop > end)
+            continue;
+        if (n == 0 ? stop != first : ((stop - first) % size_t(n) != 0 || (stop - first) / size_t(n) > 64 || stop == first))
+            continue;
+        std::printf("  +%zu: %d x %zu bytes, ends at +%zu\n", p - start, n, n ? (stop - first) / size_t(n) : 0,
+                    stop - start);
+    }
+
+    if (isMeshClass(pkg.className(index + 1))) {
+        Mesh m;
+        const reluva::Error err = readMesh(pkg, index, m);
+        std::printf("\nMesh reader: %s\n", err ? err.message.c_str() : "reads");
+    }
+
+    auto dump = [&](size_t from, size_t to) {
+        for (size_t row = from; row < to; row += 16) {
+            std::printf("  +%-6zu %08zx ", row - start, row);
+            for (size_t k = row; k < row + 16 && k < to; ++k)
+                std::printf(" %02x", data[k - base]);
+            std::printf("\n");
+        }
+    };
+    std::printf("\nThe first bytes after the properties:\n");
+    dump(start, std::min(end, start + 512));
+    if (end > start + 512) {
+        std::printf("\nThe last bytes:\n");
+        dump(std::max(start + 512, end - 256), end);
+    }
+    return 0;
+}
+
 int cmdUeExtract(int argc, char** argv) {
     if (argc != 5) {
         std::fprintf(stderr, "usage: reluva-tool ue-extract <game folder> <package name> <export> (writes <export>.tga or .wav...)\n");
@@ -4809,6 +4902,8 @@ int main(int argc, char** argv) {
         return cmdUeExports(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-props") == 0)
         return cmdUeProps(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-probe") == 0)
+        return cmdUeProbe(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-extract") == 0)
         return cmdUeExtract(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-check") == 0)
@@ -4866,6 +4961,7 @@ int main(int argc, char** argv) {
                  "  reluva-tool ue-exports <package> [filter]\n"
                  "  reluva-tool ue-props <package> <export>\n"
                  "  reluva-tool ue-extract <game folder> <package name> <export>\n"
+                 "  reluva-tool ue-probe <package | game folder> <export>\n"
 #endif
                  "");
     return 2;
