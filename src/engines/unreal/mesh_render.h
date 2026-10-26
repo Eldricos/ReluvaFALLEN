@@ -33,14 +33,14 @@ struct GpuMesh {
 };
 
 // What's done with an imported-model mesh's turn (Mesh::importAxes):
-// nothing (the packed vertices as stored, as the game draws them, it
-// seems: the float copy looks to be the modelling tool's Y-up space),
-// the turn onto the float copy, or the opposite turn. For comparing.
+// nothing (the packed vertices as stored), the turn onto the float copy,
+// or the opposite turn. The opposite is what stands The Fallen's chairs
+// and people up (CM05_Kira); the others are kept for comparing.
 enum class MeshTurn { None, FloatCopy, Reverse };
 const char* meshTurnName(MeshTurn turn);
 
 // Uploads a mesh; positions are placed by its Scale, Origin and RotOrigin.
-Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn = MeshTurn::None);
+Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn = MeshTurn::Reverse);
 
 // Where an actor puts its mesh: Location + PrePivot, turned by Rotation,
 // scaled by DrawScale; then into the renderer's axes (Y negated).

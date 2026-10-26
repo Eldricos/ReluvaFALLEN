@@ -4389,14 +4389,13 @@ int findUnrealExport(const reluva::unreal::Package& pkg, const std::string& whic
     if (!which.empty() && std::all_of(which.begin(), which.end(), [](char c) { return std::isdigit(uint8_t(c)); }))
         return std::atoi(which.c_str()) < int(pkg.exports().size()) ? std::atoi(which.c_str()) : -1;
     const std::string wanted = reluva::fs::toLower(which);
-    for (size_t i = 0; i < pkg.exports().size(); ++i)
-        if (reluva::fs::toLower(pkg.path(int32_t(i) + 1)) == wanted)
-            return int(i);
-    // By name: a class and its mesh are often named alike (ARD_AmmoCrate),
-    // so a class is taken only if nothing else has the name.
+    // By path or name: a class and its mesh are often named alike, even in
+    // one package (ARD_AmmoCrate), so a class is taken only if nothing
+    // else has the name.
     int classIndex = -1;
     for (size_t i = 0; i < pkg.exports().size(); ++i) {
-        if (reluva::fs::toLower(pkg.objectName(int32_t(i) + 1)) != wanted)
+        if (reluva::fs::toLower(pkg.path(int32_t(i) + 1)) != wanted &&
+            reluva::fs::toLower(pkg.objectName(int32_t(i) + 1)) != wanted)
             continue;
         if (reluva::fs::toLower(pkg.className(int32_t(i) + 1)) != "class")
             return int(i);
@@ -4710,6 +4709,8 @@ int cmdUeCheck(int argc, char** argv) {
     };
     std::map<std::string, Tally> tallies;
     std::map<std::string, std::pair<int, std::string>> meshTurns; // turn: how many, an example
+    std::map<std::string, bool> meshReads;     // placed actors' meshes: whether they read
+    std::map<std::string, int> unreadPlaced;   // those that don't: how many actors use them
     auto record = [&](const std::string& what, const reluva::Error& err) {
         Tally& t = tallies[what];
         if (!err) {
@@ -4830,9 +4831,25 @@ int cmdUeCheck(int argc, char** argv) {
                             moverErrors.size(), skyAt ? "yes" : "none");
                 tallies["movers"].ok += int(movers.size());
                 MeshActorStats meshStats;
-                findMeshActors(set, *pkg, classDefaults, &meshStats);
-                std::printf("    mesh actors: %d (%d with the mesh from class defaults), %d hidden, %d unreadable\n",
-                            meshStats.meshes, meshStats.fromDefaults, meshStats.hidden, meshStats.unreadable);
+                // Placed actors whose mesh doesn't read: which meshes matter most.
+                int meshless = 0;
+                for (const MeshActor& a : findMeshActors(set, *pkg, classDefaults, &meshStats)) {
+                    if (!a.mesh)
+                        continue;
+                    const std::string mesh = a.mesh.package->path(a.mesh.exportIndex + 1);
+                    auto it = meshReads.find(mesh);
+                    if (it == meshReads.end()) {
+                        Mesh m;
+                        it = meshReads.emplace(mesh, !readMesh(*a.mesh.package, a.mesh.exportIndex, m)).first;
+                    }
+                    if (!it->second) {
+                        ++meshless;
+                        ++unreadPlaced[mesh];
+                    }
+                }
+                std::printf("    mesh actors: %d (%d with the mesh from class defaults), %d hidden, %d unreadable, "
+                            "%d whose mesh doesn't read\n",
+                            meshStats.meshes, meshStats.fromDefaults, meshStats.hidden, meshStats.unreadable, meshless);
                 tallies["mesh actors"].ok += meshStats.meshes;
                 for (const std::string& e : moverErrors)
                     record("movers", reluva::Error::fail(name + ": " + e));
@@ -4848,6 +4865,16 @@ int cmdUeCheck(int argc, char** argv) {
                     lightTotals[1], lightTotals[2], lightTotals[3]);
     std::printf("class defaults (for placed actors' classes and their parents): found %d, not found %d\n",
                 classDefaults.found(), classDefaults.missing());
+    if (!unreadPlaced.empty()) {
+        std::vector<std::pair<int, std::string>> byUse;
+        for (const auto& [mesh, n] : unreadPlaced)
+            byUse.push_back({n, mesh});
+        std::sort(byUse.rbegin(), byUse.rend());
+        std::printf("meshes placed in levels that don't read, most used first:");
+        for (size_t k = 0; k < byUse.size() && k < 15; ++k)
+            std::printf("%s %s (%d)", k ? "," : "", byUse[k].second.c_str(), byUse[k].first);
+        std::printf("%s\n", byUse.size() > 15 ? (", and " + std::to_string(byUse.size() - 15) + " more").c_str() : "");
+    }
     for (const auto& [turn, t] : meshTurns)
         std::printf("meshes with an imported-model block, float copy %s: %d (e.g. %s)\n", turn.c_str(), t.first,
                     t.second.c_str());

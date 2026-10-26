@@ -59,14 +59,15 @@ float copy: of the 24 axis-aligned turns, the one taking its first frame
 float array, if within 5% of its size on average. On KiraCellLight it
 finds exactly the turn above.
 
-Applying that turn was tried first, and it was wrong: The Fallen's chairs
-(CM05_Kira) came out upside down and its people lying flat. The packed
-vertices are as the game draws them (with RotOrigin, 0 in those seen so
-far); the float copy has up as its y, the way of modelling tools that
-work Y-up, which also makes KiraCellLight the flat ceiling panel its
-packed vertices show. So the turn is found and reported (`ue-check`
-tallies the turns; the Meshes page shows a mesh's) but not applied; the
-viewers' **M** key applies it, or its opposite, for comparing.
+Comparing in CM05_Kira (the viewers' **M** key steps through them): as
+stored, the chairs lie on their backs; turned onto the float copy, they
+and the people are upside down or flat; turned the **opposite** way (the
+transpose), all stand as in the game. So that's what's drawn. Both are
+compared about their middles, since the float copy can also be moved.
+
+`ue-check` on The Fallen (October 2026) tallied the turns found: 159
+meshes the KiraCellLight one, 8 none, a few each of five others, and 175
+where none fitted (before the middles were compared).
 
 **`ue-check` on The Fallen** after this layout was added (October 2026):
 306 of 455 LodMeshes and 4 of 9 Meshes read. JadziaDax failed only for an

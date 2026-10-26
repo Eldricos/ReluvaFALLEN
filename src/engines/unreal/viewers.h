@@ -56,7 +56,7 @@ struct ViewerContext {
     const std::vector<std::string>& warnings;
     audio::Mixer* mixer = nullptr; // none if the system has no audio
     // How imported-model meshes are turned, on both 3D pages (M changes it).
-    MeshTurn meshTurn = MeshTurn::None;
+    MeshTurn meshTurn = MeshTurn::Reverse;
 };
 
 class Page {

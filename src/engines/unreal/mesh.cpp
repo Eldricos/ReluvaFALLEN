@@ -210,7 +210,8 @@ bool findVertexBlock(const std::vector<uint8_t>& data, size_t base, size_t from,
 // Which way the vertices go: the block keeps them a second time as
 // floats, placed (`(n, n, 128)` and n x 3 floats, n = FrameVerts). Of the
 // 24 axis-aligned turns, the one that takes the first frame's packed
-// vertices (by Scale and Origin) closest onto those, if close.
+// vertices (by Scale and Origin) closest onto those, if close; both
+// about their middles, as the float copy can be moved too.
 std::optional<std::array<Vec3f, 3>> importAxes(const std::vector<uint8_t>& data, size_t base, size_t from,
                                                size_t to, const Mesh& mesh, const MeshTail& t) {
     const auto n = uint32_t(t.frameVerts);
@@ -235,6 +236,19 @@ std::optional<std::array<Vec3f, 3>> importAxes(const std::vector<uint8_t>& data,
     }
     if (extent <= 0)
         return std::nullopt;
+    // Compared about their middles: the float copy can be moved as well.
+    Vec3f mid{};
+    for (const Vec3f& v : scaled)
+        for (size_t a = 0; a < 3; ++a)
+            mid[a] += v[a] / float(n);
+    extent = 0;
+    for (Vec3f& v : scaled)
+        for (size_t a = 0; a < 3; ++a) {
+            v[a] -= mid[a];
+            extent = std::max(extent, std::fabs(v[a]));
+        }
+    if (extent <= 0)
+        return std::nullopt;
     // The 24 turns: each output axis takes an input axis, signed, with
     // determinant +1.
     std::vector<std::array<Vec3f, 3>> turns;
@@ -255,11 +269,15 @@ std::optional<std::array<Vec3f, 3>> importAxes(const std::vector<uint8_t>& data,
     for (size_t at = from; at + 12 + size_t(n) * 12 <= to; ++at) {
         if (u32At(at) != n || u32At(at + 4) != n || u32At(at + 8) != 128)
             continue;
+        Vec3f floatMid{};
+        for (uint32_t k = 0; k < n; ++k)
+            for (size_t a = 0; a < 3; ++a)
+                floatMid[a] += f32At(at + 12 + 12 * size_t(k) + 4 * a) / float(n);
         for (const auto& m : turns) {
             float err = 0;
             for (uint32_t k = 0; k < n && std::isfinite(err); ++k)
                 for (size_t row = 0; row < 3; ++row) {
-                    const float want = f32At(at + 12 + 12 * size_t(k) + 4 * row);
+                    const float want = f32At(at + 12 + 12 * size_t(k) + 4 * row) - floatMid[row];
                     const float got = m[row][0] * scaled[k][0] + m[row][1] * scaled[k][1] + m[row][2] * scaled[k][2];
                     err += (want - got) * (want - got);
                 }
