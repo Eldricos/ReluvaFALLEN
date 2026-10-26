@@ -129,6 +129,9 @@ void MeshViewer::show() {
                       ctx_.meshYawQuarters * 90);
         info_.push_back(line);
     }
+    if (mesh_.bones)
+        info_.push_back("posed from " + std::to_string(mesh_.bones) +
+                        " bones: their reference pose (their animation keys not read yet)");
     if (mesh_.keyFrames)
         info_.push_back(std::to_string(mesh_.keyFrames) + " of its " + std::to_string(mesh_.animFrames) +
                         " frames of vertices found (keyframes not worked out yet): the first is shown");

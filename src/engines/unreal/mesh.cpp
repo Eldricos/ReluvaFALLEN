@@ -305,6 +305,103 @@ std::optional<std::array<Vec3f, 3>> importAxes(const std::vector<uint8_t>& data,
     return best;
 }
 
+// Meshes built on a skeleton (The Fallen's characters) keep no packed
+// vertices: the block has a record per bone instead (see mesh.md):
+//   (n, n, 8) and n i32s; (k, k, 128) and k float xyz, the bone's
+//   vertices in its own space; (k, k, 128) and k float weights; (k, k,
+//   128) and k i32s, which of the frame's vertices each is; 12 floats, a
+//   4x3 offset; an i32; 12 floats, the bone's 4x3 placement (rows: X, Y,
+//   Z axes, then the origin); then its animation keys, not read yet.
+// A vertex is the weighted sum of where its bones put it (p * offset *
+// placement, as row vectors: KiraCellLight's one bone, "root", turns its
+// float vertices into exactly its packed ones so). That pose, by Scale
+// and Origin back into packed units, for every frame. Returns the bones.
+int poseFromBones(const std::vector<uint8_t>& data, size_t base, size_t from, size_t to, const MeshTail& t,
+                  std::vector<Vec3f>& out) {
+    auto u32At = [&](size_t at) {
+        const uint8_t* p = data.data() + (at - base);
+        return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
+    };
+    auto f32At = [&](size_t at) {
+        const uint32_t bits = u32At(at);
+        float f;
+        std::memcpy(&f, &bits, 4);
+        return f;
+    };
+    auto header = [&](size_t at, uint32_t flags, uint32_t& n) {
+        if (at + 12 > to)
+            return false;
+        n = u32At(at);
+        return u32At(at + 4) == n && u32At(at + 8) == flags;
+    };
+    const auto frame = size_t(t.frameVerts);
+    std::vector<Vec3f> sum(frame, Vec3f{});
+    std::vector<float> weight(frame, 0);
+    int bones = 0;
+    for (size_t at = from; at + 12 <= to; ++at) {
+        uint32_t n = 0, k = 0, k2 = 0, k3 = 0;
+        if (!header(at, 8, n) || n == 0 || n > 64)
+            continue;
+        size_t p = at + 12 + 4 * size_t(n);
+        if (!header(p, 128, k) || k > frame)
+            continue;
+        const size_t positions = p + 12;
+        p = positions + 12 * size_t(k);
+        if (!header(p, 128, k2) || k2 != k)
+            continue;
+        const size_t weights = p + 12;
+        p = weights + 4 * size_t(k);
+        if (!header(p, 128, k3) || k3 != k)
+            continue;
+        const size_t indices = p + 12;
+        p = indices + 4 * size_t(k);
+        if (p + 100 > to)
+            continue;
+        float offset[12], place[12];
+        bool ok = true;
+        for (size_t c = 0; c < 12; ++c) {
+            offset[c] = f32At(p + 4 * c);
+            place[c] = f32At(p + 52 + 4 * c);
+            ok = ok && sane(offset[c]) && sane(place[c]);
+        }
+        for (uint32_t j = 0; j < k && ok; ++j)
+            ok = u32At(indices + 4 * size_t(j)) < frame;
+        if (!ok)
+            continue;
+        auto times = [](const float* m, const Vec3f& v) {
+            return Vec3f{v[0] * m[0] + v[1] * m[3] + v[2] * m[6] + m[9], v[0] * m[1] + v[1] * m[4] + v[2] * m[7] + m[10],
+                         v[0] * m[2] + v[1] * m[5] + v[2] * m[8] + m[11]};
+        };
+        for (uint32_t j = 0; j < k; ++j) {
+            const Vec3f local{f32At(positions + 12 * size_t(j)), f32At(positions + 12 * size_t(j) + 4),
+                              f32At(positions + 12 * size_t(j) + 8)};
+            const float w = f32At(weights + 4 * size_t(j));
+            if (!sane(w) || !sane(local[0]) || !sane(local[1]) || !sane(local[2]))
+                continue;
+            const Vec3f placed = times(place, times(offset, local));
+            const size_t v = u32At(indices + 4 * size_t(j));
+            for (size_t a = 0; a < 3; ++a)
+                sum[v][a] += w * placed[a];
+            weight[v] += w;
+        }
+        ++bones;
+        at = p + 99;
+    }
+    // Most vertices have to be placed, or this isn't a skeleton.
+    size_t placed = 0;
+    for (float w : weight)
+        placed += w > 0;
+    if (bones == 0 || placed * 10 < frame * 9)
+        return 0;
+    out.assign(frame * size_t(t.animFrames), Vec3f{});
+    for (size_t v = 0; v < frame; ++v)
+        for (size_t a = 0; a < 3; ++a)
+            out[v][a] = (weight[v] > 0 ? sum[v][a] / weight[v] : 0) / t.scale[a] + t.origin[a];
+    for (size_t f = 1; f < size_t(t.animFrames); ++f)
+        std::copy(out.begin(), out.begin() + std::ptrdiff_t(frame), out.begin() + std::ptrdiff_t(f * frame));
+    return bones;
+}
+
 // The turn most of The Fallen's imported meshes' float copies show
 // (159 of 180 that have one); for those without one to fit.
 constexpr std::array<Vec3f, 3> kUsualImportAxes{Vec3f{1, 0, 0}, Vec3f{0, 0, 1}, Vec3f{0, -1, 0}};
@@ -439,10 +536,12 @@ Error readMesh(const Package& package, int index, Mesh& out) {
             if (readTail(c, ver, out.lod, candidate) || c.remaining() != 0 || !plausible(candidate, out.lod))
                 continue;
             std::vector<Vec3f> verts;
-            int keys = 0;
-            if (!findVertexBlock(data, size_t(package.exports()[size_t(index)].serialOffset), afterTextures, at,
-                                 candidate, verts, keys))
+            int keys = 0, bones = 0;
+            const size_t base = size_t(package.exports()[size_t(index)].serialOffset);
+            if (!findVertexBlock(data, base, afterTextures, at, candidate, verts, keys) &&
+                (bones = poseFromBones(data, base, afterTextures, at, candidate, verts)) == 0)
                 continue;
+            out.bones = bones;
             tail = std::move(candidate);
             out.verts = std::move(verts);
             out.keyFrames = keys;
@@ -452,7 +551,7 @@ Error readMesh(const Package& package, int index, Mesh& out) {
                                         out, tail);
             if (!out.importAxes) {
                 out.importAxes = kUsualImportAxes;
-                out.importAxesGuessed = true;
+                out.importAxesGuessed = !bones;
             }
             found = true;
         }

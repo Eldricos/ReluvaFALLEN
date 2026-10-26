@@ -4590,6 +4590,8 @@ int cmdUeProbe(int argc, char** argv) {
         if (!err && m.keyFrames)
             std::printf("  %d of its %d frames of vertices found (the first is shown for all)\n", m.keyFrames,
                         m.animFrames);
+        if (!err && m.bones)
+            std::printf("  posed from %d bones (their reference pose, for all frames)\n", m.bones);
         if (!range)
             for (const std::string& l : describeMeshLayout(pkg, index))
                 std::printf("%s\n", l.c_str());
@@ -4797,6 +4799,8 @@ int cmdUeCheck(int argc, char** argv) {
                         example = pkg->path(int32_t(i) + 1);
                     if (m.keyFrames)
                         ++tallies["meshes keyframed (first frame shown)"].ok;
+                    if (m.bones)
+                        ++tallies["meshes posed from bones (reference pose shown)"].ok;
                 }
             }
         }

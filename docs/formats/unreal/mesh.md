@@ -99,11 +99,27 @@ array either; they're presumably the block's triangle and corner arrays
 (with texture coordinates somewhere in it), not read yet. The Fallen has
 9 such meshes (Female, Male...).
 
-**Meshes built from parts** (BajFanatic, GrigSentryDrone, Obsidian_Snow:
-the most placed of those that don't read yet). No `(FrameVerts,
-FrameVerts, 1)` packed vertices at all; instead a run of records, one per
-part, each with a `(k, k, 128)` array of k float xyz positions (12 bytes
-each), another of k floats (all 1.0: weights), and a run of `(1, 1, 32)`
-arrays, keys of a track by the look of them. The parts' k add up to about
-FrameVerts (BajFanatic: 392). Still to be worked out: whether the
-positions are in the part's own space, and the keys' layout.
+**Meshes built on a skeleton** (BajFanatic, GrigSentryDrone, Obsidian_Snow
+and the other characters that keep no packed vertices). The block holds a
+record per bone (names like `root`, `Bip01_Pelvis`, `Bip01_Spine`), and
+before them the mesh's name and its textures' file names:
+
+| Field | |
+|---|---|
+| i32 4, u16 length and the bone's name | |
+| `(n, n, 8)` and n i32 | (0, 1) seen; not used |
+| `(k, k, 128)` and k float xyz | the bone's vertices, in its own space |
+| `(k, k, 128)` and k float | their weights (a vertex shared by bones has some under 1) |
+| `(k, k, 128)` and k i32 | which of the frame's vertices each is |
+| 12 floats | a 4x3 offset (identity so far) |
+| i32 | 7 |
+| 12 floats | the bone's 4x3 placement: rows X, Y, Z, then the origin |
+| i32, then keys | the bone's animation (`(m, m, 1)`, `(1, 1, 32)` records...), not read yet |
+
+A vertex is the weighted sum of `p * offset * placement` (row vectors) over
+its bones, in the same units as the packed vertices after Scale and Origin.
+Checked on KiraCellLight, which has one bone, `root`, holding what was
+taken for a float copy: posed so, its vertices are its packed ones to
+within their rounding, and its placement is the turn that was fitted (so
+the "float copy" turns are bones' placements). Characters are drawn in
+that reference pose, with the usual turn, until the keys are read.
