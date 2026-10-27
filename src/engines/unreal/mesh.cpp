@@ -1956,6 +1956,17 @@ bool LayeredPoser::hasBone(std::string_view name) const {
     return false;
 }
 
+bool LayeredPoser::skeleton(std::string_view base, float fraction, const std::vector<Layer>& layers,
+                            std::vector<std::array<float, 12>>& worlds, const Adjust* adjust) const {
+    std::vector<Mat43> local;
+    if (!impl->locals(base, fraction, layers, local, adjust))
+        return false;
+    worlds = impl->worlds(local);
+    return true;
+}
+
+int LayeredPoser::boneIndex(std::string_view name) const { return impl->indexOf(name); }
+
 bool LayeredPoser::boneInSkeleton(std::string_view base, float fraction, const std::vector<Layer>& layers,
                                   std::string_view name, Vec3f& origin, std::array<Vec3f, 3>& axes,
                                   const Adjust* adjust) const {

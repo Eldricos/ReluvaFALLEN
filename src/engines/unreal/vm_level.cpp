@@ -150,6 +150,7 @@ Error ScriptLevel::load() {
             v->o = levelObject_;
     for (VmObject* a : actors_)
         init(a);
+    loadPaths();
     return Error::success();
 }
 
@@ -360,6 +361,7 @@ void ScriptLevel::tick(float seconds) {
     }
     // What's attached (C3DAttach) goes where its holder now is.
     placeAttached();
+    tickDialog(seconds);
     ++ticks_;
     actors_.erase(std::remove_if(actors_.begin(), actors_.end(), [](VmObject* a) { return a->deleted; }),
                   actors_.end());
@@ -558,6 +560,8 @@ void registerEngineNatives(Vm& vm) {
     registerSplineNatives(vm);
     registerAnimationNatives(vm);
     registerAttachNatives(vm);
+    registerPathNatives(vm);
+    registerDialogNatives(vm);
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     auto B = [](bool v) { return Value::boolValue(v); };
 

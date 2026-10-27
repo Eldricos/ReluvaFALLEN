@@ -7,6 +7,7 @@
 #include "common/audio/wav.h"
 #include "data/tone440_mp3.h"
 #include "engines/registry.h"
+#include "engines/unreal/dialog_table.h"
 #include "engines/unreal/actors.h"
 #include "engines/unreal/class_defaults.h"
 #include "engines/unreal/games.h"
@@ -1552,6 +1553,31 @@ static void testAnimationPose() {
     CHECK(p.frame == 2 && p.next == 3 && p.lerp == 0);
 }
 
+// A dialogue table's rows: the header and spacer rows left out, quoted
+// fields unquoted, Windows-1252 dashes plain; keys matched with '?'.
+static void testDialogTable() {
+    const std::string text =
+        "Missions\t\tK01 M01\r\n"
+        "REC ID\tREC ID\tMISSION\tTYPE\tSPEAKER\tLISTENER\tLINE ID\tLINE\r\n"
+        "\t\t\t\t\t\t\t\t\r\n"
+        "KRA\t001\tK01\tHAL\tKRA\tOBN\t000\tChief \x97 quickly!\t\t2\tGENHALOBN0?0\t\tTAG1\tEvt\t"
+        "! CommunicationBlocked\t\"CAM(V:1 \"\"x\"\")\"\r\n";
+    std::vector<DialogLine> lines;
+    parseDialogTable(text, "M01_Dialogue", lines);
+    CHECK(lines.size() == 1);
+    if (lines.size() == 1) {
+        const DialogLine& l = lines[0];
+        CHECK(l.record == "KRA001" && l.mission == "K01" && l.type == "HAL" && l.listener == "OBN");
+        CHECK(l.text == "Chief - quickly!" && l.pause == 2 && l.next == "GENHALOBN0?0");
+        CHECK(l.tag == "TAG1" && l.event == "Evt" && l.condition == "! CommunicationBlocked");
+        CHECK(l.camera == "CAM(V:1 \"x\")");
+        CHECK(l.key() == "K01HALKRA000");
+    }
+    CHECK(dialogKeyMatches("GENHALOBN0?0", "GENHALOBN010"));
+    CHECK(!dialogKeyMatches("GENHALOBN0?0", "GENHALOBN011"));
+    CHECK(!dialogKeyMatches("GEN", "GENHAL"));
+}
+
 static void testRotatorFromAxes() {
     // Back from a rotation's axes to the rotation, all three turns at once.
     for (const Rotator& r : {Rotator{0, 0, 0}, Rotator{2000, 16384, 0}, Rotator{-3000, -12000, 5000},
@@ -1584,6 +1610,7 @@ int main() {
     testCollision();
     testAnimationPose();
     testRotatorFromAxes();
+    testDialogTable();
     testMapExtension();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

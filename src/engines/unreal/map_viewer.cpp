@@ -1417,6 +1417,41 @@ void MapViewer::drawPlayHud() {
             p[x * 4 + 3] = std::max<uint8_t>(p[x * 4 + 3], 150);
     }
     font::drawText(overlay_, 4, y, line, Color{230, 230, 230});
+    drawSubtitles(y - 8);
+}
+
+// The lines being said, above the status line: who says it (the main
+// characters by name, the rest by their code) and the line, wrapped.
+void MapViewer::drawSubtitles(int bottom) {
+    static const std::map<std::string, std::string> names = {
+        {"KRA", "Kira"}, {"SKO", "Sisko"}, {"WRF", "Worf"},   {"OBN", "O'Brien"}, {"DAX", "Dax"},
+        {"BSR", "Bashir"}, {"ODO", "Odo"}, {"OBK", "Obanak"}, {"GRK", "Garak"},   {"CPU", "Computer"},
+    };
+    const size_t columns = size_t(kFrameW - 16) / size_t(font::kAdvance);
+    std::vector<std::string> rows;
+    for (const ScriptLevel::Subtitle& s : play_->level().subtitles()) {
+        auto it = names.find(s.speaker);
+        std::string text = (it != names.end() ? it->second : s.speaker) + ": " + s.text;
+        while (!text.empty()) {
+            size_t cut = text.size() <= columns ? text.size() : text.rfind(' ', columns);
+            if (cut == std::string::npos || cut == 0)
+                cut = std::min(columns, text.size());
+            rows.push_back(text.substr(0, cut));
+            text.erase(0, std::min(text.size(), cut + 1));
+        }
+    }
+    int y = bottom - int(rows.size()) * font::kLineHeight;
+    for (const std::string& row : rows) {
+        const int width = int(font::length(row.c_str())) * font::kAdvance + 8;
+        const int x = std::max(0, (kFrameW - width) / 2);
+        for (int yy = std::max(0, y - 1); yy < std::min(kFrameH, y + font::kLineHeight); ++yy) {
+            uint8_t* p = overlay_.row(yy);
+            for (int xx = x; xx < std::min(kFrameW, x + width); ++xx)
+                p[xx * 4 + 3] = std::max<uint8_t>(p[xx * 4 + 3], 170);
+        }
+        font::drawText(overlay_, x + 4, y, row.c_str(), Color{255, 240, 160});
+        y += font::kLineHeight;
+    }
 }
 
 } // namespace reluva::unreal

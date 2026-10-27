@@ -39,7 +39,7 @@ they go in. Never use Epic's licensee source code (leaked or otherwise).
 | Meshes | Mesh and LodMesh read, with their animations ([mesh.md](../formats/unreal/mesh.md)); actors drawn as meshes placed in the Maps page, with their classes' defaults ([actors.md](../formats/unreal/actors.md)); a Meshes page; not yet checked on The Fallen's |
 | Viewer | Maps (3D, fly camera from the PlayerStart; Enter plays the level), Meshes, Textures, Sounds, Packages (tables and properties) |
 | UnrealScript | classes, states, functions, properties, enums, constants and their bytecode read (every one of The Fallen's), and written out as text (`ue-script`) ([script.md](../formats/unreal/script.md)). A VM runs them: classes loaded, objects, the interpreter with states, latent code and timers, Core's natives and the Engine ones a level's start needs; every map's start runs (`ue-run`), and the Maps page draws levels as their scripts leave them ([unreal_vm.md](unreal_vm.md)) |
-| Game | started: the level's scripts run live with the player logged in, moving and colliding against the level, steered from the keyboard and mouse and seen from the game's own camera, cut scenes included (the Maps page, Enter; [unreal_vm.md](unreal_vm.md)). Actors' animations play on the scripts' timing, with their notifications. Not yet: AI paths, sounds, the HUD and menus |
+| Game | started: the level's scripts run live with the player logged in, moving and colliding against the level, steered from the keyboard and mouse and seen from the game's own camera, cut scenes included (the Maps page, Enter; [unreal_vm.md](unreal_vm.md)). Actors' animations play on the scripts' timing, with their notifications. The AI finds its way along the level's paths; the characters' lines play from the dialogue tables ([dialogue.md](../formats/unreal/dialogue.md)), shown as they're said. Not yet: sounds, the HUD and menus |
 
 **First check against the retail data** (October 2026): all 175 packages
 open (versions 71-73), all 3801 palettes and 2868 of 2930 sounds decode.
@@ -71,8 +71,9 @@ added fields).
    sounds and levels' geometry; one release's hashes added. Procedural
    textures' effects (FireTexture's flames, Wet/Wave/Water ripples) to
    be worked out from the game running. Other data the install has, not
-   read yet: `movies/intro.avi`, the dialogue text and level strings in
-   `int/` (`*.int`, `*_Dialogue.txt`), the `System/*.int` localisation.
+   read yet: `movies/intro.avi`, the level strings in `int/` (`*.int`;
+   the dialogue tables, `*_Dialogue.txt`, are read), the `System/*.int`
+   localisation.
 2. **Levels, continued**: check the lightmaps on The Fallen's maps and
    tune them against the original ([lighting.md](../formats/unreal/lighting.md));
    lights' effects; check movers and the sky on The Fallen's maps; movers

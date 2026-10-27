@@ -2,8 +2,10 @@
 
 Status: **runs The Fallen's levels with the player in them**: the
 Maps page plays a level (Enter), its scripts live, the player moved by
-the keyboard and mouse, seen from the game's own camera. It isn't the
-game yet: AI has no paths, nothing makes a sound, and the HUD and menus aren't drawn. Every class of the game loads (`vm.cpp`), every default
+the keyboard and mouse, seen from the game's own camera, the AI finding
+its way along the level's paths and the characters' lines shown as
+they're said. It isn't the game yet: nothing makes a sound, and the HUD
+and menus aren't drawn. Every class of the game loads (`vm.cpp`), every default
 property converts to its type, and all 74 maps start: their actors made,
 the game type spawned, the start-up events sent, the player logged in as
 the level's character, then twenty seconds of ticks, with no crash. The
@@ -189,11 +191,9 @@ The movement: 187,000 moves, 6,837 landings, 8,341 touches.
 
 What's left before play, by what `ue-run` reports:
 
-- **Natives not written** (30): The Fallen's `ListActors` iterator (an AI's list of known actors, not yet
-  understood), `GetRendererFlags`. The AI's paths
-  (`FindPathToward`, `RadiusPathNodes` and the other path node
-  iterators). Its dialogue (`FindBestDialogLine`, `StartDialog`,
-  `DialogTick`) and documents.
+- **Natives not written** (23): The Fallen's `ListActors` iterator (an AI's list of known actors, not yet
+  understood), `GetRendererFlags`, the documents (`FindDocument`,
+  `LocalizeDocument`).
 - **Speed**: values are copied freely and calls looked up by name; the
   biggest maps tick at half real time.
 - **The game's own mistakes**: `DS9_GrigariSentryDrone` (and its kin)
@@ -206,7 +206,9 @@ What's left before play, by what `ue-run` reports:
   (floats divide to infinity, as they do: the light's fade then ends at
   once; reported). `DS9_JerradoBugStream.SetUpMultiMesh` divides by its
   owner's speed, 0 when it stands still (each piece of the swarm made
-  then: reported).
+  then: reported). `SR3_Raptor` `goto 'Wait'` in its `Dying` state,
+  which has only `Begin` and `FinishedDeath` (a `GotoState('Wait')`
+  meant, it may be; reported).
 
 ## Movement
 
@@ -255,7 +257,127 @@ Natives: `Move`, `MoveSmooth`, `SetLocation`, `SetPhysics`, `Trace`
 latent `MoveTo`, `MoveToward`, `TurnTo`, `TurnToward`, `WaitForLanding`
 and `FinishRotation` (each moves the pawn by its acceleration until it
 gets there or gives up, then its state code carries on), and
-`pointReachable` / `actorReachable` (a box swept there).
+`pointReachable` / `actorReachable` (a box swept there), and The
+Fallen's `MoveTo2` (taken as `MoveTo`), `StrafeTo` and `StrafeFacing`
+(there, facing a place or an actor all the way).
+
+The loops over every actor (blocking, touching, what stands on a mover)
+read each class's collision properties from where they are in its
+values, found once; looking them up by name took a quarter of a busy
+level's time.
+
+### The AI's paths
+
+`vm_paths.cpp` finds the AI its way across the level's navigation points
+(path nodes, patrol points, cover spots...). This is Reluva's own
+search over the paths the editor stored with the map.
+- **The paths:** the Level object holds, after its actor list, its URL
+  and its model, a reach list: for each reach, its length, its start and
+  end points, the biggest collision radius and height that fit along
+  it, how it's travelled (walking 1, flying 2, swimming 4, jumping 8,
+  doors 16, special 32, the player only 64) and whether it was pruned.
+  Each point's `Paths[16]` are the reaches from it. Checked: on every map
+  the reaches resolve to the level's points and each starts at the point
+  listing it; all of The Fallen's are walking ones (M05_KiraL1: 348
+  points, 2293 reaches, 817 listed).
+- **The networks are islands.** On M03_SiskoL1A the biggest set of
+  points that reach each other is 33 of 79, and on M05_KiraL1 247 of
+  348: rooms joined by doors and lifts, ledges with no way down (there
+  are no jumps or drops among the reaches). Ladders are the player's
+  alone.
+- **`FindPathToward(Actor)`, `FindPathTo(Vector)`:** the goal itself if
+  the pawn can go straight there (`pointReachable`'s sweep). Else the
+  nearest few points (up to 8 within 1200) the pawn can go straight
+  to, and those that can see the goal (or the goal, if it's a point).
+  Then the shortest way between them (Dijkstra) along reaches the pawn
+  fits and can take (`bCanWalk`, `bCanFly`... against the reach's
+  flags), each costing its length and its end's `ExtraCost`. The route
+  goes in the pawn's `RouteCache`, and the answer is its first point
+  the pawn isn't already at; None if there's no way (the scripts then
+  wait, or give up).
+- **The iterators:** `AllPathNodes` (by class, and tag), `RadiusPathNodes`
+  and `RadiusVisiblePathNodes` (those within a radius, and those of them
+  that can see the place: nothing in the world in the way), and
+  `LineOfSightTo` (from the eyes to the other's middle, or its top).
+- **In play:** on M01_WorfL1 the Grigari now roam from point to point at
+  a walk (they stood still before). Over all maps' first 20 seconds,
+  about 15,000 ways were straight, 9,700 along paths and 15,000 none:
+  mostly pawns asking again and again for a point in another island.
+  `ue-run` reports these per map.
+
+### Dialogue
+
+`vm_dialog.cpp` plays the characters' lines from the game's dialogue
+tables ([dialogue.md](../formats/unreal/dialogue.md)). The table format
+is the game's, and so are the events it calls on the scripts' side. How
+lines are picked and timed is Reluva's reading of how the scripts use
+the natives.
+- **Which lines are the level's:** those of its own table (LevelInfo's
+  `DialogFile`) and the general one, or of every table if it names none.
+  Of those, the ones for whoever the player plays: a K, S or W mission
+  for Kira, Sisko or Worf (by the player's `Speaker_Tag`), G and M for
+  anyone. The missions follow the story, not the maps (the Promenade
+  opens with a mission 11 line), so the map's own mission number only
+  makes a line preferred.
+- **`FindBestDialogLine(out Index, Type, FilterTag, ListenerTag,
+  SpeakerTag, LineID)`:** the lines of that type, with the tag, listener,
+  speaker and ID asked for (any, if none is asked), not `DoNotPlay`, and
+  their conditions met. Asked for by tag, which names one line, any
+  table's line will do, whoever the player is: CM10_KiraL1A's cut scene
+  goes on with `START_K10A2`, a line of Kira's marked as Worf's mission
+  (W10), in another mission's table. A line only ever reached from another one (the
+  middle of a conversation) is left out unless its ID is asked for. The
+  best is one of the map's own mission, then one of a mission over a
+  general one, then the one said fewest times, then any of those. It
+  returns how many would do.
+- **Conditions:** each test is the dialogue input's event of that name
+  (`CTVE_DialogInput`: `LowHealth(30)`, `HasItem`, `SpecialCondition`...),
+  its arguments converted to its parameters' types. `DS9Phase(n)`, which
+  no script defines, is taken as the player's `OpsPhase` being n, as the
+  scripts' own `OpsLevel` reads it. A test with no event is false and
+  counted. `TestCondition` asks the same.
+- **`IsDialogLineSpecial`:** a line of a mission, not a general one. The
+  HUD shows that a crewmate has something to say when hailing them would
+  find one (`CheckSpecialComm`).
+- **`StartDialog`** (and `PlayDialog`, which calls it) plays the best
+  line, then the ones it leads to. It returns a thread number (0 if no
+  line would do), and `IsDialogThreadPlaying` stays true until the last
+  line is done. Each line:
+  - who says it, and to whom: the actor's `GetSpeakerActor` for their
+    codes (one near the camera, else the HUD's picture of someone on the
+    communicator);
+  - the level's `Talker`, `Listener`, `CurrentLineType` and
+    `CurrentLineIndex` set for the scripts (the heads look at the
+    talker, the cut scenes' directors aim at it);
+  - its event set off (`DoSpecialEvent`, then `DoEvent`: the actors with
+    that tag triggered), its animations played (`PlayDialogAnim`) and the
+    speaker's face set (`FacialExpression`, by name);
+  - the HUD told (`HudText`), and the Maps page shows it above the status
+    line;
+  - said for as long as its voice lasts: the length of the WAV in its
+    Sound (O'Brien's answer on M01_KiraL1A, 5 seconds), else about 15
+    letters a second;
+  - while it's said, the speaker's mouth moved (`C3DSpeechEvent` a tenth
+    of a second apart, the shape from the letter being said). This is
+    Reluva's own: the game's lip-sync data isn't read;
+  - then its pause, then the line its NEXTLINE names (`?` any character;
+    of those that fit, the best as above), or the end: the talker and
+    listener cleared.
+- **`DialogTick`**, the dialogue input's each tick while the HUD allows,
+  does nothing. The lines play on the level's own tick, the cut scenes'
+  too, which it isn't called in. What else the game's engine did there
+  isn't known; most likely the AI's own lines (AMB, KIL, FSE...), which
+  no script asks for.
+- On M01_KiraL1A, the opening cut scene's line is shown as Kira says it.
+  Hailing O'Brien plays Kira's line, then his answer through its
+  NEXTLINE. Over all maps' first 20 seconds, 33 dialogues start and 3
+  calls find no line, none of them in the tables: a training line
+  (`TRAIN01`), CM11_LabRitual's `START_G11B`, and a speech trigger on
+  M04_SiskoL1 with no type.
+
+Not done: the voices aren't played (nothing makes a sound yet);
+RETURNLINE (the communicator's menus) and the CAMERA column; the AI's
+own lines.
 
 ### The player's input
 

@@ -205,6 +205,12 @@ public:
     // animation isn't the mesh's.
     bool bone(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
               Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust = nullptr) const;
+    // Every bone's place in the skeleton's space in the same pose (rows X,
+    // Y, Z and the origin, each bone in order), and a bone's index (-1 if
+    // there's none), for asking after many bones of one pose.
+    bool skeleton(std::string_view base, float fraction, const std::vector<Layer>& layers,
+                  std::vector<std::array<float, 12>>& worlds, const Adjust* adjust = nullptr) const;
+    int boneIndex(std::string_view name) const;
     // The same in the skeleton's space (as Adjust).
     bool boneInSkeleton(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
                         Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust = nullptr) const;

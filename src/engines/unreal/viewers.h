@@ -322,6 +322,7 @@ private:
     void updatePlay(float dt);
     void drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right);
     void drawPlayHud();
+    void drawSubtitles(int bottom);
     // A mesh for live actors (by the mesh object), with the animation
     // they play borrowed from the shared sets if it's not its own: an
     // index into meshes_ / gpuMeshes_, -1 if it doesn't read.

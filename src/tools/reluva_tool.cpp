@@ -4541,6 +4541,8 @@ int cmdUeRun(int argc, char** argv) {
     uint64_t calls = 0, statements = 0;
     int accessedNone = 0;
     ScriptLevel::MovementStats moved;
+    ScriptLevel::PathStats paths;
+    ScriptLevel::DialogStats said;
     for (const std::string& name : maps) {
         const Package* map = set.get(name);
         if (!map) {
@@ -4601,6 +4603,23 @@ int cmdUeRun(int argc, char** argv) {
                     "%d touches, %d zone changes, %d placings refused, %d moves to a goal given up%s\n",
                     "", m.moves, m.blockedByWorld, m.blockedByActors, m.steps, m.landings, m.touches, m.zoneChanges,
                     m.refused, m.gaveUp, where.c_str());
+        const auto& pf = level.paths;
+        if (pf.straight + pf.found + pf.failed > 0)
+            std::printf("%-20s paths: %zu navigation points, %zu reaches; %d ways found straight, %d along paths, "
+                        "%d not (%d with no point near, %d none near the goal, %d no way between)\n",
+                        "", level.navigationPoints().size(), level.reachSpecs().size(), pf.straight, pf.found,
+                        pf.failed, pf.noStart, pf.noEnd, pf.noRoute);
+        const auto& dg = level.dialog;
+        if (dg.started + dg.notFound > 0)
+            std::printf("%-20s dialogue: %zu lines read; %d started (%d lines said), %d with no line to say, "
+                        "%d conditions not known\n",
+                        "", level.dialogLines().size(), dg.started, dg.lines, dg.notFound, dg.unknownConditions);
+        said.started += dg.started;
+        said.lines += dg.lines;
+        said.notFound += dg.notFound;
+        paths.straight += pf.straight;
+        paths.found += pf.found;
+        paths.failed += pf.failed;
         moved.moves += m.moves;
         moved.blockedByWorld += m.blockedByWorld;
         moved.blockedByActors += m.blockedByActors;
@@ -4649,6 +4668,8 @@ int cmdUeRun(int argc, char** argv) {
                 "%d zone changes, %d placings refused, %d moves to a goal given up\n",
                 moved.moves, moved.blockedByWorld, moved.blockedByActors, moved.steps, moved.landings, moved.touches,
                 moved.zoneChanges, moved.refused, moved.gaveUp);
+    std::printf("paths: %d ways found straight, %d along paths, %d not\n", paths.straight, paths.found, paths.failed);
+    std::printf("dialogue: %d started (%d lines said), %d with no line to say\n", said.started, said.lines, said.notFound);
     std::printf("natives not written yet (%zu, by calls):\n", missing.size());
     for (const auto& [n, k] : top(missing, all ? 60 : 40))
         std::printf("  %7d %s\n", n, k.c_str());

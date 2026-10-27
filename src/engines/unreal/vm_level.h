@@ -12,6 +12,7 @@
 
 #include "engines/unreal/actors.h"
 #include "engines/unreal/collision.h"
+#include "engines/unreal/dialog_table.h"
 #include "engines/unreal/mesh.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/vm.h"
@@ -115,10 +116,59 @@ public:
         enum class Kind { Move, Turn, Land, Rotation } kind = Kind::Move;
         std::array<float, 3> point{};
         VmObject* target = nullptr;
+        // While moving, facing this place or actor rather than the way it
+        // goes (StrafeTo, StrafeFacing).
+        bool facing = false;
+        std::array<float, 3> focus{};
+        VmObject* focusActor = nullptr;
         float speed = 1, timeLeft = 10;
         int stateSerial = 0;
     };
     void setGoal(VmObject* pawn, const Goal& goal);
+
+    // The AI's paths (vm_paths.cpp): the level's navigation points, linked
+    // by the reach list stored in its Level object (each reach from one
+    // point to another: its length, the biggest pawn that fits along it,
+    // how it's got along: walking, flying, swimming, jumping...).
+    struct ReachSpec {
+        int distance = 0;
+        VmObject* start = nullptr;
+        VmObject* end = nullptr;
+        int radius = 0, height = 0, flags = 0;
+        bool pruned = false;
+    };
+    const std::vector<VmObject*>& navigationPoints();
+    const std::vector<ReachSpec>& reachSpecs() const { return reachSpecs_; }
+    // The next point on a pawn's way to an actor (or a place), its route in
+    // its RouteCache: the goal itself if it can go straight there, none if
+    // there's no way.
+    VmObject* findPath(VmObject* pawn, VmObject* goal, const std::array<float, 3>* point);
+    // Nothing in the world between the two places.
+    bool lineOfSight(VmObject* self, const std::array<float, 3>& from, const std::array<float, 3>& to);
+    // The Fallen's dialogue (vm_dialog.cpp): lines from the game's
+    // dialogue tables, picked for this mission and player
+    // (FindBestDialogLine) and played (StartDialog), each said for as long
+    // as its voice lasts, then the line it leads to.
+    const std::vector<DialogLine>& dialogLines();
+    int findDialogLine(const std::string& type, NameId filterTag, NameId listener, NameId speaker,
+                       const std::string& lineId, int& index);
+    int startDialog(VmObject* self, const std::string& type, NameId filterTag, NameId listener, NameId speaker,
+                    const std::string& lineId); // the thread's number, 0 if no line would do
+    bool dialogPlaying(int thread) const;
+    bool dialogLineSpecial(int index);
+    bool testCondition(const std::string& condition);
+    // The lines being said now: the speaker's code, the text, the type.
+    struct Subtitle {
+        std::string speaker, text, type;
+    };
+    std::vector<Subtitle> subtitles() const;
+    struct DialogStats {
+        int started = 0, lines = 0, notFound = 0, unknownConditions = 0;
+    } dialog;
+    struct PathStats {
+        int straight = 0, found = 0, failed = 0;
+        int noStart = 0, noEnd = 0, noRoute = 0; // why it failed: no point near the pawn, near the goal, no way between
+    } paths;
 
     // Animation (vm_anim.cpp): PlayAnim and LoopAnim's start (`rate` times
     // the sequence's own speed, after a tween of `tween` seconds),
@@ -269,6 +319,19 @@ private:
         }
     };
     std::unordered_map<SlotKey, int, SlotHash> slots_;
+public:
+    struct CollideSlots {
+        int location = -1, radius = -1, height = -1, collideActors = -1, blockActors = -1, blockPlayers = -1,
+            isPlayer = -1, owner = -1, base = -1;
+        bool mover = false;
+    };
+private:
+    const CollideSlots& collideSlots(VmObject* a);
+    std::unordered_map<const VmClass*, CollideSlots> collideSlots_;
+    const std::vector<std::pair<VmObject*, const CollideSlots*>>& colliders();
+    std::vector<std::pair<VmObject*, const CollideSlots*>> colliders_;
+    int collidersTick_ = -1;
+    size_t collidersCount_ = 0;
     std::map<VmObject*, std::vector<VmObject*>> touching_;
     std::map<VmObject*, Goal> goals_;
     std::set<VmObject*> fallers_; // falling since a tick before
@@ -286,6 +349,8 @@ private:
     std::map<const VmObject*, std::shared_ptr<ActorMesh>> actorMeshes_; // by mesh object
     std::shared_ptr<std::vector<AnimationSet>> animationSets_;
     std::map<VmObject*, std::pair<int, std::vector<Vec>>> posed_; // each actor's vertices, and which tick's
+    std::map<VmObject*, std::pair<int, std::vector<std::array<float, 12>>>> posedBones_; // its bones, the same
+    void forgetPose(VmObject* actor);
     struct Attachment {
         VmObject* parent = nullptr;
         NameId parentPoint = 0, childPoint = 0;
@@ -313,6 +378,35 @@ private:
         std::array<Effector, 4> effectors;
     };
     std::map<VmObject*, Bends> bends_;
+    void loadPaths();
+    struct DialogThread {
+        int id = 0, line = 0;
+        VmObject* self = nullptr; // who started it
+        VmObject* speaker = nullptr;
+        VmObject* listener = nullptr;
+        float seconds = 0, timeLeft = 0, pauseLeft = 0, mouthTimer = 0;
+    };
+    void loadDialog();
+    VmObject* dialogInput();
+    int bestDialogLine(const std::vector<int>& matches);
+    float lineSeconds(const DialogLine& line);
+    void beginLine(DialogThread& thread, int index);
+    void tickDialog(float seconds);
+    bool dialogLoaded_ = false;
+    std::vector<DialogLine> dialogLines_;
+    std::vector<int> dialogPlays_;      // how often each line's been said
+    std::vector<bool> dialogFollows_;   // only reached from another line
+    std::vector<bool> dialogOurs_;      // this level's and this player's
+    std::string dialogNumber_;          // the map's mission number ("01", "OP"), if it has one
+    char dialogWho_ = 0;                // K, S or W: whom the player plays
+    std::vector<DialogThread> dialogThreads_;
+    int nextDialogThread_ = 1;
+    uint32_t dialogRandom_ = 1;
+    std::map<std::string, float> dialogSeconds_; // each voice's length
+    bool walkable(VmObject* pawn, const Vec& from, const Vec& to);
+    int reachAbilities(VmObject* pawn);
+    std::vector<ReachSpec> reachSpecs_;
+    std::vector<VmObject*> navigationPoints_;
     LayeredPoser::Adjust adjustOf(VmObject* actor, ActorMesh& mesh);
     bool measureEffectors(VmObject* actor, ActorMesh& mesh, Bends& bends, const LayeredPoser::Adjust* adjust);
     int ticks_ = 0;
@@ -361,5 +455,15 @@ void registerSplineNatives(Vm& vm);
 void registerAnimationNatives(Vm& vm);
 // Bones, attachment points and attaching (vm_attach.cpp).
 void registerAttachNatives(Vm& vm);
+// The AI's paths (vm_paths.cpp).
+void registerPathNatives(Vm& vm);
+// The Fallen's dialogue (vm_dialog.cpp).
+void registerDialogNatives(Vm& vm);
+// A map's reach list as stored (object references, not yet actors).
+struct RawReachSpec {
+    int distance = 0, start = 0, end = 0, radius = 0, height = 0, flags = 0;
+    bool pruned = false;
+};
+Error readReachSpecs(const Package& map, std::vector<RawReachSpec>& out);
 
 } // namespace reluva::unreal

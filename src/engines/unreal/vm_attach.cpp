@@ -115,6 +115,7 @@ struct ScriptLevel::ActorMesh {
     // Where the skeleton's axes go in the actor's own space (the mesh's
     // turn: placeMeshVertex of the skeleton's units).
     Axes skeleton{};
+    std::map<NameId, int> boneIndex; // by name, as asked for
 };
 
 ScriptLevel::ActorMesh* ScriptLevel::actorMesh(VmObject* a) {
@@ -292,11 +293,17 @@ bool ScriptLevel::boneAt(VmObject* a, NameId bone, BonePlace place, Vec& locatio
     const std::string seq = vm_.nameText(seqValue->i), name = vm_.nameText(bone);
     const float frame = frameValue ? frameValue->asFloat() : 0;
     std::vector<std::string> names;
-    const std::vector<LayeredPoser::Layer> layers = posedLayers(a, *m, names); // with its layers, as it's drawn
-    const LayeredPoser::Adjust adjust = adjustOf(a, *m);
+    std::vector<LayeredPoser::Layer> layers;
+    LayeredPoser::Adjust adjust;
+    // With its layers and its scripts' bends, as it's drawn.
+    auto pose = [&] {
+        layers = posedLayers(a, *m, names);
+        adjust = adjustOf(a, *m);
+    };
     const Value* scale = prop(a, "DrawScale");
     const float ds = scale ? scale->asFloat() : 1;
     if (place == BonePlace::InParent) {
+        pose();
         // Its place in its parent bone, in the parent's axes (by DrawScale).
         Vec origin{};
         Axes axes{};
@@ -310,12 +317,35 @@ bool ScriptLevel::boneAt(VmObject* a, NameId bone, BonePlace place, Vec& locatio
         rotation = rotOf(scriptAxes(local));
         return true;
     }
+    // The skeleton posed once a tick (the heads ask after their bones every
+    // tick, and posing it took as long as the rest of their scripts).
+    auto& [tick, worlds] = posedBones_[a];
+    if (tick != ticks_ + 1 || worlds.empty()) {
+        tick = ticks_ + 1;
+        pose();
+        if (!m->poser->skeleton(seq, frame, layers, worlds, &adjust))
+            worlds.clear();
+    }
+    if (worlds.empty())
+        return false;
     // The bone, and for FromParent its parent, where they are.
     auto placed = [&](const std::string& which, Vec& at, Axes& axes, bool world) {
+        const NameId key = vm_.name(which);
+        auto found = m->boneIndex.find(key);
+        if (found == m->boneIndex.end())
+            found = m->boneIndex.emplace(key, m->poser->boneIndex(which)).first;
+        if (found->second < 0 || size_t(found->second) >= worlds.size())
+            return false;
+        // Into packed units, as the vertices are (by Scale and Origin).
+        const std::array<float, 12>& w = worlds[size_t(found->second)];
+        const Mesh& mesh = m->mesh;
         Vec origin{};
         Axes packed{};
-        if (!m->poser->bone(seq, frame, layers, which, origin, packed, &adjust))
-            return false;
+        for (size_t c = 0; c < 3; ++c) {
+            origin[c] = w[9 + c] / mesh.scale[c] + mesh.origin[c];
+            for (size_t row = 0; row < 3; ++row)
+                packed[row][c] = w[row * 3 + c] / mesh.scale[c];
+        }
         at = placeMeshVertex(m->mesh, origin);
         for (size_t k = 0; k < 3; ++k)
             axes[k] = unit(sub(placeMeshVertex(m->mesh, add(origin, packed[k])), at));
@@ -432,14 +462,20 @@ int limbOf(const std::string& chain, bool& place) {
 
 } // namespace
 
+// The pose kept for the tick, gone once the scripts bend the bones.
+void ScriptLevel::forgetPose(VmObject* a) {
+    posed_.erase(a);
+    posedBones_.erase(a);
+}
+
 void ScriptLevel::turnBone(VmObject* a, NameId bone, int axis, float degrees) {
     bends_[a].turns[{bone, axis}] = degrees;
-    posed_.erase(a);
+    forgetPose(a);
 }
 
 void ScriptLevel::turnBoneInActor(VmObject* a, NameId bone, const Rot& rotation) {
     bends_[a].actorTurns[bone] = rotation;
-    posed_.erase(a);
+    forgetPose(a);
 }
 
 bool ScriptLevel::setIk(VmObject* a, NameId chain, const Vec* at, const Axes* axes, float weight) {
@@ -458,7 +494,7 @@ bool ScriptLevel::setIk(VmObject* a, NameId chain, const Vec* at, const Axes* ax
         ik.axes = *axes;
         ik.turnWeight = weight;
     }
-    posed_.erase(a);
+    forgetPose(a);
     return true;
 }
 
@@ -470,7 +506,7 @@ void ScriptLevel::clearIk(VmObject* a, NameId chain) {
         return;
     Bends::Ik& ik = it->second.limbs[size_t(l)];
     (place ? ik.place : ik.turn) = false;
-    posed_.erase(a);
+    forgetPose(a);
 }
 
 LayeredPoser::Adjust ScriptLevel::boneAdjust(VmObject* a) {

@@ -185,6 +185,9 @@ if(RELUVA_ENGINE_UNREAL)
         src/engines/unreal/vm_splines.cpp
         src/engines/unreal/vm_anim.cpp
         src/engines/unreal/vm_attach.cpp
+        src/engines/unreal/vm_paths.cpp
+        src/engines/unreal/vm_dialog.cpp
+        src/engines/unreal/dialog_table.cpp
         src/engines/unreal/level_play.cpp
         src/engines/unreal/actors.cpp
         src/engines/unreal/class_defaults.cpp

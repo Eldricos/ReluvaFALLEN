@@ -162,7 +162,50 @@ Value* ScriptLevel::prop(VmObject* a, const char* name) {
     return it->second >= 0 && size_t(it->second) < a->values.size() ? &a->values[size_t(it->second)] : nullptr;
 }
 
+// Where a class's collision properties are in its values, found once: the
+// actor loops below read them for every other actor on every move.
+const ScriptLevel::CollideSlots& ScriptLevel::collideSlots(VmObject* a) {
+    auto it = collideSlots_.find(a->cls);
+    if (it == collideSlots_.end()) {
+        CollideSlots c;
+        auto slot = [&](const char* name) {
+            const VmProperty* p = a->cls->findProperty(vm_.name(name));
+            return p ? p->slot : -1;
+        };
+        c.location = slot("Location");
+        c.radius = slot("CollisionRadius");
+        c.height = slot("CollisionHeight");
+        c.collideActors = slot("bCollideActors");
+        c.blockActors = slot("bBlockActors");
+        c.blockPlayers = slot("bBlockPlayers");
+        c.isPlayer = slot("bIsPlayer");
+        c.owner = slot("Owner");
+        c.base = slot("Base");
+        c.mover = vm_.isA(a, "Mover");
+        it = collideSlots_.emplace(a->cls, c).first;
+    }
+    return it->second;
+}
+
+// Every actor with its class's collision slots (those the loops below go
+// through), made again each tick and added to as actors are spawned.
+const std::vector<std::pair<VmObject*, const ScriptLevel::CollideSlots*>>& ScriptLevel::colliders() {
+    if (collidersTick_ != ticks_ + 1 || collidersCount_ != actors_.size()) {
+        if (collidersTick_ != ticks_ + 1 || collidersCount_ > actors_.size())
+            colliders_.clear();
+        for (size_t i = colliders_.empty() ? 0 : collidersCount_; i < actors_.size(); ++i)
+            colliders_.push_back({actors_[i], &collideSlots(actors_[i])});
+        collidersTick_ = ticks_ + 1;
+        collidersCount_ = actors_.size();
+    }
+    return colliders_;
+}
+
 namespace {
+// A value by its slot (none for -1).
+Value* slotOf(VmObject* a, int slot) {
+    return slot >= 0 && size_t(slot) < a->values.size() ? &a->values[size_t(slot)] : nullptr;
+}
 Vec vecOf(Value* v) { return v ? Vm::vectorOf(*v) : Vec{0, 0, 0}; }
 float floatOf(Value* v, float fallback = 0) { return v ? v->asFloat() : fallback; }
 bool boolOf(Value* v) { return v && v->asBool(); }
@@ -367,19 +410,22 @@ ScriptLevel::MoveHit ScriptLevel::moveActor(VmObject* a, const Vec& delta) {
         const bool blocks = boolOf(prop(a, "bBlockActors")), blocksPlayers = boolOf(prop(a, "bBlockPlayers"));
         Value* ownerValue = prop(a, "Owner");
         VmObject* owner = ownerValue ? ownerValue->asObject() : nullptr;
-        for (VmObject* o : actors_) {
-            if (o == a || o->deleted || o == owner || !boolOf(prop(o, "bCollideActors")))
+        for (const auto& [o, slots] : colliders()) {
+            if (o == a || o->deleted || o == owner)
                 continue;
-            if (Value* oo = prop(o, "Owner"); oo && oo->asObject() == a)
+            const CollideSlots& cs = *slots;
+            if (!boolOf(slotOf(o, cs.collideActors)))
                 continue;
-            const bool blocked = (boolOf(prop(o, "bBlockActors")) && blocks) ||
-                                 (boolOf(prop(o, "bBlockPlayers")) && player) ||
-                                 (blocksPlayers && boolOf(prop(o, "bIsPlayer")));
+            if (Value* oo = slotOf(o, cs.owner); oo && oo->asObject() == a)
+                continue;
+            const bool blocked = (boolOf(slotOf(o, cs.blockActors)) && blocks) ||
+                                 (boolOf(slotOf(o, cs.blockPlayers)) && player) ||
+                                 (blocksPlayers && boolOf(slotOf(o, cs.isPlayer)));
             if (!blocked)
                 continue;
             float t = 1;
             Vec on{};
-            const bool hit = vm_.isA(o, "Mover")
+            const bool hit = cs.mover
                                  ? moverHit(o, start, delta, e, t, on)
                                  : cylinderHit(start, delta, e[0], e[2], vecOf(prop(o, "Location")),
                                                floatOf(prop(o, "CollisionRadius")), floatOf(prop(o, "CollisionHeight")), t, on);
@@ -469,13 +515,16 @@ void ScriptLevel::updateTouching(VmObject* a) {
     const float r = floatOf(prop(a, "CollisionRadius")), h = floatOf(prop(a, "CollisionHeight"));
     std::vector<VmObject*>& now = touching_[a];
     std::vector<VmObject*> touching;
-    for (VmObject* o : actors_) {
-        if (o == a || o->deleted || !boolOf(prop(o, "bCollideActors")))
+    for (const auto& [o, slots] : colliders()) {
+        if (o == a || o->deleted)
             continue;
-        const Vec q = vecOf(prop(o, "Location"));
-        const float R = r + floatOf(prop(o, "CollisionRadius")), H = h + floatOf(prop(o, "CollisionHeight"));
+        const CollideSlots& cs = *slots;
+        if (cs.mover || !boolOf(slotOf(o, cs.collideActors)))
+            continue;
+        const Vec q = vecOf(slotOf(o, cs.location));
+        const float R = r + floatOf(slotOf(o, cs.radius)), H = h + floatOf(slotOf(o, cs.height));
         const float dx = p[0] - q[0], dy = p[1] - q[1];
-        if (dx * dx + dy * dy < R * R && std::fabs(p[2] - q[2]) < H && !vm_.isA(o, "Mover"))
+        if (dx * dx + dy * dy < R * R && std::fabs(p[2] - q[2]) < H)
             touching.push_back(o);
     }
     // Those it stopped touching, then those it started to.
@@ -603,8 +652,8 @@ void ScriptLevel::moveBrush(VmObject* m, float dt) {
     // What stands on it goes with it.
     const Vec moved = sub(now, before);
     if (length(moved) > 0)
-        for (VmObject* o : actors_)
-            if (Value* base = prop(o, "Base"); base && base->asObject() == m && !o->deleted)
+        for (const auto& [o, slots] : colliders())
+            if (Value* base = o->deleted ? nullptr : slotOf(o, slots->base); base && base->asObject() == m)
                 moveActor(o, moved);
     if (a >= 1) {
         if (Value* v = prop(m, "bInterpolating"))
@@ -679,7 +728,14 @@ void ScriptLevel::steer(VmObject* a, float dt) {
         }
         if (Value* d = prop(a, "DesiredRotation")) {
             auto want = Vm::rotatorOf(*d);
-            *d = vm_.rotatorValue(want[0], yawOf(to), want[2]);
+            Vec faces = to;
+            if (g.facing) {
+                const Vec focus = g.focusActor && !g.focusActor->deleted ? vecOf(prop(g.focusActor, "Location")) : g.focus;
+                faces = sub(focus, here);
+                if (Value* f = prop(a, "Focus"))
+                    *f = vm_.vectorValue(focus[0], focus[1], focus[2]);
+            }
+            *d = vm_.rotatorValue(want[0], yawOf(faces), want[2]);
         }
         if (Value* s = prop(a, "DesiredSpeed"))
             s->f = g.speed;
@@ -1003,6 +1059,33 @@ void registerMovementNatives(Vm& vm) {
             *d = c.args[0];
         goal(c, g);
     });
+    // MoveTo2(Vector NewDestination, optional float Speed): The Fallen's,
+    // taken as MoveTo. StrafeTo(Vector NewDestination, Vector NewFocus) and
+    // StrafeFacing(Vector NewDestination, Actor NewTarget): there, facing
+    // the focus all the way.
+    reg("Pawn.MoveTo2", [=](NativeCall& c) {
+        ScriptLevel::Goal g;
+        g.point = Vm::vectorOf(c.args[0]);
+        g.speed = c.given.size() > 1 && c.given[1] ? c.f(1) : 1;
+        if (Value* d = c.self ? c.self->find(c.vm, "Destination") : nullptr)
+            *d = c.args[0];
+        goal(c, g);
+    });
+    for (const bool actor : {false, true})
+        reg(actor ? "Pawn.StrafeFacing" : "Pawn.StrafeTo", [=](NativeCall& c) {
+            ScriptLevel::Goal g;
+            g.point = Vm::vectorOf(c.args[0]);
+            g.facing = true;
+            if (actor)
+                g.focusActor = c.o(1);
+            else
+                g.focus = Vm::vectorOf(c.args[1]);
+            if (actor && !g.focusActor)
+                g.facing = false;
+            if (Value* d = c.self ? c.self->find(c.vm, "Destination") : nullptr)
+                *d = c.args[0];
+            goal(c, g);
+        });
     reg("Pawn.MoveToward", [=](NativeCall& c) {
         ScriptLevel::Goal g;
         g.target = c.o(0);
