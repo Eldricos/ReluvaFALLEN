@@ -99,6 +99,9 @@
 //   reluva-tool ue-probe <package | game folder> <export> [-all | -at <offset> <bytes>]  map an export's data: where lazy arrays sit,
 //                                                  what the mesh reader makes of it, its first and last
 //                                                  bytes (-all: every byte)
+//   reluva-tool ue-script <game folder> <class | Class.Function | -all <dir>>  compiled UnrealScript as
+//                                                  text: a class, struct, function or state, or every class
+//                                                  written to <dir>/<package>/<class>.uc
 //   reluva-tool ue-extract <game folder> <package> <export>  write a texture as .tga, a sound or music
 //                                                  as the file it holds
 
@@ -140,6 +143,8 @@
 #include "engines/unreal/games.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/procedural.h"
+#include "engines/unreal/script.h"
+#include "engines/unreal/script_text.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package_set.h"
 #include "engines/unreal/properties.h"
@@ -4505,6 +4510,72 @@ int cmdUeProps(int argc, char** argv) {
     return 0;
 }
 
+// Compiled UnrealScript as text (script_text.h): one class, struct,
+// function or state, or (-all) every class of every package written to
+// <dir>/<package>/<class>.uc.
+int cmdUeScript(int argc, char** argv) {
+    const bool all = argc == 5 && std::strcmp(argv[3], "-all") == 0;
+    if (argc != 4 && !all) {
+        std::fprintf(stderr, "usage: reluva-tool ue-script <game folder> <class | Class.Function | -all <dir>>\n");
+        return 2;
+    }
+    using namespace reluva::unreal;
+    PackageSet set;
+    if (reluva::Error err = set.open(argv[2], "DS9.ini")) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    const NativeTable natives(set);
+    if (all) {
+        int written = 0, failed = 0;
+        for (const std::string& name : set.names()) {
+            const Package* p = set.get(name);
+            if (!p)
+                continue;
+            for (size_t i = 0; i < p->exports().size(); ++i) {
+                if (p->exports()[i].classRef != 0)
+                    continue;
+                const std::filesystem::path dir = std::filesystem::path(argv[4]) / name;
+                std::filesystem::create_directories(dir);
+                const std::string text = scriptText(set, *p, int(i), natives);
+                std::FILE* f = std::fopen((dir / (p->objectName(int32_t(i) + 1) + ".uc")).string().c_str(), "wb");
+                if (!f) {
+                    ++failed;
+                    continue;
+                }
+                std::fwrite(text.data(), 1, text.size(), f);
+                std::fclose(f);
+                ++written;
+            }
+        }
+        std::printf("%d classes written to %s (%zu native functions known)%s\n", written, argv[4], natives.size(),
+                    failed ? (", " + std::to_string(failed) + " couldn't be").c_str() : "");
+        return failed ? 1 : 0;
+    }
+    // The export by its path; a class over anything else of the name.
+    const Package* found = nullptr;
+    int index = -1;
+    for (const std::string& name : set.names()) {
+        const Package* p = set.get(name);
+        const int at = p ? findUnrealExport(*p, argv[3]) : -1;
+        if (at < 0 || !isScriptClass(p->className(at + 1)))
+            continue;
+        if (!found || p->exports()[size_t(at)].classRef == 0) {
+            found = p;
+            index = at;
+        }
+        if (p->exports()[size_t(at)].classRef == 0)
+            break;
+    }
+    if (!found) {
+        std::fprintf(stderr, "No class, struct, function or state %s\n", argv[3]);
+        return 1;
+    }
+    std::printf("// %s, in %s\n%s", found->path(index + 1).c_str(), found->file().string().c_str(),
+                scriptText(set, *found, index, natives).c_str());
+    return 0;
+}
+
 // Maps an export's data after its properties: where lazy arrays sit (each
 // starts with the file offset just past it, so it can be told anywhere),
 // what the mesh reader makes of it, and the bytes at its start and end.
@@ -4767,6 +4838,21 @@ int cmdUeCheck(int argc, char** argv) {
         ++versions[std::to_string(pkg->version()) + "/" + std::to_string(pkg->licensee())];
         for (size_t i = 0; i < pkg->exports().size(); ++i) {
             const std::string cls = reluva::fs::toLower(pkg->className(int32_t(i) + 1));
+            // Compiled UnrealScript (script.h): every field reads, its
+            // bytecode ending where its size says, nothing left over.
+            if (isScriptClass(cls)) {
+                ScriptObject o;
+                reluva::Error err = readScriptObject(*pkg, int(i), o);
+                if (!err && o.trailing)
+                    err = reluva::Error::fail(pkg->path(int32_t(i) + 1) + ": " + std::to_string(o.trailing) +
+                                              " bytes left over");
+                const bool coded = o.kind == ScriptObject::Kind::Function || o.kind == ScriptObject::Kind::State ||
+                                   o.kind == ScriptObject::Kind::Class || o.kind == ScriptObject::Kind::Struct;
+                record(coded ? "scripts (classes, structs, functions, states)" : "scripts (properties, enums, constants)",
+                       err);
+                if (!err && coded && !o.code.statements.empty())
+                    ++tallies["scripts with bytecode"].ok;
+            }
             if (isTextureClass(cls)) {
                 reluva::image::Image img;
                 TextureInfo info;
@@ -5098,6 +5184,8 @@ int main(int argc, char** argv) {
         return cmdUeProps(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-probe") == 0)
         return cmdUeProbe(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-script") == 0)
+        return cmdUeScript(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-extract") == 0)
         return cmdUeExtract(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-check") == 0)
@@ -5156,6 +5244,7 @@ int main(int argc, char** argv) {
                  "  reluva-tool ue-props <package> <export>\n"
                  "  reluva-tool ue-extract <game folder> <package name> <export>\n"
                  "  reluva-tool ue-probe <package | game folder> <export> [-all | -at <offset> <bytes>]\n"
+                 "  reluva-tool ue-script <game folder> <class | Class.Function | -all <dir>>\n"
 #endif
                  "");
     return 2;

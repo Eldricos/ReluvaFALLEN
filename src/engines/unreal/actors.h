@@ -116,8 +116,8 @@ struct SpriteActorStats {
 };
 
 // The actors drawn as sprites. Those whose sprite is an editor icon are
-// left out: the game hides them (bHidden), but where class defaults don't
-// read the icon gives them away (see actors.md).
+// left out: the game hides them, by bHidden or by their scripts when it
+// starts (which don't run yet), and the icon gives them away (actors.md).
 std::vector<SpriteActor> findSpriteActors(const PackageSet& packages, const Package& package, ClassDefaults& defaults,
                                           SpriteActorStats* stats = nullptr);
 

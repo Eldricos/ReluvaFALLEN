@@ -32,13 +32,14 @@ they go in. Never use Epic's licensee source code (leaked or otherwise).
 | Detection | The Fallen: one Windows release by `DS9.exe` and `Engine.u`'s hashes; others by file names (`System/DS9.ini` or `System/DS9.exe`, with `Core.u` and `Engine.u`), shown as "unknown release"; any other UE1 game as unidentified |
 | Packages | header, name, import and export tables, any version 61-69 ([package.md](../formats/unreal/package.md)); found by name through the `.ini`'s `[Core.System] Paths` (`package_set.cpp`); imports resolved to the package that defines them |
 | Properties | tagged properties of every type, state frames ([package.md](../formats/unreal/package.md)) |
-| Textures | P8 with palettes (masked colour 0), DXT1, RGB8, RGBA8; all The Fallen's stored textures decode. Procedural ones (fire, water...) shown as still stand-ins until their effects are written ([texture.md](../formats/unreal/texture.md)) |
+| Textures | P8 with palettes (masked colour 0), DXT1, RGB8, RGBA8; all The Fallen's stored textures decode. Procedural ones play: fire, water, wet, ice, and The Fallen's FLC ones ([texture.md](../formats/unreal/texture.md)) |
 | Sounds | the embedded WAV, played through `common/audio`; The Fallen's music streamed from `mp3/` in place of its placeholder Sounds ([sound.md](../formats/unreal/sound.md)) |
 | Music | the embedded module is extracted (`ue-extract`); not played (no tracker player yet) |
-| Levels | all 74 of The Fallen's maps read and draw. The level's BSP model: points, vectors, nodes, surfaces, vertices ([model.md](../formats/unreal/model.md)); polygons drawn textured, with masked, translucent and modulated surfaces. Lit by lightmaps worked out from the shadow bits and light actors, with zone ambient ([lighting.md](../formats/unreal/lighting.md)); not yet checked on The Fallen's maps. Movers (doors, lifts) from their own brushes, moved through their keyframes on request, and the sky from the level's sky zone ([actors.md](../formats/unreal/actors.md)); not yet checked on The Fallen's maps. Not yet: lights' changing effects |
-| Meshes | Mesh and LodMesh read, with their animations ([mesh.md](../formats/unreal/mesh.md)); actors drawn as meshes placed in the Maps page, with their classes' defaults found at the end of the class data until classes are read properly ([actors.md](../formats/unreal/actors.md)); a Meshes page; not yet checked on The Fallen's |
+| Levels | all 74 of The Fallen's maps read and draw. The level's BSP model: points, vectors, nodes, surfaces, vertices ([model.md](../formats/unreal/model.md)); polygons drawn textured, with masked, translucent and modulated surfaces. Lit by lightmaps worked out from the shadow bits and light actors, with zone ambient ([lighting.md](../formats/unreal/lighting.md)); not yet checked on The Fallen's maps. Movers (doors, lifts) from their own brushes, moved through their keyframes on request, and the sky from the level's sky zone ([actors.md](../formats/unreal/actors.md)); not yet checked on The Fallen's maps. Lights pulse, flicker and blink; sprites drawn |
+| Meshes | Mesh and LodMesh read, with their animations ([mesh.md](../formats/unreal/mesh.md)); actors drawn as meshes placed in the Maps page, with their classes' defaults ([actors.md](../formats/unreal/actors.md)); a Meshes page; not yet checked on The Fallen's |
 | Viewer | Maps (3D, fly camera from the PlayerStart), Meshes, Textures, Sounds, Packages (tables and properties) |
-| Game | not started: UnrealScript bytecode VM, actors, collision, input, HUD/menus |
+| UnrealScript | classes, states, functions, properties, enums, constants and their bytecode read (every one of The Fallen's), and written out as text (`ue-script`) ([script.md](../formats/unreal/script.md)); not run yet |
+| Game | not started: the bytecode VM, actors, collision, input, HUD/menus |
 
 **First check against the retail data** (October 2026): all 175 packages
 open (versions 71-73), all 3801 palettes and 2868 of 2930 sounds decode.
@@ -54,6 +55,7 @@ check again:
 ./build/reluva-tool ue-check "/path/to/DS9TheFallen"      # every package, texture, sound, level
 ./build/reluva-tool ue-info  "/path/to/DS9TheFallen/System/Engine.u"
 ./build/reluva-tool ue-props "/path/to/DS9TheFallen/Maps/<map>.unr" <export>
+./build/reluva-tool ue-script "/path/to/DS9TheFallen" <class | Class.Function | -all <dir>>
 ./build/reluva --hash "/path/to/DS9TheFallen/System/DS9.exe" ".../System/Engine.u"
 ```
 
@@ -75,8 +77,8 @@ added fields).
    lit as they move; visibility by zone portals.
 3. **Meshes**: check them on The Fallen's data; sprites for actors drawn
    as sprites; meshes lit as the original lights them.
-4. **UnrealScript**: classes, functions and states from `.u` packages;
-   a bytecode interpreter; the native functions the game's script calls
+4. **UnrealScript**: classes, functions and states from `.u` packages
+   (done, [script.md](../formats/unreal/script.md)); a bytecode interpreter; the native functions the game's script calls
    (Core, Engine, then the game's own). This is the bulk of running the
    game, as it was for the QVMs of Elite Force.
 5. **Game loop**: actors ticking, collision against the BSP, the player

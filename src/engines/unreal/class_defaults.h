@@ -6,14 +6,8 @@
 // Classes' default properties, and actors' properties with them. A placed
 // actor stores only the properties that differ from its class's defaults;
 // a class stores only those that differ from its parent's. The defaults
-// are the last thing in a class's data, after its script.
-//
-// Until classes are read properly (their script parsed, part of running
-// UnrealScript), the defaults are found by where they end: the one start
-// near the end of the class's data from which tagged properties read
-// cleanly up to exactly the end, each a plausible size for its type, with
-// a config name (and the class's outer before it) just before. See
-// docs/formats/unreal/actors.md.
+// are the last thing in a class's data, after its script (script.h reads
+// it). See docs/formats/unreal/actors.md.
 
 #include "engines/unreal/package_set.h"
 #include "engines/unreal/properties.h"
@@ -66,9 +60,5 @@ private:
     std::map<std::pair<const Package*, int>, std::optional<PropertyList>> cache_;
     int found_ = 0, missing_ = 0;
 };
-
-// The default properties at the end of a class's data, found as described
-// above; exposed for testing.
-bool findTrailingDefaults(const Package& package, const std::vector<uint8_t>& data, PropertyList& out);
 
 } // namespace reluva::unreal

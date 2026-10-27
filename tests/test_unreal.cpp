@@ -13,6 +13,8 @@
 #include "engines/unreal/mesh.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/procedural.h"
+#include "engines/unreal/script.h"
+#include "engines/unreal/script_text.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package.h"
 #include "engines/unreal/package_set.h"
@@ -1249,20 +1251,33 @@ static void testImportedMeshBlock() {
     CHECK(!readMesh(p, 0, m) && m.importBlock > 0 && m.tris.size() == 1 && m.verts.size() == 6);
 }
 
+// A class's data up to its defaults (script.md): no fields or script,
+// within Object (import -1), config "System".
+static void classRecord(Bytes& b, PackageWriter& w, const char* name) {
+    b.index(0), b.index(0);       // super, next
+    b.index(0), b.index(0);       // script text, children
+    b.index(w.name(name));        // friendly name
+    b.i32(-1), b.i32(-1), b.i32(0); // line, text position, script size
+    b.u64(0), b.u64(~0ull);       // probe and ignore masks
+    b.u16(0xffff), b.i32(0);      // label table, state flags
+    b.i32(0);                     // class flags
+    for (int i = 0; i < 16; ++i)  // GUID
+        b.u8(0);
+    b.index(0), b.index(0);       // dependencies, package imports
+    b.index(-1);                  // within
+    b.index(w.name("System"));    // config name
+}
+
 static void testClassDefaultsAndMeshActors() {
-    // A class "Lamp" whose data is some script-like bytes, the class's
-    // outer and config name, then its defaults: drawn as a mesh, twice
-    // the size. A placed Lamp sets only its location.
+    // A class "Lamp" without script whose defaults draw it as a mesh,
+    // twice the size. A placed Lamp sets only its location.
     PackageWriter w;
     const int32_t meshClass = w.addImport("Engine", "Class", 0, "LodMesh");
     const int32_t texClass = w.addImport("Engine", "Class", 0, "Texture");
     const int32_t meshRef = w.addExport(meshClass, 0, "Triangle", meshData(w, true, 2));
     w.addExport(texClass, 0, "Skin", {});
     Bytes cls;
-    for (int i = 0; i < 40; ++i)
-        cls.u8(i);
-    cls.index(-1);                 // within: an object
-    cls.index(w.name("System"));   // config name
+    classRecord(cls, w, "Lamp");
     tag(cls, w, "DrawType", PropertyType::Byte, 1);
     cls.u8(2);
     tag(cls, w, "Mesh", PropertyType::Object, 1);
@@ -1293,12 +1308,77 @@ static void testClassDefaultsAndMeshActors() {
         CHECK(actors[0].mesh.package == p && actors[0].mesh.exportIndex == int(meshRef) - 1);
         CHECK(actors[0].drawScale == 2 && (actors[0].location == Vec3f{1, 2, 3}));
     }
-    // Without the config name before them, the whole list isn't taken (a
-    // tail of it can be, where other bytes happen to look like one: in a
-    // class the true start comes first, so the earliest is kept).
-    std::vector<uint8_t> bare(cls.b.begin() + 40 + 2, cls.b.end());
-    PropertyList tail;
-    CHECK(!findTrailingDefaults(*p, bare, tail) || tail.items.size() < 3);
+}
+
+static void testScript() {
+    // An IntProperty "Count" and a function using it:
+    //   Count = 5; if (true) { Lamp(0); native 0x9a(0, 1); } return;
+    PackageWriter w;
+    const int32_t intProp = w.addImport("Core", "Class", 0, "IntProperty");
+    const int32_t function = w.addImport("Core", "Class", 0, "Function");
+    Bytes prop;
+    endProps(prop, w);
+    prop.index(0), prop.index(0);           // super, next
+    prop.i32(1), prop.u32(propflag::Edit);  // array size, flags
+    prop.index(w.name("Lamp"));             // category
+    const int32_t count = w.addExport(intProp, 0, "Count", prop.b);
+    Bytes code;
+    code.u8(token::Let), code.u8(token::LocalVariable), code.index(count), code.u8(token::IntConst), code.i32(5);
+    code.u8(token::JumpIfNot), code.u16(26), code.u8(token::True);
+    code.u8(token::VirtualFunction), code.index(w.name("Lamp")), code.u8(token::IntZero),
+        code.u8(token::EndFunctionParms);
+    code.u8(0x9a), code.u8(token::IntZero), code.u8(token::IntOne), code.u8(token::EndFunctionParms);
+    code.u8(token::Return), code.u8(token::Nothing);
+    Bytes fn;
+    endProps(fn, w);
+    fn.index(0), fn.index(0), fn.index(0), fn.index(count); // super, next, script text, children
+    fn.index(w.name("Lamp")), fn.i32(10), fn.i32(100);       // friendly name, line, text position
+    fn.i32(28);                                              // script size in memory
+    fn.b.insert(fn.b.end(), code.b.begin(), code.b.end());
+    fn.u16(0), fn.u8(0), fn.u32(funcflag::Defined | funcflag::Event); // native, precedence, flags
+    w.addExport(function, 0, "Light", fn.b);
+    Package p;
+    CHECK(!p.openMemory(w.build(), "Script"));
+    ScriptObject o;
+    const Error err = readScriptObject(p, 0, o);
+    CHECK(!err && o.kind == ScriptObject::Kind::Property && o.arrayDim == 1 && o.propertyFlags == propflag::Edit);
+    CHECK(!readScriptObject(p, 1, o) && o.kind == ScriptObject::Kind::Function && o.trailing == 0);
+    CHECK(o.children == count && o.line == 10 && o.functionFlags == (funcflag::Defined | funcflag::Event));
+    const Code& c = o.code;
+    CHECK(c.size == 28 && c.statements.size() == 5);
+    if (c.statements.size() == 5) {
+        const Expr& let = c.exprs[size_t(c.statements[0])];
+        CHECK(let.token == token::Let && let.args.size() == 2 && let.offset == 0);
+        CHECK(c.exprs[size_t(let.args[0])].ref == count && c.exprs[size_t(let.args[1])].value == 5);
+        const Expr& jump = c.exprs[size_t(c.statements[1])];
+        CHECK(jump.offset == 11 && jump.value == 26); // the reference counts 4 bytes, as in memory
+        const Expr& call = c.exprs[size_t(c.statements[2])];
+        CHECK(call.token == token::VirtualFunction && p.name(call.ref) == "Lamp" && call.args.size() == 2);
+        const Expr& native = c.exprs[size_t(c.statements[3])];
+        CHECK(native.native == 0x9a && native.offset == 22 && native.args.size() == 3);
+        CHECK(c.exprs[size_t(c.statements[4])].offset == 26);
+    }
+    // A size that the tokens don't end at is refused.
+    Reader r(code.b);
+    Code bad;
+    CHECK(decodeCode(p, r, 27, bad));
+    // As text: the variable a local (it isn't a parameter), the jump by
+    // its offset, the unknown native by number.
+    PackageSet set;
+    set.addMemory("Script", ".u", w.build());
+    const Package* sp = set.get("Script");
+    CHECK(sp != nullptr);
+    if (!sp)
+        return;
+    const NativeTable natives(set);
+    const std::string text = scriptText(set, *sp, 1, natives);
+    CHECK(text.find("event Light()") != std::string::npos);
+    CHECK(text.find("local int Count;") != std::string::npos);
+    CHECK(text.find("0x0000: Count = 5;") != std::string::npos);
+    CHECK(text.find("0x000B: if (!(true)) jump 0x001A") != std::string::npos);
+    CHECK(text.find("0x000F: Lamp(0);") != std::string::npos);
+    CHECK(text.find("0x0016: native154(0, 1);") != std::string::npos);
+    CHECK(text.find("0x001A: return;") != std::string::npos);
 }
 
 int main() {
@@ -1319,6 +1399,7 @@ int main() {
     testImportedMeshBlock();
     testAnimationSet();
     testClassDefaultsAndMeshActors();
+    testScript();
     testMapExtension();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

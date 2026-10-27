@@ -108,15 +108,15 @@ lights where they stand (as placed meshes are) unless `bUnlit`; blended
 ones are drawn at full brightness; both times `ScaleGlow`.
 
 Most actors are sprites by default (Engine.Actor's `DrawType`), but
-those only the editor shows are `bHidden`. Where class defaults don't
-read right (CTV_TriggerLight's), that's missed, so actors whose sprite is
-an editor icon are left out as well: textures named `S_...` (Engine's:
-S_Light, S_Camera...), `EI_...` (The Fallen's ops station icons),
-containing "icon" (CTVE_Spark_Icon, DS9_Steam_Icon), or named after the
-actor's class (DS9_SparkNode). That leaves 18 sprites in The Fallen's
+those only the editor shows are `bHidden`, or hide themselves when the
+game starts: `CTV_TriggerLight.PostBeginPlay` sets `DrawType` to none
+([script.md](script.md#as-text)). As scripts don't run yet, actors whose
+sprite is an editor icon are left out as well: textures named `S_...`
+(Engine's: S_Light, S_Camera...), `EI_...` (The Fallen's ops station
+icons), containing "icon" (CTVE_Spark_Icon, DS9_Steam_Icon), or named
+after the actor's class (DS9_SparkNode). That leaves 16 sprites in The Fallen's
 74 maps (`ue-check` lists their textures): the disintegration effects
-(FX.spark03, a fire texture), snow spawners' flake, two targeting dummies,
-a mine's halo (a wet texture) and a blinking smoke marker (a FliTexture,
+(FX.spark03, a fire texture), snow spawners' flake, a mine's halo (a wet texture) and a blinking smoke marker (a FliTexture,
 below). Their fire, wet and FLC textures play ([texture.md](texture.md#animated-textures)).
 
 ## Class defaults
@@ -127,15 +127,12 @@ actor's mesh, draw type and scale usually come from its class. The
 defaults are the last thing in a class's data, after its script and
 just after its config name (and before that, the class it's within).
 
-Reading a class properly means parsing its script (part of running
-UnrealScript, not done yet). Meanwhile `findTrailingDefaults()` finds
-them by where they end: the earliest start within the last 64 KB of the
-class's data from which tagged properties read cleanly to exactly the
-end, each a plausible size for its type, with a compact name index and a
-compact object reference just before. Later starts that also read are
-tails of the same list, so the earliest is kept; without the config name
-before it, a list's start isn't taken. `ue-check` counts the classes
-whose defaults were found and weren't. An actor's properties are then
+They are read with the rest of the class ([script.md](script.md)):
+after its fields, its config name. (Until classes were read, they were
+found by guessing where the list started from where it ended; on The
+Fallen that went wrong in 810 of 1,442 classes, losing the first
+property (bStatic, in most) and inventing junk ones ("Engine", "System").) `ue-check`
+counts the classes whose defaults were found and weren't. An actor's properties are then
 its own over its class's defaults over each parent's
 (`ClassDefaults::actorProperties()`), each property's object references
 read in the package it came from.
