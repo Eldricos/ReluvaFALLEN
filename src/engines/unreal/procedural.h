@@ -5,7 +5,8 @@
 
 // Textures whose pixels change as the game runs: fire (FireTexture),
 // water (WaterTexture, WaveTexture, and WetTexture, which ripples another
-// texture) and The Fallen's FliTexture (an FLC animation stored with
+// texture), ice (IceTexture, one texture seen through another sliding
+// over it) and The Fallen's FliTexture (an FLC animation stored with
 // it). The procedural ones store only their settings (fire's sparks,
 // water's drops); the pictures are made here, Reluva's own simulation of
 // what the settings describe, to be compared with the original running.
@@ -27,7 +28,7 @@ public:
     const image::Image& image() const { return image_; }
     // Moves on by `seconds`; true if the picture changed.
     virtual bool advance(float seconds) = 0;
-    // What it is: "fire", "water", "wet", "FLC".
+    // What it is: "fire", "water", "wave", "wet", "ice", "FLC".
     virtual const char* kind() const = 0;
 
 protected:

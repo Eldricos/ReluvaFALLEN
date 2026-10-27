@@ -175,8 +175,9 @@ static Error decodeAt(const PackageSet& packages, const Package& package, int in
                                (props.find("bHasComp") ? "" : ", and no bHasComp"));
         std::string standIn;
         // Fire, water and FLC textures: their animation's first picture.
-        // (Wet ones show their source texture, unrippled, as before.)
-        if (fs::toLower(cls) != "wettexture" && isAnimatedTextureClass(cls)) {
+        // (Wet and ice ones show their source texture, undistorted, as
+        // before; scripted ones too, as only their script draws on them.)
+        if (fs::toLower(cls) != "wettexture" && fs::toLower(cls) != "icetexture" && isAnimatedTextureClass(cls)) {
             std::string why;
             if (auto anim = openAnimatedTexture(packages, package, index, &why)) {
                 out = anim->image();

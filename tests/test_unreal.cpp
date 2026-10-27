@@ -713,6 +713,8 @@ static void testAnimatedTextures() {
     const int32_t fli = w.addImport("DS9", "Class", 0, "FliTexture");
     const int32_t fire = w.addImport("Fire", "Class", 0, "FireTexture");
     const int32_t water = w.addImport("Fire", "Class", 0, "WaterTexture");
+    const int32_t ice = w.addImport("Fire", "Class", 0, "IceTexture");
+    const int32_t brick = w.addImport("Engine", "Texture", walls, "Brick");
     auto start = [&](Bytes& o) {
         tag(o, w, "Palette", PropertyType::Object, 1);
         o.index(pal);
@@ -766,6 +768,19 @@ static void testAnimatedTextures() {
     endProps(wb, w);
     mips(wb, 8, 8);
     w.addExport(water, 0, "Pool", wb.b);
+    // Brick through itself, the source sliding a pixel a second.
+    Bytes ib;
+    tag(ib, w, "SourceTexture", PropertyType::Object, 1);
+    ib.index(brick);
+    tag(ib, w, "GlassTexture", PropertyType::Object, 1);
+    ib.index(brick);
+    tag(ib, w, "HorizPanSpeed", PropertyType::Byte, 1);
+    ib.u8(132);
+    tag(ib, w, "MoveIce", PropertyType::Bool, 0);
+    ib.b.back() |= 0x80;
+    endProps(ib, w);
+    mips(ib, 4, 2);
+    w.addExport(ice, 0, "Frost", ib.b);
     PackageSet set;
     set.addMemory("Walls", ".utx", texturePackage());
     set.addMemory("Fx", ".utx", w.build());
@@ -799,6 +814,21 @@ static void testAnimatedTextures() {
         CHECK(std::string(pool->kind()) == "water" && pool->image().w == 8);
         std::vector<uint8_t> before = pool->image().rgba;
         CHECK(pool->advance(0.1f) && pool->image().rgba != before);
+    }
+    auto frost = openAnimatedTexture(set, *p, 3, &err);
+    CHECK(frost != nullptr);
+    if (frost) {
+        CHECK(std::string(frost->kind()) == "ice" && frost->image().w == 4 && frost->image().h == 2);
+        auto run = [&](float seconds) {
+            for (int k = 0; k < int(seconds * 30 + 0.5f); ++k)
+                frost->advance(1.0f / 30);
+        };
+        run(0.5f);
+        const std::vector<uint8_t> start = frost->image().rgba;
+        run(1);
+        CHECK(frost->image().rgba != start); // slid a pixel
+        run(3);
+        CHECK(frost->image().rgba == start); // the whole width: as it was
     }
     // A plain texture isn't one.
     CHECK(!isAnimatedTextureClass("Texture") && isAnimatedTextureClass("WetTexture"));

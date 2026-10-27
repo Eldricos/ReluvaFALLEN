@@ -237,7 +237,7 @@ void MapViewer::load(int index) {
                 if (firstMissing.empty())
                     firstMissing = tex.package->path(tex.exportIndex + 1);
             } else {
-                // Fire, water, wet and FLC textures play, redrawn as they
+                // Fire, water, wet, ice and FLC textures play, redrawn as they
                 // change (so without mipmaps, which updates don't redo).
                 std::unique_ptr<AnimatedTexture> anim;
                 if (isAnimatedTextureClass(tex.package->className(tex.exportIndex + 1)))
@@ -824,7 +824,7 @@ void MapViewer::drawSprites(const gfx::Vec3& forward, const gfx::Vec3& right) {
         }
 }
 
-// Moves the fire, water, wet and FLC textures on, uploading those that
+// Moves the fire, water, wet, ice and FLC textures on, uploading those that
 // changed.
 void MapViewer::updateAnimatedTextures(float dt) {
     std::vector<gfx::TextureRegion> regions;

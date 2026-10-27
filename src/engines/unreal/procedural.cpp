@@ -571,6 +571,107 @@ private:
 };
 
 // ---------------------------------------------------------------------
+// Ice: a SourceTexture seen through a GlassTexture, one sliding over the
+// other. Each pixel shows the source shifted by the slope of the glass's
+// brightness there (a quarter of the difference either side, up to 16
+// pixels), like light bent through uneven glass. The glass slides (or,
+// with MoveIce, the source does) as PanningStyle says (IceTexture's
+// PanningType in Fire.u): Linear at HorizPanSpeed and VertPanSpeed (128
+// still; a step either side a quarter of a pixel a second); Circular round
+// a circle of Amplitude / 4 pixels, Frequency / 64 turns a second;
+// Gestation wobbling to and fro on both axes; WavyX and WavyY linear with
+// a wobble across. None of The Fallen's textures is an IceTexture, so this
+// is untried on real data.
+
+// A referenced texture, decoded and scaled to w x h.
+bool scaledPicture(const PackageSet& packages, const Package& package, int32_t ref, int w, int h, image::Image& out) {
+    const ObjectRef obj = packages.resolve(package, ref);
+    image::Image img;
+    if (!obj || decodeTexture(packages, *obj.package, obj.exportIndex, img) || img.w <= 0 || img.h <= 0)
+        return false;
+    out.w = w;
+    out.h = h;
+    out.rgba.resize(size_t(w) * size_t(h) * 4);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            std::copy_n(img.pixel(x * img.w / w, y * img.h / h), 4, out.pixel(x, y));
+    return true;
+}
+
+class Ice : public AnimatedTexture {
+public:
+    enum Panning : uint8_t { Linear, Circular, Gestation, WavyX, WavyY };
+
+    Ice(const PropertyList& props, image::Image source, image::Image glass)
+        : source_(std::move(source)), glass_(std::move(glass)) {
+        panning_ = props.byte("PanningStyle");
+        hSpeed_ = float(int(props.byte("HorizPanSpeed", 128)) - 128) / 4;
+        vSpeed_ = float(int(props.byte("VertPanSpeed", 128)) - 128) / 4;
+        frequency_ = float(props.byte("Frequency")) / 64;
+        amplitude_ = float(props.byte("Amplitude")) / 4;
+        moveIce_ = props.boolean("MoveIce");
+        // The glass's brightness, for its slopes.
+        brightness_.resize(size_t(glass_.w) * size_t(glass_.h));
+        for (size_t i = 0; i < brightness_.size(); ++i) {
+            const uint8_t* p = glass_.rgba.data() + i * 4;
+            brightness_[i] = (int(p[0]) * 3 + int(p[1]) * 6 + int(p[2])) / 10;
+        }
+        image_ = source_;
+        render();
+    }
+
+    const char* kind() const override { return "ice"; }
+
+    bool advance(float seconds) override {
+        const int n = dueSteps(pending_, seconds);
+        time_ += float(n) / kStepsPerSecond;
+        if (n)
+            render();
+        return n > 0;
+    }
+
+private:
+    // How far the moving one has slid, in pixels.
+    std::array<float, 2> offset() const {
+        const float angle = 2 * kPi * frequency_ * time_;
+        switch (panning_) {
+        case Circular: return {amplitude_ * std::cos(angle), amplitude_ * std::sin(angle)};
+        case Gestation: return {amplitude_ * std::sin(angle), amplitude_ * std::sin(angle * 1.3f)};
+        case WavyX: return {hSpeed_ * time_, vSpeed_ * time_ + amplitude_ * std::sin(angle)};
+        case WavyY: return {hSpeed_ * time_ + amplitude_ * std::sin(angle), vSpeed_ * time_};
+        default: return {hSpeed_ * time_, vSpeed_ * time_};
+        }
+    }
+
+    static int wrap(int v, int n) { return ((v % n) + n) % n; }
+
+    void render() {
+        const int w = source_.w, h = source_.h;
+        const auto [ou, ov] = offset();
+        const int gx = int(std::floor(ou)), gy = int(std::floor(ov));
+        // The glass's offset, or the source's with MoveIce.
+        const int glassX = moveIce_ ? 0 : gx, glassY = moveIce_ ? 0 : gy;
+        const int srcX = moveIce_ ? gx : 0, srcY = moveIce_ ? gy : 0;
+        auto glassAt = [&](int x, int y) {
+            return brightness_[size_t(wrap(y + glassY, h)) * size_t(w) + size_t(wrap(x + glassX, w))];
+        };
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const int dx = std::clamp((glassAt(x + 1, y) - glassAt(x - 1, y)) / 4, -16, 16);
+                const int dy = std::clamp((glassAt(x, y + 1) - glassAt(x, y - 1)) / 4, -16, 16);
+                std::copy_n(source_.pixel(wrap(x + dx + srcX, w), wrap(y + dy + srcY, h)), 4, image_.pixel(x, y));
+            }
+    }
+
+    image::Image source_, glass_;
+    std::vector<int> brightness_;
+    uint8_t panning_ = Linear;
+    float hSpeed_ = 0, vSpeed_ = 0, frequency_ = 0, amplitude_ = 0;
+    bool moveIce_ = false;
+    float time_ = 0, pending_ = 0;
+};
+
+// ---------------------------------------------------------------------
 // FLC: The Fallen's FliTexture keeps an FLC animation (Autodesk
 // Animator's format, without its file header) after its mipmaps:
 // float length, float rate, u16 frames, width, height, an unknown u16,
@@ -806,7 +907,8 @@ std::unique_ptr<AnimatedTexture> openFlc(const TextureData& t, Palette palette, 
 
 bool isAnimatedTextureClass(std::string_view className) {
     const std::string c = fs::toLower(className);
-    return c == "firetexture" || c == "watertexture" || c == "wavetexture" || c == "wettexture" || c == "flitexture";
+    return c == "firetexture" || c == "watertexture" || c == "wavetexture" || c == "wettexture" || c == "flitexture" ||
+           c == "icetexture";
 }
 
 std::unique_ptr<AnimatedTexture> openAnimatedTexture(const PackageSet& packages, const Package& package,
@@ -829,6 +931,14 @@ std::unique_ptr<AnimatedTexture> openAnimatedTexture(const PackageSet& packages,
     if (cls == "flitexture") {
         auto out = openFlc(t, palette, what, err);
         return out ? std::move(out) : fail(err);
+    }
+    if (cls == "icetexture") {
+        image::Image source, glass;
+        if (!scaledPicture(packages, package, t.props.object("SourceTexture"), t.width, t.height, source))
+            return fail(what + ": its SourceTexture doesn't read");
+        if (!scaledPicture(packages, package, t.props.object("GlassTexture"), t.width, t.height, glass))
+            return fail(what + ": its GlassTexture doesn't read");
+        return std::make_unique<Ice>(t.props, std::move(source), std::move(glass));
     }
     if (cls == "firetexture") {
         Reader r(t.data, t.base);
@@ -857,16 +967,8 @@ std::unique_ptr<AnimatedTexture> openAnimatedTexture(const PackageSet& packages,
     }
     image::Image source;
     if (cls == "wettexture") {
-        const ObjectRef ref = packages.resolve(package, t.props.object("SourceTexture"));
-        image::Image img;
-        if (!ref || decodeTexture(packages, *ref.package, ref.exportIndex, img) || img.w <= 0 || img.h <= 0)
+        if (!scaledPicture(packages, package, t.props.object("SourceTexture"), t.width, t.height, source))
             return fail(what + ": its SourceTexture doesn't read");
-        source.w = t.width;
-        source.h = t.height;
-        source.rgba.resize(size_t(t.width) * size_t(t.height) * 4);
-        for (int y = 0; y < t.height; ++y)
-            for (int x = 0; x < t.width; ++x)
-                std::copy_n(img.pixel(x * img.w / t.width, y * img.h / t.height), 4, source.pixel(x, y));
     }
     return std::make_unique<Water>(t.width, t.height, t.props, palette, std::move(drops), std::move(source),
                                    cls == "wettexture" ? "wet" : cls == "wavetexture" ? "wave" : "water");

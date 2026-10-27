@@ -41,16 +41,17 @@ Procedural textures (FireTexture, WaterTexture, WetTexture, WaveTexture,
 IceTexture, ScriptedTexture, and The Fallen's FliTexture) are laid out
 the same. In The Fallen they store a top mipmap of their size with no
 pixels: the engine makes them while the game runs. Fire, water, wave,
-wet and FLC textures play (below, `procedural.cpp`), in the Maps page
-and the Textures page (Space pauses); as a still picture (the meshes
-page, `decodeTexture()`) they show their first picture. Wet textures
-still show their source texture unrippled, and Ice and Scripted ones a
-still stand-in of the right size, so surfaces' texture coordinates come
-out right: for Ice textures the texture they distort (their
-`SourceTexture` or `GlassTexture` property), scaled to their size; for
-the others a gradient through their palette. The Textures page says
-which it is. `ue-check` runs each animated texture for ten seconds:
-on The Fallen all 519 play (337 FLC, 108 fire, 70 wet, 4 wave).
+wet, ice and FLC textures play (below, `procedural.cpp`), in the Maps
+page and the Textures page (Space pauses); as a still picture (the
+meshes page, `decodeTexture()`) fire, water and FLC ones show their
+first picture, and wet, ice and scripted ones their `SourceTexture`
+scaled to their size (or an ice texture's `GlassTexture` without one);
+any other, a gradient through its palette. The Textures page says which
+it is. `ue-check` runs each animated texture for ten seconds: on The
+Fallen all 519 play (337 FLC, 108 fire, 70 wet, 4 wave).
+
+The Fallen has no IceTexture or ScriptedTexture objects: of its 180
+packages, only Fire.u and Engine.u name them, defining the classes.
 
 ## Animated textures
 
@@ -133,3 +134,30 @@ A wet texture shows its `SourceTexture` with each pixel moved by the
 slope there (times `WaveAmp` / 128, up to 16 pixels); water and wave
 textures show the slope through their palette (128 flat). WaveTexture's
 bump-map lighting isn't done yet.
+
+### Ice (IceTexture)
+
+A `SourceTexture` seen through a `GlassTexture`, one sliding over the
+other (both scaled to the texture's size). Each pixel shows the source
+shifted by the slope of the glass's brightness there (a quarter of the
+difference either side, up to 16 pixels), like light bent by uneven
+glass. The glass slides, or with `MoveIce` the source does, as
+`PanningStyle` says (`PanningType` in Fire.u):
+
+| Style | Movement |
+|---|---|
+| 0 Linear | `HorizPanSpeed`, `VertPanSpeed`: 128 still, each step either side a quarter of a pixel a second |
+| 1 Circular | round a circle of `Amplitude` / 4 pixels, `Frequency` / 64 turns a second |
+| 2 Gestation | to and fro on both axes, at slightly different rates |
+| 3 WavyX, 4 WavyY | linear, with a wobble across |
+
+`TimeMethod` (frame-rate synced or real time) isn't used: it always runs
+in real time, 30 steps a second. With no ice textures in The Fallen,
+this is Reluva's reading of the property names, tried only on the
+tests' made-up texture.
+
+### Scripted (ScriptedTexture)
+
+Drawn by UnrealScript while the game runs: its `NotifyActor`'s
+`RenderTexture` event calls `DrawTile`, `DrawText` and the like on it
+(Engine.u). Until Reluva runs UnrealScript it shows its `SourceTexture`.

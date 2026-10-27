@@ -4775,7 +4775,7 @@ int cmdUeCheck(int argc, char** argv) {
                     ++tallies["textures (procedural, stand-in shown)"].ok;
                 else
                     record("textures", err);
-                // Fire, water, wet and FLC textures: whether they play
+                // Fire, water, wet, ice and FLC textures: whether they play
                 // (procedural.h), ten seconds of each (some FLCs show a frame for seconds).
                 if (isAnimatedTextureClass(cls)) {
                     std::string why;

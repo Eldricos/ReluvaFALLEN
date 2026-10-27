@@ -62,7 +62,7 @@ struct ViewerContext {
     MeshTurn meshTurn = MeshTurn::Reverse;
     int meshYawQuarters = kImportYawQuarters; // and about Z (Y changes it)
     // The Fallen's shared animation sets, read the first time a page needs them.
-    std::optional<std::vector<AnimationSet>> animationSets;
+    std::optional<std::vector<AnimationSet>> animationSets{};
     const std::vector<AnimationSet>& sets() {
         if (!animationSets)
             animationSets = findAnimationSets(packages);
@@ -316,7 +316,7 @@ private:
     std::vector<float> lightLevels_; // each one's brightness as last drawn
     std::vector<AnimatedLightmap> animatedLightmaps_;
     float lightTime_ = 0;
-    // Fire, water, wet and FLC textures, playing.
+    // Fire, water, wet, ice and FLC textures, playing.
     void updateAnimatedTextures(float dt);
     std::vector<std::pair<gfx::TextureId, std::unique_ptr<AnimatedTexture>>> animatedTextures_;
 

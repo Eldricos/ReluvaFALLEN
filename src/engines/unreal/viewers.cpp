@@ -264,7 +264,7 @@ void TextureViewer::handleEvent(const Event& ev) {
     select();
 }
 
-// Fire, water, wet and FLC textures play.
+// Fire, water, wet, ice and FLC textures play.
 void TextureViewer::update(uint64_t nowMs) {
     const float dt = lastMs_ ? std::min(0.1f, float(nowMs - lastMs_) / 1000.0f) : 0.0f;
     lastMs_ = nowMs;
