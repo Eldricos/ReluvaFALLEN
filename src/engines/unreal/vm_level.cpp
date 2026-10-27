@@ -344,6 +344,15 @@ void ScriptLevel::tick(float seconds) {
             physics(a, seconds);
         if (!a->deleted)
             animate(a, seconds);
+        // A life span running out: Expired, then gone.
+        if (Value* life = a->deleted ? nullptr : prop(a, "LifeSpan"); life && life->asFloat() > 0) {
+            life->f -= seconds;
+            if (life->f <= 0) {
+                life->f = 0;
+                vm_.callEvent(a, "Expired");
+                destroy(a);
+            }
+        }
     }
     // What's attached (C3DAttach) goes where its holder now is.
     placeAttached();

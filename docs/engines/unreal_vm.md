@@ -110,6 +110,11 @@ their `Level`, `XLevel` and `Outer` set. Then `beginPlay`:
    `PostBeginPlay`, `SetInitialState` as they're made; destroyed ones
    `Destroyed` (and their owner `LostChild`); `bStatic` and `bNoDelete`
    actors refuse to go.
+4. Each tick an actor's `LifeSpan`, if it has one, counts down. At 0 it
+   gets `Expired` and is destroyed. The Fallen's generators (sparks, the
+   Jerrado bug swarm: one every 5 ms, each to live 0.4 s) count on it.
+   Without it, M03_KiraL2's swarm had made 17,500 actors by 20 seconds
+   in.
 
 UnrealEd keeps its viewports' cameras in the level as `Camera` actors
 (292 of them over The Fallen's maps). `Camera` is a `PlayerPawn`, and in
@@ -201,7 +206,9 @@ What's left before play, by what `ue-run` reports:
   carries on); `CTV_ElevatorMover.InitRamp` and `CTV_TriggerLight.Tick`
   divide by an elevator's move time or a light's change time, 0 in some
   (floats divide to infinity, as they do: the light's fade then ends at
-  once; reported).
+  once; reported). `DS9_JerradoBugStream.SetUpMultiMesh` divides by its
+  owner's speed, 0 when it stands still (each piece of the swarm made
+  then: reported).
 
 ## Movement
 
