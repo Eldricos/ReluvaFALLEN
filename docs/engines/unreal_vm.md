@@ -189,9 +189,7 @@ The movement: 187,000 moves, 6,837 landings, 8,341 touches.
 
 What's left before play, by what `ue-run` reports:
 
-- **Natives not written** (45): The Fallen's own skeletal meshes
-  (`C3DActorInit`, `C3DIsBoned`, `C3DGetAttachPtCoords`...), its
-  `ListActors` iterator (an AI's list of known actors, not yet
+- **Natives not written** (33): The Fallen's `ListActors` iterator (an AI's list of known actors, not yet
   understood), `CheckFOV`, `GetRendererFlags`. The AI's paths
   (`FindPathToward`, `RadiusPathNodes` and the other path node
   iterators). Its dialogue (`FindBestDialogLine`, `StartDialog`,
