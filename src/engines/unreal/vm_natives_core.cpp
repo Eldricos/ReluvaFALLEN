@@ -403,8 +403,11 @@ void registerCoreNatives(Vm& vm) {
             size_t(c.i(1)) < so.enumNames.size())
             c.result = Value::nameValue(c.vm.name(e->package->name(so.enumNames[size_t(c.i(1))])));
     });
+    // DynamicLoadObject(string ObjectName, class ObjectClass, optional bool MayFail):
+    // the object of that name and class.
     reg("DynamicLoadObject", [=](NativeCall& c) {
-        VmObject* o = c.vm.findObject(c.s(0));
+        VmObject* cls = c.o(1);
+        VmObject* o = c.vm.findObject(c.s(0), cls && cls->asClass ? cls->asClass : nullptr);
         if (!o && !(c.given.size() > 2 && c.b(2)))
             c.vm.reportError("DynamicLoadObject couldn't find " + c.s(0));
         c.result = Value::objectValue(o);

@@ -84,6 +84,12 @@ rate divides is a guess from its saved `FrameTime` (0.058, more than
 1/30). Pixels go through the FLC's own palette chunks, starting from
 the texture's palette; masked textures see through colour 0.
 
+Playing is script's to ask for: `Mode` (0 stopped, 1 once, 2 looping),
+with `FrameNum` and `FrameTime` where it is. Reluva plays a FliTexture
+by those once the HUD draws it (see [unreal_vm.md](../../engines/unreal_vm.md));
+going back to an earlier frame decodes again from the first. A HUD tile
+that sees through colour 0 does so in every frame.
+
 ### Fire (FireTexture)
 
 A heat value (0-255) per pixel, shown through the palette. After the

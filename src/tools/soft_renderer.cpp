@@ -269,10 +269,11 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                 area = -area;
             }
             ++triangles_;
-            const int x0 = std::max(0, int(std::floor(std::min({v0->x, v1->x, v2->x}))));
-            const int x1 = std::min(w_ - 1, int(std::ceil(std::max({v0->x, v1->x, v2->x}))));
-            const int y0 = std::max(0, int(std::floor(std::min({v0->y, v1->y, v2->y}))));
-            const int y1 = std::min(h_ - 1, int(std::ceil(std::max({v0->y, v1->y, v2->y}))));
+            // Within the viewport (a HUD portrait's), as a GPU keeps to it.
+            const int x0 = std::max(std::max(0, vx_), int(std::floor(std::min({v0->x, v1->x, v2->x}))));
+            const int x1 = std::min(std::min(w_, vx_ + vw_) - 1, int(std::ceil(std::max({v0->x, v1->x, v2->x}))));
+            const int y0 = std::max(std::max(0, vy_), int(std::floor(std::min({v0->y, v1->y, v2->y}))));
+            const int y1 = std::min(std::min(h_, vy_ + vh_) - 1, int(std::ceil(std::max({v0->y, v1->y, v2->y}))));
             auto edge = [](const Screen& p, const Screen& q, float x, float y) {
                 return (q.x - p.x) * (y - p.y) - (q.y - p.y) * (x - p.x);
             };

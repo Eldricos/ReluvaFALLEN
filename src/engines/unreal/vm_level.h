@@ -169,11 +169,14 @@ public:
     // (a texture's rectangle, in texels, drawn at a rectangle of the
     // screen, in pixels; letters are tiles from their font's pages) and
     // actors drawn over the world (a held weapon, a talker's picture).
+    // A view: a camera and the rectangle of the screen it's drawn in (the
+    // whole screen, or one SetRenderFrame sets: a talker's portrait).
     struct HudView {
         std::array<float, 3> location{};
         std::array<int32_t, 3> rotation{};
         float fov = 90;
         int width = 640, height = 480;
+        int x = 0, y = 0; // the rectangle's top left
     };
     struct HudTile {
         ObjectRef texture;
@@ -181,17 +184,31 @@ public:
         std::array<uint8_t, 3> color{255, 255, 255};
         uint8_t style = 1;       // Actor's ERenderStyle: 1 normal, 2 masked, 3 translucent, 4 modulated
         bool seeThrough = false; // its texture's colour 0 see-through (letters, masked tiles)
+        int frame = 0;           // an FliTexture's frame showing (from 1); 0 for any other texture
     };
     struct HudActor {
         VmObject* actor = nullptr;
-        bool clearZ = false;
-        int x = 0, y = 0, xb = 0, yb = 0; // DrawClippedActor's rectangle; 0s: the whole screen
+        bool clearZ = false;   // the depth cleared before it
+        HudView view;          // the camera and rectangle it's drawn in
+        size_t afterTiles = 0; // drawn after this many tiles, over them
+        // How it looked as it was asked for (the HUD sets these just for
+        // the call: a portrait's fade): draw type, style, glow.
+        int drawType = 0, style = 1;
+        float scaleGlow = 1;
     };
     struct Hud {
         std::vector<HudTile> tiles;
         std::vector<HudActor> actors;
     };
     void renderHud(const HudView& view);
+    // The view DrawActor draws in now, set by SetRenderFrame; whether its
+    // depth is still to be cleared (ClearZ) before the next actor.
+    HudView& hudFrame() { return hudFrame_; }
+    bool& hudFrameClear() { return hudFrameClear_; }
+    // The FliTextures the HUD draws, played on each tick as their own
+    // properties say (Mode, Rate, FrameNum, FrameTime).
+    void trackFli(VmObject* texture);
+    void tickFlis(float seconds);
     Hud& hud() { return hud_; }
     const HudView& hudView() const { return hudView_; }
     const Font* fontOf(VmObject* font);
@@ -421,7 +438,13 @@ private:
     std::map<VmObject*, Bends> bends_;
     void loadPaths();
     Hud hud_;
-    HudView hudView_;
+    HudView hudView_, hudFrame_;
+    bool hudFrameClear_ = false;
+    struct Fli {
+        int frames = 0;
+        float frameSeconds = 1.0f / 30;
+    };
+    std::map<VmObject*, Fli> flis_;
     VmObject* canvas_ = nullptr;
     std::map<std::pair<const Package*, int>, std::shared_ptr<Font>> fonts_;
     using IntFile = std::map<std::string, std::vector<std::pair<std::string, std::string>>>; // by section, lower case

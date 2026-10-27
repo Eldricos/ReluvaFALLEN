@@ -685,7 +685,7 @@ public:
     Flc(int w, int h, int fw, int fh, Palette palette, bool masked, std::vector<uint8_t> frames,
         std::vector<std::pair<size_t, size_t>> spans, bool ring, float frameTime)
         : w_(w), h_(h), fw_(fw), fh_(fh), palette_(palette), masked_(masked), data_(std::move(frames)),
-          spans_(std::move(spans)), ring_(ring), frameTime_(frameTime) {
+          spans_(std::move(spans)), ring_(ring), frameTime_(frameTime), firstPalette_(palette) {
         pixels_.assign(size_t(fw) * size_t(fh), 0);
         image_.w = w;
         image_.h = h;
@@ -694,6 +694,31 @@ public:
     }
 
     const char* kind() const override { return "FLC"; }
+    int frames() const override { return int(spans_.size()) - (ring_ ? 1 : 0); }
+    void setBaseFrameSeconds(float s) { baseFrameSeconds_ = s; }
+    float frameSeconds() const override { return baseFrameSeconds_; }
+
+    // Frame n (from 1): decoded on from the frame showing, or from the
+    // start if it's behind (each frame only changes the one before).
+    bool showFrame(int n, bool seeThrough) override {
+        const size_t index = size_t(std::clamp(n, 1, std::max(1, frames())) - 1);
+        if (index == current_ && seeThrough == seeThrough_ && shown_)
+            return false;
+        if (index < current_ || !shown_) {
+            std::fill(pixels_.begin(), pixels_.end(), 0);
+            palette_ = firstPalette_;
+            current_ = 0;
+            decode(0);
+        }
+        while (current_ < index) {
+            ++current_;
+            decode(current_);
+        }
+        seeThrough_ = seeThrough;
+        shown_ = true;
+        render();
+        return true;
+    }
 
     bool advance(float seconds) override {
         if (spans_.size() < 2)
@@ -723,7 +748,7 @@ private:
                 const uint8_t c = pixels_[size_t(y * fh_ / h_) * size_t(fw_) + size_t(x * fw_ / w_)];
                 uint8_t* p = image_.pixel(x, y);
                 std::copy_n(palette_.rgba.data() + size_t(c) * 4, 3, p);
-                p[3] = masked_ && c == 0 ? 0 : 255;
+                p[3] = (masked_ || seeThrough_) && c == 0 ? 0 : 255;
             }
     }
 
@@ -866,6 +891,9 @@ private:
     std::vector<uint8_t> pixels_;
     size_t current_ = 0;
     float time_ = 0;
+    Palette firstPalette_;       // the palette before any frame's
+    bool seeThrough_ = false, shown_ = false;
+    float baseFrameSeconds_ = 1.0f / 30;
 };
 
 std::unique_ptr<AnimatedTexture> openFlc(const TextureData& t, Palette palette, const std::string& what,
@@ -899,8 +927,10 @@ std::unique_ptr<AnimatedTexture> openFlc(const TextureData& t, Palette palette, 
     const bool ring = frames > 0 && spans.size() == size_t(frames) + 1;
     float frameTime = (length > 0 && frames > 0 ? length / float(frames) : 1.0f / 15) / (rate > 0 ? rate : 1);
     frameTime = std::clamp(frameTime, 1.0f / 60, 10.0f);
-    return std::make_unique<Flc>(t.width, t.height, fw, fh, palette, t.props.boolean("bMasked"), std::move(data),
-                                 std::move(spans), ring, frameTime);
+    auto out = std::make_unique<Flc>(t.width, t.height, fw, fh, palette, t.props.boolean("bMasked"), std::move(data),
+                                     std::move(spans), ring, frameTime);
+    out->setBaseFrameSeconds(length > 0 && frames > 0 ? length / float(frames) : 1.0f / 30);
+    return out;
 }
 
 } // namespace

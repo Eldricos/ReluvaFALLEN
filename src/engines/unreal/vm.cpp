@@ -203,8 +203,9 @@ VmClass* Vm::findClass(std::string_view qualified) {
     return nullptr;
 }
 
-VmObject* Vm::findObject(std::string_view path) {
-    // "Package.Name" or "Package.Group.Name".
+VmObject* Vm::findObject(std::string_view path, const VmClass* of) {
+    // "Package.Name" or "Package.Group.Name"; with `of`, the one of that
+    // class (a package can name a class and a mesh alike: PLYR.DS9_Sisko).
     const size_t dot = path.find('.');
     if (dot == std::string_view::npos)
         return nullptr;
@@ -213,8 +214,11 @@ VmObject* Vm::findObject(std::string_view path) {
         return nullptr;
     const std::string rest = lower(path.substr(dot + 1));
     for (size_t i = 0; i < p->exports().size(); ++i)
-        if (lower(p->path(int32_t(i) + 1)) == rest)
-            return objectAt(*p, int32_t(i) + 1);
+        if (lower(p->path(int32_t(i) + 1)) == rest) {
+            VmObject* o = objectAt(*p, int32_t(i) + 1);
+            if (!of || (o && (o->asClass ? lower(of->name) == "class" : o->cls && o->cls->isA(of))))
+                return o;
+        }
     return nullptr;
 }
 
@@ -671,6 +675,8 @@ VmObject* Vm::objectAt(const Package& package, int32_t ref) {
     // An object the VM doesn't run: its class's defaults, and where it is.
     const ObjectRef cref = packages_.resolve(*r.package, e.classRef);
     VmClass* cls = cref ? classAt(*cref.package, cref.exportIndex) : nullptr;
+    if (!cls) // the engine's own class, with no script
+        cls = nativeClass(r.package->objectName(e.classRef));
     auto o = std::make_unique<VmObject>();
     o->cls = cls;
     if (cls)
@@ -951,6 +957,22 @@ VmClass* Vm::defineIntrinsic(std::string_view className, VmClass* parent) {
     intrinsics_.emplace(n, std::move(c));
     classObject(out);
     return out;
+}
+
+// A class with no script (the engine's own: Mesh, LodMesh, Sound, Font...),
+// made as an intrinsic under its parent, so objects of it have a class
+// that casts and IsA see (the HUD loads a talker's mesh with
+// Mesh(DynamicLoadObject(...))). The parents are UE1's: LodMesh is a Mesh,
+// Mesh and Model are Primitives; the rest are Objects.
+VmClass* Vm::nativeClass(std::string_view className) {
+    if (VmClass* c = intrinsic(className))
+        return c;
+    static const std::map<std::string, std::string> parents = {
+        {"lodmesh", "Mesh"}, {"mesh", "Primitive"}, {"model", "Primitive"}, {"primitive", "Object"},
+    };
+    auto it = parents.find(lower(className));
+    VmClass* parent = it != parents.end() ? nativeClass(it->second) : findClass("Object");
+    return defineIntrinsic(className, parent);
 }
 
 VmClass* Vm::intrinsic(std::string_view className) {
@@ -1549,7 +1571,7 @@ private:
         const void*& cached = f.owner->resolved[size_t(i)];
         if (!cached) {
             const ObjectRef r = vm_.packages().resolve(*f.owner->package, ref);
-            cached = r ? vm_.classAt(*r.package, r.exportIndex) : vm_.intrinsic(f.owner->package->objectName(ref));
+            cached = r ? vm_.classAt(*r.package, r.exportIndex) : vm_.nativeClass(f.owner->package->objectName(ref));
         }
         return static_cast<VmClass*>(const_cast<void*>(cached));
     }

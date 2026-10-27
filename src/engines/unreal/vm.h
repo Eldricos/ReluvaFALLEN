@@ -228,6 +228,7 @@ public:
     // can be made. Found by name when a reference to it doesn't resolve.
     VmClass* defineIntrinsic(std::string_view name, VmClass* parent);
     VmClass* intrinsic(std::string_view name);
+    VmClass* nativeClass(std::string_view className); // made if need be (Mesh, LodMesh, Sound...)
 
     void registerNative(std::string_view qualifiedName, NativeFn fn);
     bool hasNative(std::string_view qualifiedName) const { return natives_.count(std::string(qualifiedName)) > 0; }
@@ -240,7 +241,7 @@ public:
     static std::array<int32_t, 3> rotatorOf(const Value& v);
     // Finds an object by its path ("Package.Group.Name"), for
     // DynamicLoadObject.
-    VmObject* findObject(std::string_view path);
+    VmObject* findObject(std::string_view path, const VmClass* of = nullptr);
     // A class's config properties from the .ini files (Vm::applyConfig).
     void applyConfig(VmClass& cls);
     const std::string* configSetting(const std::string& section, const std::string& key);

@@ -12,6 +12,7 @@
 #include "engines/unreal/vm_level.h"
 
 #include "engines/unreal/font.h"
+#include "engines/unreal/procedural.h"
 
 #include "common/text.h"
 
@@ -56,7 +57,8 @@ VmObject* ScriptLevel::canvas() {
 // hand it to its HUD. What the scripts draw is in hud().
 void ScriptLevel::renderHud(const HudView& view) {
     hud_ = {};
-    hudView_ = view;
+    hudView_ = hudFrame_ = view;
+    hudFrameClear_ = false;
     VmObject* c = canvas();
     if (!c || !player_ || player_->deleted)
         return;
@@ -79,6 +81,50 @@ void ScriptLevel::renderHud(const HudView& view) {
     setFloat("CurY", 0);
     vm_.callEvent(player_, "PreRender", {Value::objectValue(c)});
     vm_.callEvent(player_, "PostRender", {Value::objectValue(c)});
+}
+
+void ScriptLevel::trackFli(VmObject* tex) {
+    if (!tex || flis_.count(tex) || !tex->package)
+        return;
+    Fli f;
+    if (auto anim = openAnimatedTexture(vm_.packages(), *tex->package, tex->exportIndex)) {
+        f.frames = anim->frames();
+        f.frameSeconds = anim->frameSeconds() > 0 ? anim->frameSeconds() : f.frameSeconds;
+    }
+    flis_[tex] = f;
+}
+
+// An FliTexture played as the HUD has it (SetFlick, SetFlickSpeed): Mode
+// stopped (0) leaves it on its frame, once (1) plays to its end and stops
+// there, back on the first frame (the last turns into the first), looping
+// (2) goes round; a frame shows 1/30 s (its length over its frames) at
+// Rate 1, over Rate.
+void ScriptLevel::tickFlis(float seconds) {
+    for (auto& [tex, f] : flis_) {
+        Value* mode = prop(tex, "Mode");
+        if (!mode || mode->asInt() == 0 || f.frames <= 0)
+            continue;
+        Value* time = prop(tex, "FrameTime");
+        Value* frame = prop(tex, "FrameNum");
+        const Value* rate = prop(tex, "Rate");
+        if (!time || !frame)
+            continue;
+        float t = time->asFloat() + seconds * (rate ? rate->asFloat() : 1);
+        int n = std::max(1, frame->asInt());
+        while (t >= f.frameSeconds) {
+            t -= f.frameSeconds;
+            if (++n > f.frames) {
+                n = 1;
+                if (mode->asInt() == 1) {
+                    *mode = Value::byteValue(0);
+                    t = 0;
+                    break;
+                }
+            }
+        }
+        *time = Value::floatValue(t);
+        *frame = Value::intValue(n);
+    }
 }
 
 namespace {
@@ -179,6 +225,11 @@ void registerCanvasNatives(Vm& vm) {
         t.color = p.color;
         t.style = p.style;
         t.seeThrough = text || p.style == kStyleMasked;
+        if (c.vm.isA(tex, "FliTexture")) {
+            c.vm.level->trackFli(tex);
+            const Value* n = tex->find(c.vm, "FrameNum");
+            t.frame = std::max(1, n ? n->asInt() : 1);
+        }
         c.vm.level->hud().tiles.push_back(t);
     };
     // A line of text's size in its font (each letter's width and SpaceX;
@@ -257,8 +308,9 @@ void registerCanvasNatives(Vm& vm) {
         return lines;
     };
     // DrawText(coerce string Text, optional bool CR) and DrawScaledText(Text,
-    // float Scale): at the pen, wrapped to the clip, each line centred in it
-    // with bCenter; the pen on past it (CR: to the next line's start).
+    // float Scale): at the pen, wrapped to the clip, each line starting
+    // under the first (or centred in the clip with bCenter); the pen on past
+    // it (CR: to the next line's start).
     auto drawText = [=](NativeCall& c, const std::string& s, float scale, bool cr) {
         Pen p = pen(c);
         float lineW = 0, lineH = 0;
@@ -266,12 +318,12 @@ void registerCanvasNatives(Vm& vm) {
         float y = p.orgY + p.curY;
         for (size_t i = 0; i < lines.size(); ++i) {
             measure(c, p, lines[i], scale, lineW, lineH);
-            const float x = p.center ? p.orgX + (p.clipX - lineW) / 2 : p.orgX + (i == 0 ? p.curX : 0);
+            const float x = p.center ? p.orgX + (p.clipX - lineW) / 2 : p.orgX + p.curX;
             drawLine(c, p, lines[i], x, y, scale, false);
             if (i + 1 < lines.size())
                 y += lineH;
         }
-        p.curX = (lines.size() > 1 ? 0 : p.curX) + lineW;
+        p.curX += lineW;
         p.curY = y - p.orgY;
         p.curYL = std::max(p.curYL, lineH);
         if (cr) {
@@ -326,17 +378,67 @@ void registerCanvasNatives(Vm& vm) {
             p.curYL = std::max(p.curYL, c.f(2));
             store(c, p);
         });
-    // DrawActor(Actor A, bool WireFrame, optional bool ClearZ) and
-    // DrawClippedActor(.., int X, int Y, int XB, int YB, ..): an actor drawn
-    // in the world's view over what's drawn (a weapon held, the HUD's
-    // picture of whoever talks), in a rectangle of the screen for the second.
-    reg("Canvas.DrawActor", [](NativeCall& c) {
-        if (c.vm.level && c.o(0))
-            c.vm.level->hud().actors.push_back({c.o(0), c.b(2), 0, 0, 0, 0});
+    // DrawActor(Actor A, bool WireFrame, optional bool ClearZ): an actor
+    // drawn where it is, over what's drawn, in the view SetRenderFrame last
+    // set (the whole screen and the world's camera to begin with): the
+    // tricorder's markers, a talker's head in its portrait.
+    // DrawClippedActor(Actor A, bool WireFrame, int X, int Y, int XB, int YB,
+    // optional bool ClearZ) the same in a rectangle X by Y at (XB, YB) (as
+    // UWindow calls it: width, height, left, top).
+    auto drawActor = [](NativeCall& c, VmObject* a, bool clearZ, const ScriptLevel::HudView& view) {
+        if (!c.vm.level || !a)
+            return;
+        ScriptLevel::HudActor h;
+        h.actor = a;
+        h.clearZ = clearZ || c.vm.level->hudFrameClear();
+        c.vm.level->hudFrameClear() = false;
+        h.view = view;
+        h.afterTiles = c.vm.level->hud().tiles.size();
+        if (const Value* v = a->find(c.vm, "DrawType"))
+            h.drawType = v->asInt();
+        if (const Value* v = a->find(c.vm, "Style"))
+            h.style = v->asInt();
+        if (const Value* v = a->find(c.vm, "ScaleGlow"))
+            h.scaleGlow = v->asFloat();
+        c.vm.level->hud().actors.push_back(h);
+    };
+    reg("Canvas.DrawActor", [=](NativeCall& c) {
+        if (c.vm.level)
+            drawActor(c, c.o(0), c.b(2), c.vm.level->hudFrame());
     });
-    reg("Canvas.DrawClippedActor", [](NativeCall& c) {
-        if (c.vm.level && c.o(0))
-            c.vm.level->hud().actors.push_back({c.o(0), c.b(6), c.i(2), c.i(3), c.i(4), c.i(5)});
+    reg("Canvas.DrawClippedActor", [=](NativeCall& c) {
+        if (!c.vm.level)
+            return;
+        ScriptLevel::HudView v = c.vm.level->hudFrame();
+        v.width = std::max(1, c.i(2));
+        v.height = std::max(1, c.i(3));
+        v.x = c.i(4);
+        v.y = c.i(5);
+        drawActor(c, c.o(0), c.b(6), v);
+    });
+    // SetRenderFrame(int X, int Y, int Width, int Height, Vector CamLocation,
+    // Rotator CamRotation, optional int FOV, optional bool ClearZ): the view
+    // the actors drawn next are drawn in, the depth cleared first with
+    // ClearZ (the portraits, the tricorder's picture of the player; the
+    // HUD's ResetCanvas sets the whole screen back).
+    reg("Canvas.SetRenderFrame", [](NativeCall& c) {
+        if (!c.vm.level)
+            return;
+        ScriptLevel::HudView& v = c.vm.level->hudFrame();
+        v.x = c.i(0);
+        v.y = c.i(1);
+        v.width = std::max(1, c.i(2));
+        v.height = std::max(1, c.i(3));
+        v.location = Vm::vectorOf(c.args[4]);
+        v.rotation = Vm::rotatorOf(c.args[5]);
+        if (c.given.size() > 6 && c.given[6] && c.i(6) > 0)
+            v.fov = float(c.i(6));
+        // The whole screen again (the HUD's ResetCanvas, with the HUD's own
+        // place and a rotation nothing sets): the world's view.
+        const ScriptLevel::HudView& world = c.vm.level->hudView();
+        if (v.x <= 0 && v.y <= 0 && v.width >= world.width && v.height >= world.height)
+            v = world;
+        c.vm.level->hudFrameClear() = c.given.size() > 7 && c.given[7] && c.b(7);
     });
     // GetScreenCoords(Vector Location, out int X, out int Y, out float Scale):
     // where a place is on the screen in the frame's view; false behind it.
@@ -344,7 +446,7 @@ void registerCanvasNatives(Vm& vm) {
         c.result = Value::boolValue(false);
         if (!c.vm.level)
             return;
-        const ScriptLevel::HudView& v = c.vm.level->hudView();
+        const ScriptLevel::HudView& v = c.vm.level->hudFrame();
         const auto a = rotationAxes({v.rotation[0], v.rotation[1], v.rotation[2]});
         const Vec p = Vm::vectorOf(c.args[0]);
         const float d[3] = {p[0] - v.location[0], p[1] - v.location[1], p[2] - v.location[2]};
@@ -353,15 +455,14 @@ void registerCanvasNatives(Vm& vm) {
         if (ahead <= 1)
             return;
         const float focal = float(v.width) / 2 / std::tan(v.fov * 3.14159265f / 360);
-        c.args[1] = Value::intValue(int(float(v.width) / 2 + dot(1) / ahead * focal));
-        c.args[2] = Value::intValue(int(float(v.height) / 2 - dot(2) / ahead * focal));
+        c.args[1] = Value::intValue(v.x + int(float(v.width) / 2 + dot(1) / ahead * focal));
+        c.args[2] = Value::intValue(v.y + int(float(v.height) / 2 - dot(2) / ahead * focal));
         c.args[3] = Value::floatValue(focal / ahead);
         c.result = Value::boolValue(true);
     });
-    // Another view drawn into part of the screen (security cameras, the
-    // HUD's portraits): not drawn yet.
-    for (const char* none : {"Canvas.DrawPortal", "Canvas.SetRenderFrame"})
-        reg(none, [](NativeCall&) {});
+    // DrawPortal: the level seen from an actor, into part of the screen.
+    // No script calls it.
+    reg("Canvas.DrawPortal", [](NativeCall&) {});
 }
 
 } // namespace reluva::unreal

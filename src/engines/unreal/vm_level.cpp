@@ -362,6 +362,7 @@ void ScriptLevel::tick(float seconds) {
     // What's attached (C3DAttach) goes where its holder now is.
     placeAttached();
     tickDialog(seconds);
+    tickFlis(seconds);
     ++ticks_;
     actors_.erase(std::remove_if(actors_.begin(), actors_.end(), [](VmObject* a) { return a->deleted; }),
                   actors_.end());

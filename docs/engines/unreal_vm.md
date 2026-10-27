@@ -110,6 +110,13 @@ What it does:
 - Guards: calls nested past 250, a function past 2,000,000 statements or
   a tick of state code past 20,000 are stopped and reported.
 
+Classes with no script (Mesh, LodMesh, Model, Primitive, Sound, Font...)
+are made up the same way when an object of theirs is first met
+(`Vm::nativeClass`), as kinds of Object, except LodMesh is a Mesh and
+Mesh and Model are Primitives, so `Mesh(...)` casts work. A name looked
+up by `DynamicLoadObject` is taken only as an object of the class asked:
+`PLYR.DS9_Sisko` is both a class and a mesh.
+
 Natives are C++ functions registered by the qualified name of the
 function declaring them (`Object.Add_IntInt`): all of Core's Object
 (`vm_natives_core.cpp`: the operators for every type, maths, vectors and
@@ -418,7 +425,8 @@ What the Canvas natives draw is kept as a list for the page:
 - **tiles:** a texture's rectangle (in texels) at a rectangle of the
   screen (in pixels), with a colour (`DrawColor`) and a style (`Style`:
   normal, masked, translucent, modulated);
-- **actors:** drawn in the world's view over what's there.
+- **actors:** drawn over what's there, each in the view (the frame,
+  below) it was asked in, and in its order among the tiles.
 
 The natives:
 - **`DrawTile(Tex, XL, YL, U, V, UL, VL)`** at the pen (`OrgX + CurX`,
@@ -430,21 +438,31 @@ The natives:
   ([font.md](../formats/unreal/font.md)), a tile a letter. Each letter's
   width plus `SpaceX` moves it on, and the tallest letter plus `SpaceY`
   makes a line. The text wraps between words at the clip's right edge,
-  each line centred in the clip with `bCenter`. The pen moves past it
+  each line centred in the clip with `bCenter`; a wrapped line starts
+  back at the pen's column, not the clip's edge. The pen moves past it
   (with CR, to the next line's start), and `CurYL` keeps the line's height.
 - **`DrawTextClipped`** draws one line, cut to the clip, with '&' (a
   menu's hot key) left out if asked. `DrawScaledText` scales the letters.
 - **`StrLen`** measures text wrapped as `DrawText` would; `TextSize` on
   one line.
+- **`SetRenderFrame(X, Y, W, H, Location, Rotation, FOV, ClearZ)`** sets
+  the frame the next actors are drawn in: a rectangle of the screen and a
+  camera (its own field of view if given, else the world's). It lasts
+  until the next one or the end of the frame. A frame of the whole screen
+  is the world's view: `ResetCanvas` asks for one with the HUD actor's
+  own place and rotation, which nothing sets, so taking it as the
+  player's view is Reluva's reading.
 - **`DrawActor`, `DrawClippedActor`** draw the actor where it is, in the
-  world's view, the depth cleared first if asked; the page draws it,
-  hidden or not. The HUD uses them for the tricorder's dots and markers,
-  beacons and the beam-down cloud. The rectangle of `DrawClippedActor`
-  isn't kept to yet.
+  current frame (`DrawClippedActor` in its own rectangle, the frame's
+  camera), the depth cleared first if asked; the page draws it, hidden or
+  not. Its draw type, style and glow are taken as they are at the call:
+  the HUD's speaker portrait (`DS9_Hud_Mesh_Actor`) sets them only around
+  it. The HUD uses these for the communicator's portrait (the speaker's
+  head, a camera 78 units in front of it at 10°), the tricorder's dots
+  and markers, beacons and the beam-down cloud.
 - **`GetScreenCoords(Location, X, Y, Scale)`** is where a place falls on
-  the screen in the frame's view; false behind it.
-- `DrawPortal` and `SetRenderFrame` (another view drawn into part of the
-  screen) aren't drawn yet.
+  the screen in the current frame's view; false behind it.
+- `DrawPortal` isn't drawn: no script calls it.
 
 The Fallen's HUD (`DS9_Hud`) is built from textures that draw themselves
 (`Texture.Draw(Canvas)`, script). Each HUD texture keeps where it goes in
@@ -452,6 +470,14 @@ properties it borrows:
 - `Specular` and `Friction`: its place, in 800 × 600 units;
 - `PrimeCount`: the corner or edge that place is from;
 - `Alpha`: its style.
+
+The HUD's animated textures are FliTextures ([texture.md](../formats/unreal/texture.md)),
+played by script (`DS9_Hud.SetFlick`): `Mode` 0 stops, 1 plays once, 2
+loops. Once a FliTexture is drawn the level plays it each tick: its
+`FrameTime` grows by the tick times `Rate`, and `FrameNum` moves on a
+frame each 1/30 s of that. Played once, it stops back on frame 1 with
+`Mode` 0, which `FlickPlaying` waits for. A tile draws the frame
+`FrameNum` says (the communicator's bar sliding open, the meters).
 
 That's why textures need their own stored properties (above): with the
 defaults, every piece of the HUD was off the screen.
@@ -469,6 +495,9 @@ On M04_KiraL1 the HUD shows:
   ammunition (150);
 - F1, the communicator: the Starfleet badge and the crew list (O'Brien,
   Dax, Bashir) with its selection marker.
+- F1, then Fire: hails the selected crewmate. The communicator's bar
+  slides open and the answer is written in its box beside their face
+  (O'Brien: "You'll need to reinitialize the EPS taps...").
 
 The keys:
 - **Passed to the game** while playing: F1 to F12 and the number keys,
@@ -480,10 +509,6 @@ The keys:
 
 With the game's HUD drawn, the page leaves the objectives and subtitles
 to it and puts its status line between the HUD's panels.
-
-Not done: `DrawPortal` (security cameras, the HUD's portraits), the HUD
-textures that animate (`FliTexture`'s FLC frames are drawn still),
-`DrawClippedActor`'s rectangle.
 
 ### Documents and objectives
 

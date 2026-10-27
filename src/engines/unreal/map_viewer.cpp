@@ -138,6 +138,7 @@ void MapViewer::unload() {
     lightmapPages_.clear();
     textureCache_.clear();
     seeThroughTextures_.clear();
+    hudFlis_.clear();
     lights_ = {};
     stopPlay();
     posers_.clear();
@@ -870,7 +871,7 @@ void MapViewer::update(uint64_t nowMs) {
         drawSprites(sprites_, forward, right);
     }
     if (play_ && !freeCam_)
-        drawGameHud(forward, right);
+        drawGameHud();
     drawOverlay(nowMs);
     if (play_)
         drawPlayHud();
@@ -881,7 +882,7 @@ void MapViewer::update(uint64_t nowMs) {
 // PostRender with the canvas (ScriptLevel::renderHud), then the actors and
 // tiles they drew, in screen pixels: cut out where see-through, translucent ones added,
 // modulated ones multiplied in.
-void MapViewer::drawGameHud(const gfx::Vec3& forward, const gfx::Vec3& right) {
+void MapViewer::drawGameHud() {
     const int w = renderer_->width(), h = renderer_->height();
     ScriptLevel::HudView v;
     v.location = {view_.location[0], view_.location[1], view_.location[2]};
@@ -891,27 +892,50 @@ void MapViewer::drawGameHud(const gfx::Vec3& forward, const gfx::Vec3& right) {
     v.height = h;
     play_->level().renderHud(v);
     const ScriptLevel::Hud& hud = play_->level().hud();
-    // The actors it drew (the tricorder's markers, beacons), in the world's
-    // view over what's there, the depth cleared first if it asked.
-    std::vector<SpriteDraw> sprites;
-    for (const ScriptLevel::HudActor& a : hud.actors) {
-        if (a.clearZ)
-            renderer_->clearDepth();
-        drawLiveActor(a.actor, sprites, true);
-    }
-    drawSprites(sprites, forward, right);
-    if (hud.tiles.empty())
-        return;
     gfx::Mat4 pixels = gfx::identity();
     pixels[0] = 2.0f / float(w);
     pixels[5] = -2.0f / float(h);
     pixels[10] = 0;
     pixels[12] = -1;
     pixels[13] = 1;
-    renderer_->setView(pixels, gfx::Vec3{0, 0, 0});
-    renderer_->clearDepth();
-    for (const ScriptLevel::HudTile& t : hud.tiles) {
-        const auto [id, size] = hudTexture(t.texture, t.seeThrough);
+    // In the order the HUD drew them: the actors over the tiles before
+    // them, each in its view (the camera and rectangle SetRenderFrame set:
+    // a talker's head in its portrait), the depth cleared first if asked.
+    size_t next = 0;
+    bool flat = false; // set for tiles
+    auto drawActorsUpTo = [&](size_t tiles) {
+        std::vector<SpriteDraw> sprites;
+        while (next < hud.actors.size() && hud.actors[next].afterTiles <= tiles) {
+            const ScriptLevel::HudActor& a = hud.actors[next++];
+            const ScriptLevel::HudView& v = a.view;
+            const auto axes = rotationAxes(Rotator{v.rotation[0], v.rotation[1], v.rotation[2]});
+            const gfx::Vec3 eye = toWorld(Vec3f{v.location[0], v.location[1], v.location[2]});
+            const gfx::Vec3 ahead = toWorld(axes[0]), up = toWorld(axes[2]);
+            const gfx::Vec3 side{-toWorld(axes[1])[0], -toWorld(axes[1])[1], -toWorld(axes[1])[2]};
+            const float aspect = float(v.width) / float(std::max(1, v.height));
+            const float fovY = 2 * std::atan(std::tan(std::clamp(v.fov, 1.0f, 170.0f) * kPi / 360) / aspect);
+            renderer_->setViewport(v.x, v.y, v.width, v.height);
+            renderer_->setView(gfx::multiply(gfx::perspective(fovY, aspect, 1, 65536), gfx::lookAlong(eye, ahead, up)),
+                               eye);
+            if (a.clearZ)
+                renderer_->clearDepth();
+            sprites.clear();
+            drawLiveActor(a.actor, sprites, &a);
+            drawSprites(sprites, ahead, side);
+            flat = false;
+        }
+        renderer_->setViewport(0, 0, w, h);
+    };
+    for (size_t i = 0; i < hud.tiles.size(); ++i) {
+        if (next < hud.actors.size() && hud.actors[next].afterTiles <= i)
+            drawActorsUpTo(i);
+        if (!flat) {
+            renderer_->setView(pixels, gfx::Vec3{0, 0, 0});
+            flat = true;
+        }
+        const ScriptLevel::HudTile& t = hud.tiles[i];
+        const auto [id, size] = t.frame > 0 ? hudFliTexture(t.texture, t.frame, t.seeThrough)
+                                            : hudTexture(t.texture, t.seeThrough);
         if (!id)
             continue;
         gfx::DrawCall call;
@@ -943,6 +967,41 @@ void MapViewer::drawGameHud(const gfx::Vec3& forward, const gfx::Vec3& right) {
         }
         renderer_->draw(call);
     }
+    drawActorsUpTo(hud.tiles.size());
+}
+
+// An FliTexture's frame for the HUD: its animation shown at that frame and
+// uploaded when it changes (one texture each, and each way of colour 0).
+std::pair<gfx::TextureId, std::array<int, 2>> MapViewer::hudFliTexture(const ObjectRef& tex, int frame,
+                                                                      bool seeThrough) {
+    auto key = std::make_tuple(tex.package, tex.exportIndex, seeThrough);
+    auto it = hudFlis_.find(key);
+    if (it == hudFlis_.end()) {
+        HudFli f;
+        f.anim = openAnimatedTexture(ctx_.packages, *tex.package, tex.exportIndex);
+        if (f.anim) {
+            f.anim->showFrame(frame, seeThrough);
+            f.frame = frame;
+            const image::Image& img = f.anim->image();
+            gfx::TextureParams params;
+            params.nearest = true;
+            params.mipmaps = false;
+            if (!renderer_->createTexture(img.w, img.h, img.rgba.data(), params, f.id))
+                textures_.push_back(f.id);
+            else
+                f.id = 0;
+        }
+        it = hudFlis_.emplace(key, std::move(f)).first;
+    }
+    HudFli& f = it->second;
+    if (!f.anim || !f.id)
+        return textureOf(tex);
+    if (f.frame != frame && f.anim->showFrame(frame, seeThrough)) {
+        const image::Image& img = f.anim->image();
+        renderer_->updateTextures({{f.id, 0, 0, img.w, img.h, img.rgba.data()}});
+    }
+    f.frame = frame;
+    return {f.id, {std::max(1, f.anim->image().w), std::max(1, f.anim->image().h)}};
 }
 
 // A texture for the HUD, with its colour 0 see-through if asked (letters,
@@ -1401,23 +1460,38 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
     posedMeshes_.clear();
     std::vector<SpriteDraw> sprites;
     for (VmObject* a : play_->level().actors())
-        drawLiveActor(a, sprites, false);
+        drawLiveActor(a, sprites);
     drawSprites(sprites, forward, right);
 }
 
 // One of the level's actors, as it looks now: a mesh drawn, a sprite kept
 // for drawSprites. Hidden ones only if `evenHidden` (the HUD draws some).
-void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, bool evenHidden) {
+void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, const ScriptLevel::HudActor* hud) {
     constexpr int kDrawSprite = 1, kDrawMesh = 2, kDrawVerticalSprite = 5, kDrawSpriteAnimOnce = 7;
+    const bool evenHidden = hud != nullptr;
     LevelPlay::Look look;
-    if (!play_->look(a, look) || (look.hidden && !evenHidden))
+    // Drawn for the HUD: as it looked when the HUD asked.
+    auto asAsked = [&] {
+        if (!hud)
+            return;
+        look.drawType = hud->drawType;
+        look.style = uint8_t(hud->style);
+        look.scaleGlow = hud->scaleGlow;
+    };
+    if (!play_->look(a, look))
+        return;
+    asAsked();
+    if (look.hidden && !evenHidden)
         return;
     if (look.drawType == kDrawMesh && look.mesh) {
         // About to be drawn: its scripts get their say first, and it's
         // drawn as they leave it.
         play_->preRender(a);
         look = {};
-        if (!play_->look(a, look) || (look.hidden && !evenHidden) || look.drawType != kDrawMesh || !look.mesh)
+        if (!play_->look(a, look))
+            return;
+        asAsked();
+        if ((look.hidden && !evenHidden) || look.drawType != kDrawMesh || !look.mesh)
             return;
         const int at = liveMesh(look.mesh, look.animSequence);
         if (at < 0)
