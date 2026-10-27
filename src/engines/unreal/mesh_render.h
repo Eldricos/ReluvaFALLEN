@@ -65,8 +65,11 @@ struct MeshLight {
 };
 
 // Draws it: `textures` by texture index (0: untextured), `exposure` as
-// the Maps page's.
+// the Maps page's; `style` the actor's (actors.h's kStyle...: translucent,
+// modulated and masked apply to the whole mesh, as its polygons' own
+// flags do to them).
 void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& placement, const MeshPose& pose,
-              const std::vector<gfx::TextureId>& textures, const MeshLight& light, float exposure);
+              const std::vector<gfx::TextureId>& textures, const MeshLight& light, float exposure,
+              uint8_t style = 1);
 
 } // namespace reluva::unreal

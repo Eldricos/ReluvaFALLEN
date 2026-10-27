@@ -65,6 +65,12 @@ public:
     // (150 turning).
     struct Controls {
         float forward = 0, strafe = 0, turn = 0, lookUp = 0;
+        // The mouse's movement since the last tick (the input's aMouseX,
+        // aMouseY), used up by the next.
+        float mouseX = 0, mouseY = 0;
+        // Buttons held: jump (Space: bExtra1, and aUp up) and fire (bFire).
+        // Pressing one also calls its exec function (LevelPlay::press).
+        bool jump = false, fire = false;
     } controls;
 
     // Moves the world on: the player's input (PlayerInput) and PlayerTick,

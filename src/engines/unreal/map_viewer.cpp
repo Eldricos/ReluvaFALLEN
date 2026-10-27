@@ -40,7 +40,7 @@ constexpr float kEyeHeight = 27; // above a PlayerStart's location, roughly a pl
 // a gamma of 1.3 it matches the original's screenshots (lighting.md).
 constexpr float kExposure = 0.88f;
 
-enum Held { Forward, Back, Left, Right, Up, Down, Fast };
+enum Held { Forward, Back, Left, Right, Up, Down, Fast, TurnLeft, TurnRight, LookUp, LookDown, Fire, HeldCount };
 
 // Unreal's axes are left-handed (X forward, Y right, Z up); the renderer's
 // are right-handed, so Y is negated on the way in.
@@ -136,6 +136,9 @@ void MapViewer::unload() {
     animatedTextures_.clear();
     changingLights_.clear();
     lightmapPages_.clear();
+    textureCache_.clear();
+    lights_ = {};
+    stopPlay();
 }
 
 void MapViewer::activate() {
@@ -198,7 +201,8 @@ void MapViewer::load(int index) {
     const ScriptedActors* scripted = started ? &start.changed : nullptr;
 
     // The lightmaps, lit from the level's lights, as textures.
-    const LevelLights lights = gatherLights(ctx_.packages, *pkg, model, scripted);
+    lights_ = gatherLights(ctx_.packages, *pkg, model, scripted);
+    const LevelLights& lights = lights_;
     const auto tLights = Clock::now();
     LightmapAtlas atlas = buildLightmaps(model, lights);
     const auto tLightmaps = Clock::now();
@@ -236,47 +240,17 @@ void MapViewer::load(int index) {
     std::vector<gfx::Vertex> vertices;
     std::vector<uint32_t> indices;
     // Each texture uploaded once; its size divides texture coordinates.
-    std::map<std::pair<const Package*, int>, std::pair<gfx::TextureId, std::array<int, 2>>> loaded;
     int missing = 0;
     std::string firstMissing;
-    auto textureOf = [&](const ObjectRef& tex) -> std::pair<gfx::TextureId, std::array<int, 2>> {
-        if (!tex)
-            return {0, {64, 64}};
-        auto it = loaded.find({tex.package, tex.exportIndex});
-        if (it == loaded.end()) {
-            image::Image img;
-            gfx::TextureId id = 0;
-            TextureInfo ti;
-            if (decodeTexture(ctx_.packages, *tex.package, tex.exportIndex, img, &ti)) {
-                ++missing;
-                if (firstMissing.empty())
-                    firstMissing = tex.package->path(tex.exportIndex + 1);
-            } else {
-                // Fire, water, wet, ice and FLC textures play, redrawn as they
-                // change (so without mipmaps, which updates don't redo).
-                std::unique_ptr<AnimatedTexture> anim;
-                if (isAnimatedTextureClass(tex.package->className(tex.exportIndex + 1)))
-                    anim = openAnimatedTexture(ctx_.packages, *tex.package, tex.exportIndex);
-                if (anim && anim->image().w == img.w && anim->image().h == img.h)
-                    img = anim->image();
-                else
-                    anim.reset();
-                gfx::TextureParams params;
-                params.nearest = (ti.polyFlags & polyflag::NoSmooth) != 0;
-                params.mipmaps = !anim;
-                if (!renderer_->createTexture(img.w, img.h, img.rgba.data(), params, id)) {
-                    textures_.push_back(id);
-                    if (anim)
-                        animatedTextures_.push_back({id, std::move(anim)});
-                } else {
-                    id = 0;
-                }
-            }
-            it = loaded.emplace(std::make_pair(tex.package, tex.exportIndex),
-                                std::make_pair(id, std::array<int, 2>{std::max(1, img.w), std::max(1, img.h)}))
-                     .first;
+    auto textureOf = [&](const ObjectRef& tex) {
+        bool unreadable = false;
+        const auto t = this->textureOf(tex, &unreadable);
+        if (unreadable) {
+            ++missing;
+            if (firstMissing.empty())
+                firstMissing = tex.package->path(tex.exportIndex + 1);
         }
-        return it->second;
+        return t;
     };
     auto textureFor = [&](const Package& from, int32_t ref) -> std::pair<gfx::TextureId, std::array<int, 2>> {
         const ObjectRef tex = ctx_.packages.resolve(from, ref);
@@ -470,27 +444,7 @@ void MapViewer::load(int index) {
                 tex = ctx_.packages.resolve(*a.mesh.package, mesh.textures[k]);
             d.textures.push_back(textureOf(tex).first);
         }
-        // The lights reaching where it stands: some all round, the rest
-        // from their average direction.
-        Vec3f total{}, toward{};
-        for (const LightSource& l : lights.unique) {
-            const Vec3f dv{l.position[0] - a.location[0], l.position[1] - a.location[1], l.position[2] - a.location[2]};
-            const float dist = std::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
-            if (dist >= l.radius || dist <= 0)
-                continue;
-            const float amount = 1 - dist / l.radius;
-            for (size_t k = 0; k < 3; ++k) {
-                total[k] += l.color[k] * amount;
-                toward[k] += dv[k] / dist * amount;
-            }
-        }
-        for (size_t k = 0; k < 3; ++k) {
-            d.light.ambient[k] = std::min(kMaxLight, 0.15f + 0.5f * total[k]);
-            d.light.directed[k] = std::min(kMaxLight, 0.7f * total[k]);
-        }
-        const float len = std::sqrt(toward[0] * toward[0] + toward[1] * toward[1] + toward[2] * toward[2]);
-        d.light.direction = len > 0 ? toWorld(Vec3f{toward[0] / len, toward[1] / len, toward[2] / len})
-                                    : gfx::Vec3{0, 0, 1};
+        d.light = meshLightAt(a.location);
         const MeshAnimSeq* anim = mesh.findAnim(a.animSequence);
         // Characters are placed in a one-frame pose (BaseRelax, BaseReady),
         // which the game's scripts follow with an idle loop: its idle
@@ -643,6 +597,18 @@ void MapViewer::load(int index) {
     info_.push_back("Not drawn yet: lights' effects other than their brightness (flicker, pulse...), movers' own lighting");
 }
 
+bool MapViewer::selectMap(const std::string& name) {
+    for (size_t i = 0; i < names_.size(); ++i)
+        if (fs::toLower(names_[i]) == fs::toLower(name)) {
+            if (renderer_)
+                load(int(i));
+            else
+                index_ = int(i);
+            return true;
+        }
+    return false;
+}
+
 void MapViewer::toStart() {
     pos_ = start_;
     yaw_ = startYaw_;
@@ -653,6 +619,15 @@ void MapViewer::handleEvent(const Event& ev) {
     if (!renderer_ || names_.empty())
         return;
     auto hold = [&](uint32_t k, bool down) {
+        if (play_) // playing, the arrows turn and look, and Ctrl or F fires
+            switch (k) {
+            case key::Left: held_[TurnLeft] = down; return true;
+            case key::Right: held_[TurnRight] = down; return true;
+            case key::Up: held_[LookUp] = down; return true;
+            case key::Down: held_[LookDown] = down; return true;
+            case key::LCtrl: case key::RCtrl: case 'f': held_[Fire] = down; return true;
+            default: break;
+            }
         switch (k) {
         case 'w': held_[Forward] = down; return true;
         case 's': held_[Back] = down; return true;
@@ -667,8 +642,23 @@ void MapViewer::handleEvent(const Event& ev) {
     if (ev.type == EventType::KeyUp) {
         hold(ev.key, false);
     } else if (ev.type == EventType::KeyDown) {
+        if (play_ && !ev.repeat) { // the keys bound to exec functions
+            if (ev.key == key::Space)
+                play_->press("Jump");
+            else if (ev.key == key::LCtrl || ev.key == key::RCtrl || ev.key == 'f')
+                play_->press("Fire");
+        }
         if (hold(ev.key, true) || ev.repeat)
             return;
+        if (ev.key == key::Return || ev.key == key::KpEnter) {
+            for (bool& h : held_)
+                h = false;
+            if (play_)
+                stopPlay();
+            else
+                startPlay();
+            return;
+        }
         const int n = int(names_.size());
         if (ev.key == key::Left || ev.key == key::Right)
             load((index_ + (ev.key == key::Left ? n - 1 : 1)) % n);
@@ -729,6 +719,12 @@ void MapViewer::handleEvent(const Event& ev) {
         lastY_ = ev.mouseY;
     } else if (ev.type == EventType::MouseUp && ev.button == MouseButton::Left) {
         dragging_ = false;
+    } else if (ev.type == EventType::MouseMove && dragging_ && play_) {
+        // Playing, the mouse's movement goes to the player's input.
+        mouseDx_ += float(ev.mouseX - lastX_);
+        mouseDy_ -= float(ev.mouseY - lastY_);
+        lastX_ = ev.mouseX;
+        lastY_ = ev.mouseY;
     } else if (ev.type == EventType::MouseMove && dragging_) {
         yaw_ -= float(ev.mouseX - lastX_) * 0.005f;
         pitch_ = std::clamp(pitch_ - float(ev.mouseY - lastY_) * 0.005f, -1.55f, 1.55f);
@@ -743,18 +739,24 @@ void MapViewer::update(uint64_t nowMs) {
     const float dt = lastMs_ ? std::min(0.1f, float(nowMs - lastMs_) / 1000.0f) : 0.0f;
     lastMs_ = nowMs;
 
+    if (play_) {
+        updatePlay(dt);
+    } else {
+        fov_ = 90; // Unreal's default field of view, across
+        const gfx::Vec3 f{std::cos(pitch_) * std::cos(yaw_), std::cos(pitch_) * std::sin(yaw_), std::sin(pitch_)};
+        const gfx::Vec3 r{std::sin(yaw_), -std::cos(yaw_), 0};
+        const float step = kSpeed * (held_[Fast] ? 3.0f : 1.0f) * dt;
+        for (size_t k = 0; k < 3; ++k) {
+            pos_[k] += f[k] * step * float(held_[Forward] - held_[Back]);
+            pos_[k] += r[k] * step * float(held_[Right] - held_[Left]);
+        }
+        pos_[2] += step * float(held_[Up] - held_[Down]);
+    }
     const gfx::Vec3 forward{std::cos(pitch_) * std::cos(yaw_), std::cos(pitch_) * std::sin(yaw_), std::sin(pitch_)};
     const gfx::Vec3 right{std::sin(yaw_), -std::cos(yaw_), 0};
-    const float step = kSpeed * (held_[Fast] ? 3.0f : 1.0f) * dt;
-    for (size_t k = 0; k < 3; ++k) {
-        pos_[k] += forward[k] * step * float(held_[Forward] - held_[Back]);
-        pos_[k] += right[k] * step * float(held_[Right] - held_[Left]);
-    }
-    pos_[2] += step * float(held_[Up] - held_[Down]);
 
-    // 90 degrees across, Unreal's default field of view.
     const float aspect = float(kFrameW) / float(kFrameH);
-    const float fovY = 2 * std::atan(std::tan(kPi / 4) / aspect);
+    const float fovY = 2 * std::atan(std::tan(std::clamp(fov_, 1.0f, 170.0f) * kPi / 360) / aspect);
     const gfx::Mat4 viewProj =
         gfx::multiply(gfx::perspective(fovY, aspect, 4, 65536), gfx::lookAlong(pos_, forward, {0, 0, 1}));
     // Movers between keyframes, at their own pace.
@@ -804,28 +806,41 @@ void MapViewer::update(uint64_t nowMs) {
         renderer_->draw(call);
     }
     drawBatches(batches_, mesh_, gfx::identity(), true);
-    for (const MoverDraw& m : movers_)
-        drawBatches(m.batches, moverMesh_, moverTransform(m), false);
+    for (size_t i = 0; i < movers_.size(); ++i) {
+        const MoverDraw& m = movers_[i];
+        VmObject* live = play_ && i < moverActors_.size() ? moverActors_[i] : nullptr;
+        LevelPlay::Look look;
+        if (live && play_->look(live, look))
+            drawBatches(m.batches, moverMesh_, moverPlacement(m.mover, look.location, look.rotation), false);
+        else
+            drawBatches(m.batches, moverMesh_, moverTransform(m), false);
+    }
     if (animate_)
         animTime_ += dt;
-    for (const MeshDraw& d : meshActors_) {
-        const Mesh& mesh = meshes_[d.mesh];
-        const MeshAnimSeq* anim = d.anim >= 0 ? &mesh.anims[size_t(d.anim)] : nullptr;
-        drawMesh(*renderer_, gpuMeshes_[d.mesh], d.placement, poseAt(mesh, anim, animTime_, d.startFraction),
-                 textured_ ? d.textures : std::vector<gfx::TextureId>{}, d.light, kExposure);
+    if (play_) {
+        drawLiveActors(forward, right);
+    } else {
+        for (const MeshDraw& d : meshActors_) {
+            const Mesh& mesh = meshes_[d.mesh];
+            const MeshAnimSeq* anim = d.anim >= 0 ? &mesh.anims[size_t(d.anim)] : nullptr;
+            drawMesh(*renderer_, gpuMeshes_[d.mesh], d.placement, poseAt(mesh, anim, animTime_, d.startFraction),
+                     textured_ ? d.textures : std::vector<gfx::TextureId>{}, d.light, kExposure);
+        }
+        drawSprites(sprites_, forward, right);
     }
-    drawSprites(forward, right);
     drawOverlay(nowMs);
+    if (play_)
+        drawPlayHud();
     renderer_->endFrame(&overlay_);
 }
 
 // The sprites, facing the camera: those drawn solid first, then the
 // blended ones over them (not hiding what's behind).
-void MapViewer::drawSprites(const gfx::Vec3& forward, const gfx::Vec3& right) {
+void MapViewer::drawSprites(const std::vector<SpriteDraw>& sprites, const gfx::Vec3& forward, const gfx::Vec3& right) {
     const gfx::Vec3 up{right[1] * forward[2] - right[2] * forward[1], right[2] * forward[0] - right[0] * forward[2],
                        right[0] * forward[1] - right[1] * forward[0]};
     for (int blendedPass = 0; blendedPass < 2; ++blendedPass)
-        for (const SpriteDraw& d : sprites_) {
+        for (const SpriteDraw& d : sprites) {
             const bool blend = d.style == kStyleTranslucent || d.style == kStyleModulated;
             if (blend != (blendedPass == 1))
                 continue;
@@ -944,6 +959,10 @@ gfx::Mat4 MapViewer::moverTransform(const MoverDraw& d) const {
     const Rotator rot{baseRot.pitch + ra.pitch + int32_t(float(rb.pitch - ra.pitch) * t),
                       baseRot.yaw + ra.yaw + int32_t(float(rb.yaw - ra.yaw) * t),
                       baseRot.roll + ra.roll + int32_t(float(rb.roll - ra.roll) * t)};
+    return moverPlacement(m, location, rot);
+}
+
+gfx::Mat4 MapViewer::moverPlacement(const Mover& m, const Vec3f& location, const Rotator& rot) {
     // location + postScale * (rotation * (mainScale * (v - prePivot))),
     // then Y negated into the renderer's axes.
     const gfx::Mat4 flip = scaling({1, -1, 1});
@@ -1013,12 +1032,29 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
         frames_ = 0;
     }
     std::fill(overlay_.pixels.begin(), overlay_.pixels.end(), 0);
+    if (play_ && view_.letterbox) { // a cut scene's black bars, under the text
+        const int bar = kFrameH / 8;
+        for (int y = 0; y < kFrameH; ++y) {
+            if (y >= bar && y < kFrameH - bar)
+                continue;
+            uint8_t* p = overlay_.row(y);
+            for (int x = 0; x < kFrameW; ++x) {
+                p[x * 4] = p[x * 4 + 1] = p[x * 4 + 2] = 0;
+                p[x * 4 + 3] = 255;
+            }
+        }
+    }
     if (!showInfo_ && error_.empty())
         return;
     std::vector<std::string> lines = info_;
     const size_t errorLine = error_.empty() ? size_t(-1) : lines.size();
     if (!error_.empty())
         lines.push_back(error_);
+    if (!playError_.empty())
+        lines.push_back("Can't play: " + playError_);
+    lines.push_back(play_ ? "Playing (Enter stops): W/S move, A/D step aside, arrows turn and look, drag to look, Space "
+                            "jumps, Ctrl or F fires"
+                          : "Enter plays the level");
     char where[200];
     // Shown in Unreal's own coordinates.
     std::snprintf(where, sizeof where, "at %.0f %.0f %.0f, %.0f fps; lightmaps %s, brightness x%.2f, display gamma %.2f",
@@ -1039,11 +1075,244 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
     for (int y = 0; y < boxH; ++y) {
         uint8_t* p = overlay_.row(y);
         for (int x = 0; x < boxW; ++x)
-            p[x * 4 + 3] = 150;
+            p[x * 4 + 3] = std::max<uint8_t>(p[x * 4 + 3], 150);
     }
     for (size_t i = 0; i < lines.size(); ++i)
         font::drawText(overlay_, 4, 3 + int(i) * lh, lines[i],
                        i == errorLine ? Color{255, 120, 120} : Color{230, 230, 230});
+}
+
+std::pair<gfx::TextureId, std::array<int, 2>> MapViewer::textureOf(const ObjectRef& tex, bool* unreadable) {
+    if (!tex)
+        return {0, {64, 64}};
+    auto it = textureCache_.find({tex.package, tex.exportIndex});
+    if (it == textureCache_.end()) {
+        image::Image img;
+        gfx::TextureId id = 0;
+        TextureInfo ti;
+        if (decodeTexture(ctx_.packages, *tex.package, tex.exportIndex, img, &ti)) {
+            if (unreadable)
+                *unreadable = true;
+        } else {
+            // Fire, water, wet, ice and FLC textures play, redrawn as they
+            // change (so without mipmaps, which updates don't redo).
+            std::unique_ptr<AnimatedTexture> anim;
+            if (isAnimatedTextureClass(tex.package->className(tex.exportIndex + 1)))
+                anim = openAnimatedTexture(ctx_.packages, *tex.package, tex.exportIndex);
+            if (anim && anim->image().w == img.w && anim->image().h == img.h)
+                img = anim->image();
+            else
+                anim.reset();
+            gfx::TextureParams params;
+            params.nearest = (ti.polyFlags & polyflag::NoSmooth) != 0;
+            params.mipmaps = !anim;
+            if (!renderer_->createTexture(img.w, img.h, img.rgba.data(), params, id)) {
+                textures_.push_back(id);
+                if (anim)
+                    animatedTextures_.push_back({id, std::move(anim)});
+            } else {
+                id = 0;
+            }
+        }
+        it = textureCache_
+                 .emplace(std::make_pair(tex.package, tex.exportIndex),
+                          std::make_pair(id, std::array<int, 2>{std::max(1, img.w), std::max(1, img.h)}))
+                 .first;
+    }
+    return it->second;
+}
+
+// The lights reaching where an actor stands: some all round, the rest
+// from their average direction.
+MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
+    MeshLight light;
+    Vec3f total{}, toward{};
+    for (const LightSource& l : lights_.unique) {
+        const Vec3f dv{l.position[0] - at[0], l.position[1] - at[1], l.position[2] - at[2]};
+        const float dist = std::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
+        if (dist >= l.radius || dist <= 0)
+            continue;
+        const float amount = 1 - dist / l.radius;
+        for (size_t k = 0; k < 3; ++k) {
+            total[k] += l.color[k] * amount;
+            toward[k] += dv[k] / dist * amount;
+        }
+    }
+    for (size_t k = 0; k < 3; ++k) {
+        light.ambient[k] = std::min(kMaxLight, 0.15f + 0.5f * total[k]);
+        light.directed[k] = std::min(kMaxLight, 0.7f * total[k]);
+    }
+    const float len = std::sqrt(toward[0] * toward[0] + toward[1] * toward[1] + toward[2] * toward[2]);
+    light.direction = len > 0 ? toWorld(Vec3f{toward[0] / len, toward[1] / len, toward[2] / len}) : gfx::Vec3{0, 0, 1};
+    return light;
+}
+
+// --- Playing --------------------------------------------------------------------------------
+
+void MapViewer::startPlay() {
+    stopPlay();
+    const Package* pkg = names_.empty() ? nullptr : ctx_.packages.get(names_[size_t(index_)]);
+    if (!pkg || !error_.empty())
+        return;
+    auto play = std::make_unique<LevelPlay>(ctx_.packages, *pkg);
+    if (Error err = play->start()) {
+        playError_ = err.message;
+        return;
+    }
+    if (!play->player()) {
+        playError_ = "no player logged in: " + play->loginError();
+        return;
+    }
+    // Each mover's live actor, by its path in the map.
+    std::map<std::string, VmObject*> byPath;
+    for (VmObject* a : play->level().actors())
+        if (a->package == pkg && a->exportIndex >= 0)
+            byPath[pkg->path(a->exportIndex + 1)] = a;
+    moverActors_.clear();
+    for (const MoverDraw& m : movers_) {
+        auto it = byPath.find(m.mover.name);
+        moverActors_.push_back(it == byPath.end() ? nullptr : it->second);
+    }
+    playError_.clear();
+    playClock_ = 0;
+    held_[Fast] = false;
+    play_ = std::move(play);
+}
+
+void MapViewer::stopPlay() {
+    play_.reset();
+    moverActors_.clear();
+    liveAnims_.clear();
+    // The live actors' meshes stay uploaded (in meshes_), for playing again.
+}
+
+void MapViewer::updatePlay(float dt) {
+    ScriptLevel::Controls& c = play_->controls();
+    c.forward = float(held_[Forward] - held_[Back]);
+    c.strafe = float(held_[Right] - held_[Left]);
+    c.turn = float(held_[TurnRight] - held_[TurnLeft]);
+    c.lookUp = float(held_[LookUp] - held_[LookDown]);
+    c.mouseX += mouseDx_;
+    c.mouseY += mouseDy_;
+    c.jump = held_[Up];
+    c.fire = held_[Fire];
+    mouseDx_ = mouseDy_ = 0;
+    play_->advance(dt);
+    playClock_ += dt;
+    // The camera where the game puts it.
+    view_ = play_->view();
+    pos_ = toWorld(view_.location);
+    // The way it looks, from its rotation's direction: the game's camera
+    // writes the same direction with the yaw turned round and the pitch
+    // past straight up when it's ahead of the player (CTVE_Camera), which
+    // taken as yaw and pitch alone looks straight down.
+    const Vec3f f = rotationAxes(view_.rotation)[0];
+    yaw_ = std::atan2(-f[1], f[0]); // negated with Y
+    pitch_ = std::clamp(std::asin(std::clamp(f[2], -1.0f, 1.0f)), -1.55f, 1.55f);
+    fov_ = view_.fov;
+}
+
+int MapViewer::liveMesh(const ObjectRef& ref, const std::string& anim) {
+    auto it = liveMeshes_.find({ref.package, ref.exportIndex});
+    if (it == liveMeshes_.end()) {
+        Mesh mesh;
+        GpuMesh gpu;
+        int at = -1;
+        if (!readMesh(*ref.package, ref.exportIndex, mesh) &&
+            !uploadMesh(*renderer_, mesh, gpu, ctx_.meshTurn, ctx_.meshYawQuarters)) {
+            at = int(meshes_.size());
+            meshes_.push_back(std::move(mesh));
+            gpuMeshes_.push_back(gpu);
+        }
+        it = liveMeshes_.emplace(std::make_pair(ref.package, ref.exportIndex), at).first;
+    }
+    const int at = it->second;
+    if (at < 0 || anim.empty())
+        return at;
+    // A character's animation from the shared sets, the first time it plays
+    // one its mesh doesn't have: borrowed, and the mesh uploaded again.
+    Mesh& mesh = meshes_[size_t(at)];
+    if (mesh.bones && !mesh.findAnim(anim) && borrowNamedAnimation(*ref.package, ref.exportIndex, ctx_.sets(), anim, mesh)) {
+        GpuMesh gpu;
+        if (!uploadMesh(*renderer_, mesh, gpu, ctx_.meshTurn, ctx_.meshYawQuarters)) {
+            if (gpuMeshes_[size_t(at)].mesh)
+                renderer_->destroyMesh(gpuMeshes_[size_t(at)].mesh);
+            gpuMeshes_[size_t(at)] = gpu;
+        }
+    }
+    return at;
+}
+
+// The level's actors as they are now: meshes posed in the animation they
+// play (from when it started: the VM doesn't move animations on yet), and
+// sprites.
+void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right) {
+    constexpr int kDrawSprite = 1, kDrawMesh = 2, kDrawVerticalSprite = 5, kDrawSpriteAnimOnce = 7;
+    std::vector<SpriteDraw> sprites;
+    LevelPlay::Look look;
+    for (VmObject* a : play_->level().actors()) {
+        look = {};
+        if (!play_->look(a, look) || look.hidden)
+            continue;
+        if (look.drawType == kDrawMesh && look.mesh) {
+            const int at = liveMesh(look.mesh, look.animSequence);
+            if (at < 0)
+                continue;
+            const Mesh& mesh = meshes_[size_t(at)];
+            auto& [seq, since] = liveAnims_[a];
+            if (seq != look.animSequence) {
+                seq = look.animSequence;
+                since = playClock_;
+            }
+            const MeshAnimSeq* anim = mesh.findAnim(look.animSequence);
+            std::vector<gfx::TextureId> skins;
+            for (size_t k = 0; k < std::max<size_t>(mesh.textures.size(), 8); ++k) {
+                ObjectRef tex = k < look.multiSkins.size() ? look.multiSkins[k] : ObjectRef{};
+                if (!tex)
+                    tex = look.skin;
+                if (!tex && k < mesh.textures.size())
+                    tex = ctx_.packages.resolve(*look.mesh.package, mesh.textures[k]);
+                skins.push_back(textured_ ? textureOf(tex).first : 0);
+            }
+            drawMesh(*renderer_, gpuMeshes_[size_t(at)], meshPlacement(look.location, look.rotation, look.drawScale, look.prePivot),
+                     poseAt(mesh, anim, playClock_ - since, look.animFrame), skins, meshLightAt(look.location), kExposure,
+                     look.style);
+        } else if ((look.drawType == kDrawSprite || look.drawType == kDrawVerticalSprite ||
+                    look.drawType == kDrawSpriteAnimOnce) && look.texture) {
+            const auto [texture, size] = textureOf(look.texture);
+            if (!texture)
+                continue;
+            SpriteDraw d;
+            d.texture = texture;
+            d.at = toWorld(Vec3f{look.location[0] - look.prePivot[0], look.location[1] - look.prePivot[1],
+                                 look.location[2] - look.prePivot[2]});
+            d.width = float(size[0]) * look.drawScale;
+            d.height = float(size[1]) * look.drawScale;
+            d.style = look.style;
+            d.vertical = look.drawType == kDrawVerticalSprite;
+            const float glow = look.scaleGlow * kExposure;
+            d.color = {glow, glow, glow};
+            sprites.push_back(d);
+        }
+    }
+    drawSprites(sprites, forward, right);
+}
+
+// A line of how the game's going (the cut scene's bars are drawn under
+// the info, drawOverlay).
+void MapViewer::drawPlayHud() {
+    char line[200];
+    std::snprintf(line, sizeof line, "%s  health %d  %s  %.0f s played%s%s", play_->player()->cls->name.c_str(),
+                  play_->health(), play_->playerState().c_str(), double(play_->time()),
+                  view_.letterbox ? "  (cut scene)" : "",
+                  play_->behind() > 1 ? ("  " + std::to_string(int(play_->behind())) + " s behind real time").c_str() : "");
+    const int y = kFrameH - font::kLineHeight - 4;
+    for (int yy = y - 2; yy < kFrameH; ++yy) {
+        uint8_t* p = overlay_.row(yy);
+        for (int x = 0; x < int(font::length(line)) * font::kAdvance + 8 && x < kFrameW; ++x)
+            p[x * 4 + 3] = std::max<uint8_t>(p[x * 4 + 3], 150);
+    }
+    font::drawText(overlay_, 4, y, line, Color{230, 230, 230});
 }
 
 } // namespace reluva::unreal

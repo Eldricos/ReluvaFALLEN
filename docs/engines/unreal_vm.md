@@ -1,7 +1,10 @@
 # The UnrealScript virtual machine
 
-Status: **runs The Fallen's levels' start-up and the player's login**,
-not the game. Every class of the game loads (`vm.cpp`), every default
+Status: **runs The Fallen's levels with the player in them**: the
+Maps page plays a level (Enter), its scripts live, the player moved by
+the keyboard and mouse, seen from the game's own camera. It isn't the
+game yet: AI has no paths, animations don't keep the scripts' time,
+nothing makes a sound, and the HUD and menus aren't drawn. Every class of the game loads (`vm.cpp`), every default
 property converts to its type, and all 74 maps start: their actors made,
 the game type spawned, the start-up events sent, the player logged in as
 the level's character, then twenty seconds of ticks, with no crash. The
@@ -318,3 +321,64 @@ hidden. The info shows what changed; P turns the scripts off (the level
 as saved). On M01_KiraL1A: 64 lights changed (37 triggered lights off),
 10 Bajoran fanatics hidden until their ambush, 9 exploding walls' icons
 gone.
+
+## Playing a level
+
+`LevelPlay` (`level_play.cpp`) is a level being played. It starts the
+level as above and logs the player in. Then, as real time passes, it
+ticks the level in steps of a thirtieth of a second, at most four a
+frame: when the scripts can't keep up, the game slows down rather than
+falling further behind. The Maps page plays one with Enter:
+
+- **Controls** are the player's input axes and buttons, set each tick
+  as the engine sets them from the keys (above). W/S move, A/D step
+  aside, Left/Right turn, Up/Down look, and dragging the mouse turns
+  and looks (`aMouseX`/`aMouseY`, used up by one tick). Space jumps
+  (`bExtra1` and `aUp` held, and the `Jump` exec function called once).
+  Ctrl or F fires (`bFire` and `Fire`).
+- **The camera** is where the game puts it: the page calls the player's
+  `PlayerCalcView` each frame, as the engine does before drawing. The
+  Fallen's is third person, and all script: `CTVE_Camera.CameraAI`
+  follows the player, swings aside as they run and pulls in out of
+  walls, and follows the cut scenes' directors. With it come the field
+  of view (`FovAngle`) and the HUD's letterbox. When the camera is
+  ahead of the player, `CameraAI` writes its direction with the yaw
+  turned round and the pitch past straight up (`Pitch = 98304 −
+  Pitch`). So the page takes the view's facing from the rotation's
+  direction, not its yaw and pitch alone, which would look straight
+  down.
+- **What's drawn** is the level's actors as their properties are now,
+  read each frame (`LevelPlay::look`, through each class's property
+  slots, found once):
+  - Meshes where they stand, turned, scaled, in their render style
+    (modulated: the player's floor shadow, a `CTV_Shadow` quad). Their
+    current `AnimSequence` loops from when it changed: the VM doesn't
+    move animations on yet. A character's animation from the shared
+    sets is borrowed the first time it plays one its mesh lacks (the
+    run, `runf`).
+  - Sprites.
+  - Movers where their scripts have moved them.
+
+  Lighting is the level's lightmaps, as worked out when it loaded.
+
+`reluva-tool ue-play` plays the page without a window, through a
+software renderer (`tools/soft_renderer.cpp`: textured, depth tested,
+blended triangles, enough to see a frame), driven by steps:
+`play`, `wait <s>`, `hold <key> <s>`, `down`/`up <key>`, `press <key>`,
+`drag <dx> <dy>`, `shot <file.ppm>`. Checked that way:
+- **M01_KiraL2:** Kira runs down the stone corridor from behind, the
+  camera swinging to her side, and turns into the wall with the camera
+  pulled in beside her.
+- **M04_KiraL1:** she rides the lift down from her start and stands in
+  the turbolift.
+- **M01_KiraL1A:** the opening's directors fly over the monastery
+  bridge, then follow her and a monk, letterboxed.
+
+**Speed**, measured without drawing (`ue-play`, M01_KiraL2, 20 s):
+- The scripts' ticks take 3.4 s.
+- The page's own work (lightmaps, animated textures, the overlay) takes
+  about 9 ms a frame.
+- Reading the live actors and the camera adds about 8 ms a frame.
+
+So a frame's CPU work is close to its 33 ms on this machine, before any
+drawing.

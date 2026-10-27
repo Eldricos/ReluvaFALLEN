@@ -199,8 +199,15 @@ MeshPose poseAt(const Mesh& mesh, const MeshAnimSeq* anim, float time, float sta
 }
 
 void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& placement, const MeshPose& pose,
-              const std::vector<gfx::TextureId>& textures, const MeshLight& light, float exposure) {
-    for (const GpuMesh::Batch& b : mesh.batches) {
+              const std::vector<gfx::TextureId>& textures, const MeshLight& light, float exposure, uint8_t style) {
+    for (const GpuMesh::Batch& batch : mesh.batches) {
+        GpuMesh::Batch b = batch;
+        if (style == kStyleTranslucent)
+            b.polyFlags |= polyflag::Translucent;
+        else if (style == kStyleModulated)
+            b.polyFlags |= polyflag::Modulated;
+        else if (style == kStyleMasked)
+            b.polyFlags |= polyflag::Masked;
         gfx::DrawCall call;
         call.mesh = mesh.mesh;
         call.firstIndex = b.firstIndex;

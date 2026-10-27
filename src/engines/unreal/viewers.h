@@ -16,6 +16,10 @@
 //           gamma; to compare with the original), O to move the movers
 //           (doors, lifts) on to their next keyframe, K to show or hide
 //           the sky, N to play or stop the meshes' animations.
+//           Enter plays the level: its scripts run live with the player
+//           in it, seen from the game's own camera. W/S move, A/D step
+//           aside, Left/Right turn, Up/Down look, drag to turn and look,
+//           Space jumps, Ctrl or F fires; Enter stops.
 // Textures: Left/Right step through a package's textures, PageUp/PageDown
 //           pick the package (.utx, then maps' own, then .u).
 // Meshes:   every Mesh and LodMesh. Left/Right step, PageUp/PageDown pick
@@ -29,6 +33,7 @@
 
 #include "engines/unreal/actors.h"
 #include "engines/unreal/games.h"
+#include "engines/unreal/level_play.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/mesh_render.h"
 #include "engines/unreal/model.h"
@@ -228,6 +233,9 @@ public:
     void handleEvent(const Event& ev) override;
     void update(uint64_t nowMs) override;
     bool uses3D() const override { return renderer_ != nullptr; }
+    // Shows the map of that name (once active); false if there's none.
+    bool selectMap(const std::string& name);
+    bool playing() const { return play_ != nullptr; }
 
 private:
     void load(int index);
@@ -251,6 +259,7 @@ private:
         float t = 0;             // 0-1 of the way
     };
     gfx::Mat4 moverTransform(const MoverDraw& m) const;
+    static gfx::Mat4 moverPlacement(const Mover& m, const Vec3f& location, const Rotator& rotation);
     void drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh, const gfx::Mat4& model, bool levelLit);
 
     std::vector<std::string> names_;
@@ -284,7 +293,7 @@ private:
         uint8_t style = kStyleNormal;
         bool vertical = false;
     };
-    void drawSprites(const gfx::Vec3& forward, const gfx::Vec3& right);
+    void drawSprites(const std::vector<SpriteDraw>& sprites, const gfx::Vec3& forward, const gfx::Vec3& right);
     gfx::MeshId spriteQuad_ = 0;
     std::vector<SpriteDraw> sprites_;
     void jumpToMeshActor(bool skeletalOnly);
@@ -297,6 +306,30 @@ private:
     bool animate_ = false;
     float animTime_ = 0;
     std::vector<gfx::TextureId> textures_;
+    // Textures uploaded, each once: its id (0: unreadable) and size.
+    std::pair<gfx::TextureId, std::array<int, 2>> textureOf(const ObjectRef& texture, bool* unreadable = nullptr);
+    std::map<std::pair<const Package*, int>, std::pair<gfx::TextureId, std::array<int, 2>>> textureCache_;
+    LevelLights lights_; // the level's, for lighting what moves
+    MeshLight meshLightAt(const Vec3f& location) const;
+
+    // Playing (Enter): the level live, drawn as its scripts have it.
+    void startPlay();
+    void stopPlay();
+    void updatePlay(float dt);
+    void drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right);
+    void drawPlayHud();
+    // A mesh for live actors (by the mesh object), with the animation
+    // they play borrowed from the shared sets if it's not its own: an
+    // index into meshes_ / gpuMeshes_, -1 if it doesn't read.
+    int liveMesh(const ObjectRef& mesh, const std::string& anim);
+    std::unique_ptr<LevelPlay> play_;
+    std::string playError_;
+    std::vector<VmObject*> moverActors_; // each of movers_'s live actor
+    std::map<std::pair<const Package*, int>, int> liveMeshes_;
+    std::map<VmObject*, std::pair<std::string, float>> liveAnims_; // each actor's sequence, since when
+    float playClock_ = 0, fov_ = 90;
+    LevelPlay::View view_;
+    float mouseDx_ = 0, mouseDy_ = 0;
     Surface overlay_;
     std::string error_;
     std::vector<std::string> info_;
@@ -325,7 +358,7 @@ private:
     // (so right-handed), Z up; yaw 0 looks along +X.
     std::array<float, 3> start_{}, pos_{};
     float startYaw_ = 0, yaw_ = 0, pitch_ = 0;
-    bool held_[7] = {};
+    bool held_[12] = {}; // by map_viewer.cpp's Held
     bool dragging_ = false, showInfo_ = true;
     int lastX_ = 0, lastY_ = 0;
     uint64_t lastMs_ = 0, fpsStart_ = 0;

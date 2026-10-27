@@ -60,7 +60,7 @@ Linux (with each distro's packages) and Windows with Visual Studio 2022.
 - `reluva --hash <files...>` prints detection signatures for an engine's table.
 - `reluva-tool` has developer tools for studying game data: `hexdump`,
   `cat-probe`, `cat-list` and `cat-extract` (New Worlds archives); `ue-check`,
-  `ue-info`, `ue-exports`, `ue-props`, `ue-script` (compiled UnrealScript as text), `ue-run` (run a level's scripts) and `ue-extract`
+  `ue-info`, `ue-exports`, `ue-props`, `ue-script` (compiled UnrealScript as text), `ue-run` (run a level's scripts), `ue-play` (play a level in the Maps page without a window, saving frames) and `ue-extract`
   (Unreal packages).
 - In game: **Ctrl+F5** returns to the launcher, **Alt+Enter** toggles fullscreen.
 - New Worlds currently opens as a data viewer. **Tab** switches between missions, models,

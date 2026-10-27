@@ -183,6 +183,7 @@ if(RELUVA_ENGINE_UNREAL)
         src/engines/unreal/vm_level.cpp
         src/engines/unreal/vm_physics.cpp
         src/engines/unreal/vm_splines.cpp
+        src/engines/unreal/level_play.cpp
         src/engines/unreal/actors.cpp
         src/engines/unreal/class_defaults.cpp
         src/engines/unreal/mesh.cpp
@@ -203,7 +204,7 @@ add_executable(reluva
 target_link_libraries(reluva PRIVATE reluva_engines imgui SDL3::SDL3 reluva_warnings)
 
 # --- developer tools -----------------------------------------------------------
-add_executable(reluva-tool src/tools/reluva_tool.cpp)
+add_executable(reluva-tool src/tools/reluva_tool.cpp src/tools/soft_renderer.cpp)
 target_link_libraries(reluva-tool PRIVATE reluva_engines reluva_warnings)
 
 # --- tests ----------------------------------------------------------------------

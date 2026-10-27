@@ -325,11 +325,17 @@ void ScriptLevel::tick(float seconds) {
             const std::pair<const char*, float> axes[] = {
                 {"aBaseY", controls.forward * 300}, {"aStrafe", controls.strafe * 300},
                 {"aBaseX", controls.turn * 150},    {"aLookUp", controls.lookUp * 300},
-                {"aForward", 0}, {"aTurn", 0}, {"aBaseZ", 0}, {"aMouseX", 0}, {"aMouseY", 0}, {"aUp", 0},
+                {"aMouseX", controls.mouseX}, {"aMouseY", controls.mouseY},
+                {"aUp", controls.jump ? 300.0f : 0.0f},
+                {"aForward", 0}, {"aTurn", 0}, {"aBaseZ", 0},
             };
             for (const auto& [axis, value] : axes)
                 if (Value* v = a->find(vm_, axis))
                     v->f = value;
+            controls.mouseX = controls.mouseY = 0; // the mouse's movement goes into one tick
+            for (const auto& [button, held] : {std::pair{"bExtra1", controls.jump}, std::pair{"bFire", controls.fire}})
+                if (Value* v = a->find(vm_, button))
+                    v->i = held ? 1 : 0;
             vm_.callEvent(a, "PlayerInput", {Value::floatValue(seconds)});
             vm_.callEvent(a, "PlayerTick", {Value::floatValue(seconds)});
         }
@@ -636,6 +642,10 @@ void registerEngineNatives(Vm& vm) {
     for (const char* quiet : {"Actor.PlaySound", "Actor.PlayOwnedSound", "Actor.DemoPlaySound", "Actor.MakeNoise",
                               "Actor.PlayDummySound"})
         reg(quiet, [](NativeCall&) {});
+    reg("Actor.GetRegion", [](NativeCall& c) { // GetRegion(Vector Point, out PointRegion Region)
+        if (c.vm.level)
+            c.args[1] = c.vm.level->regionAt(Vm::vectorOf(c.args[0]));
+    });
     reg("Actor.GetMapName", [](NativeCall& c) { c.result = Value::stringValue(c.vm.level ? c.vm.level->map().name() : ""); });
     reg("Actor.GetURLMap", [](NativeCall& c) { c.result = Value::stringValue(c.vm.level ? c.vm.level->map().name() : ""); });
     reg("Actor.PlayerCanSeeMe", [=](NativeCall& c) { c.result = B(false); });

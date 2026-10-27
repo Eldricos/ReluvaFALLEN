@@ -102,6 +102,8 @@
 //   reluva-tool ue-script <game folder> <class | Class.Function | -all <dir>>  compiled UnrealScript as
 //                                                  text: a class, struct, function or state, or every class
 //                                                  written to <dir>/<package>/<class>.uc
+//   reluva-tool ue-play <game folder> <map> [step...]  the Maps page on a map, played by steps (keys, waits),
+//                                                     its frames drawn in software and saved as PPM files
 //   reluva-tool ue-run <game folder> <map | -all> [seconds]  run a level's scripts: start-up events,
 //                                                  then ticks; report errors and natives missing
 //   reluva-tool ue-extract <game folder> <package> <export>  write a texture as .tga, a sound or music
@@ -149,6 +151,8 @@
 #include "engines/unreal/script_text.h"
 #include "engines/unreal/vm.h"
 #include "engines/unreal/vm_level.h"
+#include "engines/unreal/viewers.h"
+#include "tools/soft_renderer.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package_set.h"
 #include "engines/unreal/properties.h"
@@ -4662,6 +4666,159 @@ int cmdUeRun(int argc, char** argv) {
     return failed ? 1 : 0;
 }
 
+// The Maps page played without a window: a System whose 3D is the software
+// renderer, so a page's frames can be saved and looked at.
+class HeadlessSystem : public reluva::System {
+public:
+    explicit HeadlessSystem(reluva::tools::SoftRenderer3D& renderer) : renderer_(renderer) {}
+    reluva::Error initGraphics(int, int, reluva::PixelFormat) override { return reluva::Error::success(); }
+    void setPalette(const reluva::Color*, int, int) override {}
+    void updateScreen(const reluva::Surface&) override {}
+    void setWindowTitle(const std::string& title) override { title_ = title; }
+    reluva::Error init3D(int width, int height, reluva::gfx::Renderer3D*& out) override {
+        if (width != renderer_.width() || height != renderer_.height())
+            return reluva::Error::fail("the software renderer is another size");
+        out = &renderer_;
+        return reluva::Error::success();
+    }
+    bool pollEvent(reluva::Event&) override { return false; }
+    uint64_t getMillis() const override { return 0; }
+    void delayMillis(uint32_t) override {}
+    reluva::Error startAudio(AudioCallback) override { return reluva::Error::fail("no audio"); }
+    void stopAudio() override {}
+    int audioRate() const override { return 0; }
+    const std::string& title() const { return title_; }
+
+private:
+    reluva::tools::SoftRenderer3D& renderer_;
+    std::string title_;
+};
+
+// ue-play <game folder> <map> [step...]: the Maps page on that map, driven
+// by steps, its frames drawn in software. Steps: play (Enter), wait <s>,
+// hold <key> <s> (w a s d left right up down space f), down <key> and
+// up <key> (held across other steps), press <key>,
+// drag <dx> <dy>, shot <file.ppm> (the next frame, saved).
+int cmdUePlay(int argc, char** argv) {
+    if (argc < 4) {
+        std::fprintf(stderr, "usage: reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | "
+                             "down <key> | up <key> | press <key> | drag <dx> <dy> | shot <file.ppm>]...\n");
+        return 2;
+    }
+    using namespace reluva::unreal;
+    PackageSet set;
+    if (reluva::Error err = set.open(argv[2], "DS9.ini")) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    reluva::tools::SoftRenderer3D renderer(960, 720);
+    renderer.drawing = false;
+    HeadlessSystem sys(renderer);
+    reluva::Surface screen;
+    screen.create(960, 720, reluva::PixelFormat::RGBA32);
+    std::vector<std::string> warnings;
+    const GameInfo* game = findGame("ds9fallen");
+    ViewerContext ctx{sys, screen, set, *game, warnings};
+    MapViewer page(ctx);
+    if (!page.selectMap(argv[3])) {
+        std::fprintf(stderr, "no map %s\n", argv[3]);
+        return 1;
+    }
+    page.activate();
+    uint64_t now = 1000;
+    auto frame = [&] {
+        now += 33;
+        page.update(now);
+    };
+    auto keyOf = [](const std::string& k) -> uint32_t {
+        if (k == "left") return reluva::key::Left;
+        if (k == "right") return reluva::key::Right;
+        if (k == "up") return reluva::key::Up;
+        if (k == "down") return reluva::key::Down;
+        if (k == "space") return reluva::key::Space;
+        if (k == "enter") return reluva::key::Return;
+        return k.empty() ? 0 : uint32_t(k[0]);
+    };
+    auto send = [&](reluva::EventType type, uint32_t key) {
+        reluva::Event ev;
+        ev.type = type;
+        ev.key = key;
+        page.handleEvent(ev);
+    };
+    frame();
+    for (int i = 4; i < argc; ++i) {
+        const std::string step = argv[i];
+        const auto t0 = std::chrono::steady_clock::now();
+        if (step == "play") {
+            send(reluva::EventType::KeyDown, reluva::key::Return);
+            send(reluva::EventType::KeyUp, reluva::key::Return);
+            std::printf("play: %s\n", page.playing() ? "playing" : "didn't start");
+        } else if (step == "wait" && i + 1 < argc) {
+            const float s = float(std::atof(argv[++i]));
+            for (int f = 0; f < int(s * 30); ++f)
+                frame();
+        } else if (step == "hold" && i + 2 < argc) {
+            const uint32_t key = keyOf(argv[++i]);
+            const float s = float(std::atof(argv[++i]));
+            send(reluva::EventType::KeyDown, key);
+            for (int f = 0; f < int(s * 30); ++f)
+                frame();
+            send(reluva::EventType::KeyUp, key);
+        } else if ((step == "down" || step == "up") && i + 1 < argc) {
+            send(step == "down" ? reluva::EventType::KeyDown : reluva::EventType::KeyUp, keyOf(argv[++i]));
+        } else if (step == "press" && i + 1 < argc) {
+            const uint32_t key = keyOf(argv[++i]);
+            send(reluva::EventType::KeyDown, key);
+            frame();
+            send(reluva::EventType::KeyUp, key);
+        } else if (step == "drag" && i + 2 < argc) {
+            const int dx = std::atoi(argv[++i]), dy = std::atoi(argv[++i]);
+            reluva::Event ev;
+            ev.type = reluva::EventType::MouseDown;
+            ev.button = reluva::MouseButton::Left;
+            ev.mouseX = 480;
+            ev.mouseY = 360;
+            page.handleEvent(ev);
+            for (int k = 1; k <= 10; ++k) { // over a third of a second
+                ev.type = reluva::EventType::MouseMove;
+                ev.mouseX = 480 + dx * k / 10;
+                ev.mouseY = 360 + dy * k / 10;
+                page.handleEvent(ev);
+                frame();
+            }
+            ev.type = reluva::EventType::MouseUp;
+            page.handleEvent(ev);
+        } else if (step == "shot" && i + 1 < argc) {
+            const std::string file = argv[++i];
+            renderer.drawing = true;
+            frame();
+            renderer.drawing = false;
+            const reluva::Surface& f = renderer.frame();
+            std::FILE* out = std::fopen(file.c_str(), "wb");
+            if (!out) {
+                std::fprintf(stderr, "can't write %s\n", file.c_str());
+                return 1;
+            }
+            std::fprintf(out, "P6\n%d %d\n255\n", f.w, f.h);
+            for (int y = 0; y < f.h; ++y)
+                for (int x = 0; x < f.w; ++x)
+                    std::fwrite(f.row(y) + x * 4, 1, 3, out);
+            std::fclose(out);
+            std::printf("shot %s: %d draws, %d triangles, drawn in %.0f ms\n", file.c_str(), renderer.lastDraws(),
+                        renderer.lastTriangles(),
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            continue;
+        } else {
+            std::fprintf(stderr, "unknown step %s\n", step.c_str());
+            return 2;
+        }
+        std::printf("%s: %.0f ms\n", step.c_str(),
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+    page.deactivate();
+    return 0;
+}
+
 // Compiled UnrealScript as text (script_text.h): one class, struct,
 // function or state, or (-all) every class of every package written to
 // <dir>/<package>/<class>.uc.
@@ -5338,6 +5495,8 @@ int main(int argc, char** argv) {
         return cmdUeProbe(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-script") == 0)
         return cmdUeScript(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-play") == 0)
+        return cmdUePlay(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-run") == 0)
         return cmdUeRun(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-extract") == 0)
@@ -5400,6 +5559,7 @@ int main(int argc, char** argv) {
                  "  reluva-tool ue-probe <package | game folder> <export> [-all | -at <offset> <bytes>]\n"
                  "  reluva-tool ue-script <game folder> <class | Class.Function | -all <dir>>\n"
                  "  reluva-tool ue-run <game folder> <map | -all> [seconds]\n"
+                 "  reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | down <key> | up <key> | press <key> | drag <dx> <dy> | shot <file.ppm>]...\n"
 #endif
                  "");
     return 2;
