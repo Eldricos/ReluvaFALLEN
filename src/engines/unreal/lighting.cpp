@@ -34,19 +34,28 @@ float length(const Vec3f& a) { return std::sqrt(dot(a, a)); }
 // A light actor's light, its classes' defaults under its own properties;
 // false if they don't read (it then lights nothing).
 bool readLight(const PackageSet& packages, const Package& package, int32_t ref, ClassDefaults& defaults,
-               LightSource& l) {
+               const ScriptedActors* scripted, LightSource& l) {
     const ObjectRef obj = packages.resolve(package, ref);
     ActorProperties props;
     if (!obj || defaults.actorProperties(*obj.package, obj.exportIndex, props) ||
         !props.vector("Location", l.position))
         return false;
+    // What the level's scripts did to it at the start.
+    const ScriptedActor* changed = nullptr;
+    if (scripted && obj.package == &package)
+        if (auto it = scripted->find(obj.exportIndex); it != scripted->end())
+            changed = &it->second;
+    if (changed && changed->removed)
+        return true;
     // Fallbacks as Engine.Light's defaults: a steady white light of
     // brightness 64 and radius 64. Lights the level lists are lights, so
     // a missing LightType counts as steady.
-    l.type = props.byte("LightType", kLightSteady);
-    if (l.type == kLightNone)
+    l.type = changed && changed->lightType >= 0 ? uint8_t(changed->lightType) : props.byte("LightType", kLightSteady);
+    const uint8_t brightness = changed && changed->lightBrightness >= 0 ? uint8_t(changed->lightBrightness)
+                                                                       : props.byte("LightBrightness", 64);
+    if (l.type == kLightNone || brightness == 0)
         return true;
-    l.color = lightColor(props.byte("LightHue"), props.byte("LightSaturation", 255), props.byte("LightBrightness", 64));
+    l.color = lightColor(props.byte("LightHue"), props.byte("LightSaturation", 255), brightness);
     l.radius = kRadiusUnit * (float(props.byte("LightRadius", 64)) + 1);
     // LightPeriod in 35ths of a second a cycle, LightPhase in 256ths of one.
     l.period = float(std::max<uint8_t>(props.byte("LightPeriod", 32), 1)) / 35;
@@ -136,7 +145,8 @@ float lightLevel(const LightSource& l, float time) {
     }
 }
 
-LevelLights gatherLights(const PackageSet& packages, const Package& package, const Model& model) {
+LevelLights gatherLights(const PackageSet& packages, const Package& package, const Model& model,
+                         const ScriptedActors* scripted) {
     LevelLights out;
     ClassDefaults defaults(packages);
     for (const Zone& z : model.zones) {
@@ -160,7 +170,7 @@ LevelLights gatherLights(const PackageSet& packages, const Package& package, con
         auto it = byRef.find(ref);
         if (it == byRef.end()) {
             LightSource l;
-            if (!readLight(packages, package, ref, defaults, l))
+            if (!readLight(packages, package, ref, defaults, scripted, l))
                 ++out.unreadable;
             if (l.radius > 0 && changes(l)) {
                 l.animated = int(out.animated.size());

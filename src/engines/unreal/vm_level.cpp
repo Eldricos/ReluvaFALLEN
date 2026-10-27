@@ -1,0 +1,545 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 The Reluva contributors
+
+#include "engines/unreal/vm_level.h"
+
+#include "engines/unreal/mesh.h"
+
+#include "common/fs.h"
+
+#include <algorithm>
+#include <chrono>
+#include <fstream>
+#include <iterator>
+#include <cmath>
+#include <map>
+
+namespace reluva::unreal {
+
+namespace {
+std::string lowerText(const std::string& s) { return fs::toLower(s); }
+} // namespace
+
+Error readLevelActors(const Package& map, std::vector<int32_t>& out) {
+    out.clear();
+    const std::vector<int> levels = map.exportsOfClass("Level");
+    if (levels.empty())
+        return Error::fail(map.name() + ": no Level object");
+    const int index = levels.front();
+    std::vector<uint8_t> data;
+    if (Error err = map.readExport(index, data))
+        return err;
+    Reader r(data, size_t(map.exports()[size_t(index)].serialOffset));
+    PropertyList props;
+    if (Error err = beginObject(map, index, r, props))
+        return err;
+    // A transaction array: how many, how many allocated, the references.
+    const int32_t count = r.i32();
+    r.i32();
+    if (!r.ok() || count < 0 || size_t(count) > r.remaining())
+        return Error::fail(map.name() + ": " + std::to_string(count) + " actors don't fit");
+    out.reserve(size_t(count));
+    for (int32_t i = 0; i < count && r.ok(); ++i)
+        out.push_back(r.index());
+    return r.ok() ? Error::success() : Error::fail(map.name() + ": the actor list runs past the end");
+}
+
+ScriptLevel::ScriptLevel(Vm& vm, const Package& map) : vm_(vm), map_(map) {
+    vm_.level = this;
+    registerEngineNatives(vm_);
+}
+
+ScriptLevel::~ScriptLevel() {
+    if (vm_.level == this)
+        vm_.level = nullptr;
+}
+
+Error ScriptLevel::load() {
+    std::vector<int32_t> refs;
+    if (Error err = readLevelActors(map_, refs))
+        return err;
+    // First every actor, so they can refer to each other; then their
+    // properties.
+    std::vector<std::pair<VmObject*, int>> made;
+    std::vector<VmObject*> level; // their Outer: the level, set once it's made
+    for (int32_t ref : refs) {
+        if (ref <= 0)
+            continue;
+        const int index = ref - 1;
+        const Export& e = map_.exports()[size_t(index)];
+        const ObjectRef cref = vm_.packages().resolve(map_, e.classRef);
+        VmClass* cls = cref ? vm_.classAt(*cref.package, cref.exportIndex) : nullptr;
+        if (!cls) {
+            vm_.reportError("the level's actor " + map_.path(ref) + " has no class that loads");
+            continue;
+        }
+        VmObject* a = vm_.create(cls, vm_.name(map_.objectName(ref)));
+        vm_.adopt(map_, index, a);
+        level.push_back(a);
+        made.push_back({a, index});
+        actors_.push_back(a);
+    }
+    for (const auto& [a, index] : made) {
+        std::vector<uint8_t> data;
+        PropertyList props;
+        if (Error err = map_.readExport(index, data)) {
+            vm_.reportError(err.message);
+            continue;
+        }
+        Reader r(data, size_t(map_.exports()[size_t(index)].serialOffset));
+        if (Error err = beginObject(map_, index, r, props)) {
+            vm_.reportError(err.message);
+            continue;
+        }
+        vm_.applyProperties(a, map_, props);
+        if (!levelInfo_ && vm_.isA(a, "LevelInfo"))
+            levelInfo_ = a;
+    }
+    if (!levelInfo_)
+        return Error::fail(map_.name() + ": no LevelInfo among its actors");
+    const std::vector<int> levels = map_.exportsOfClass("Level");
+    levelObject_ = levels.empty() ? nullptr : vm_.objectAt(map_, levels.front() + 1);
+    for (VmObject* a : level)
+        if (Value* v = a->find(vm_, "Outer"))
+            v->o = levelObject_;
+    for (VmObject* a : actors_)
+        init(a);
+    return Error::success();
+}
+
+void ScriptLevel::init(VmObject* a) {
+    if (Value* v = a->find(vm_, "Level"))
+        v->o = levelInfo_;
+    if (Value* v = a->find(vm_, "XLevel"))
+        v->o = levelObject_;
+}
+
+void ScriptLevel::beginPlay(const std::string& defaultGame) {
+    // The game type: the level's own, else the default.
+    VmClass* gameClass = nullptr;
+    if (Value* v = levelInfo_->find(vm_, "DefaultGameType"); v && v->asObject() && v->o->asClass)
+        gameClass = v->o->asClass;
+    if (!gameClass)
+        gameClass = vm_.findClass(defaultGame);
+    if (gameClass) {
+        game_ = spawn(gameClass, nullptr, 0, nullptr, nullptr);
+        if (Value* v = levelInfo_->find(vm_, "Game"))
+            v->o = game_;
+        if (game_) {
+            Value error = Value::stringValue("");
+            if (VmFunction* f = vm_.findFunction(game_, vm_.name("InitGame")))
+                vm_.invoke(f, game_, {Value::stringValue(""), error}, {nullptr, &error});
+        }
+    } else {
+        vm_.reportError("no game type " + defaultGame);
+    }
+    // The level's own actors, in order (spawned ones got theirs already).
+    const std::vector<VmObject*> start = actors_;
+    for (VmObject* a : start) {
+        if (a == game_)
+            continue;
+        vm_.callEvent(a, "PreBeginPlay");
+        vm_.callEvent(a, "BeginPlay");
+    }
+    for (VmObject* a : start)
+        if (a != game_)
+            vm_.callEvent(a, "PostBeginPlay");
+    for (VmObject* a : start)
+        if (a != game_)
+            vm_.callEvent(a, "SetInitialState");
+}
+
+void ScriptLevel::tick(float seconds) {
+    time_ += seconds;
+    if (Value* v = levelInfo_->find(vm_, "TimeSeconds"))
+        v->f += seconds;
+    if (Value* v = levelInfo_->find(vm_, "DeltaTime"))
+        v->f = seconds;
+    // Actors spawned during the tick wait for the next.
+    const std::vector<VmObject*> now = actors_;
+    for (VmObject* a : now)
+        if (!a->deleted)
+            vm_.tick(a, seconds);
+    actors_.erase(std::remove_if(actors_.begin(), actors_.end(), [](VmObject* a) { return a->deleted; }),
+                  actors_.end());
+}
+
+VmObject* ScriptLevel::spawn(VmClass* cls, VmObject* owner, NameId tag, const Value* location, const Value* rotation) {
+    if (!cls || (cls->classFlags & 0x1)) { // abstract
+        vm_.reportError("Spawn of " + std::string(cls ? "abstract class " + cls->name : "no class"));
+        return nullptr;
+    }
+    VmObject* a = vm_.create(cls, 0, levelObject_);
+    if (!a->isActor) {
+        a->deleted = true;
+        vm_.reportError("Spawn of " + cls->name + ", not an actor");
+        return nullptr;
+    }
+    actors_.push_back(a);
+    init(a);
+    if (Value* v = a->find(vm_, "Owner"))
+        v->o = owner;
+    if (Value* v = a->find(vm_, "Tag"))
+        v->i = tag ? tag : cls->nameId;
+    if (location)
+        if (Value* v = a->find(vm_, "Location"))
+            vm_.assign(*v, *location);
+    if (rotation)
+        if (Value* v = a->find(vm_, "Rotation"))
+            vm_.assign(*v, *rotation);
+    if (owner && !owner->deleted)
+        vm_.callEvent(owner, "GainedChild", {Value::objectValue(a)});
+    for (const char* event : {"Spawned", "PreBeginPlay", "BeginPlay", "PostBeginPlay", "SetInitialState"}) {
+        if (a->deleted)
+            break;
+        vm_.callEvent(a, event);
+    }
+    return a->deleted ? nullptr : a;
+}
+
+void ScriptLevel::destroy(VmObject* a) {
+    if (!a || a->deleted)
+        return;
+    vm_.callEvent(a, "Destroyed");
+    if (Value* owner = a->find(vm_, "Owner"); owner && owner->asObject())
+        vm_.callEvent(owner->o, "LostChild", {Value::objectValue(a)});
+    if (Value* v = a->find(vm_, "bDeleteMe"))
+        v->i = 1;
+    a->deleted = true;
+}
+
+std::string defaultGameType(const PackageSet& packages) {
+    std::ifstream in(packages.iniFile(), std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    bool inEngine = false;
+    size_t at = 0;
+    while (at < text.size()) {
+        size_t end = text.find('\n', at);
+        if (end == std::string::npos)
+            end = text.size();
+        std::string line = text.substr(at, end - at);
+        at = end + 1;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+            line.pop_back();
+        if (!line.empty() && line.front() == '[') {
+            inEngine = lowerText(line) == "[engine.engine]";
+            continue;
+        }
+        if (inEngine && lowerText(line).rfind("defaultgame=", 0) == 0)
+            return line.substr(12);
+    }
+    return "Engine.GameInfo";
+}
+
+Error runLevelStart(const PackageSet& packages, const Package& map, const std::string& defaultGame, float seconds,
+                    LevelStart& out) {
+    out = {};
+    const auto t0 = std::chrono::steady_clock::now();
+    Vm vm(packages);
+    ScriptLevel level(vm, map);
+    if (Error err = level.load())
+        return err;
+    struct Saved {
+        VmObject* actor;
+        int drawType, hidden, lightType, lightBrightness;
+    };
+    auto byteOf = [&](VmObject* a, const char* name) {
+        const Value* v = a->find(vm, name);
+        return v ? v->asInt() : -1;
+    };
+    std::vector<std::pair<int, Saved>> before;
+    for (VmObject* a : level.actors())
+        if (a->package == &map)
+            before.push_back({a->exportIndex, {a, byteOf(a, "DrawType"), byteOf(a, "bHidden"), byteOf(a, "LightType"),
+                                               byteOf(a, "LightBrightness")}});
+    level.beginPlay(defaultGame);
+    for (int i = 0; i < int(seconds * 30); ++i)
+        level.tick(1.0f / 30);
+    for (const auto& [index, was] : before) {
+        VmObject* a = was.actor;
+        ScriptedActor c;
+        bool any = false;
+        if (a->deleted) {
+            c.removed = any = true;
+            ++out.removed;
+        } else {
+            if (byteOf(a, "bHidden") != was.hidden) {
+                c.hidden = byteOf(a, "bHidden");
+                any = true;
+                if (c.hidden == 1)
+                    ++out.hidden;
+                else
+                    ++out.shown;
+            }
+            if (byteOf(a, "DrawType") != was.drawType) {
+                c.drawType = byteOf(a, "DrawType");
+                any = true;
+                ++out.drawTypes;
+            }
+            const int type = byteOf(a, "LightType"), brightness = byteOf(a, "LightBrightness");
+            if (type != was.lightType || brightness != was.lightBrightness) {
+                c.lightType = type;
+                c.lightBrightness = brightness;
+                any = true;
+                ++out.lights;
+            }
+        }
+        if (any)
+            out.changed[index] = c;
+    }
+    out.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    out.errors = vm.stats.errors.size();
+    out.missingNatives = vm.stats.missingNatives.size();
+    out.accessedNone = vm.stats.accessedNone;
+    return Error::success();
+}
+
+// --- Engine natives -------------------------------------------------------------------------
+
+namespace {
+
+using Vec = std::array<float, 3>;
+
+Vec location(Vm& vm, VmObject* a) {
+    Value* v = a ? a->find(vm, "Location") : nullptr;
+    return v ? Vm::vectorOf(*v) : Vec{0, 0, 0};
+}
+
+float distance(const Vec& a, const Vec& b) {
+    const float dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// The level's live actors of a class (the class argument a class value).
+std::vector<Value> actorsOf(Vm& vm, const Value& classArg) {
+    std::vector<Value> out;
+    if (!vm.level)
+        return out;
+    VmObject* c = classArg.asObject();
+    const VmClass* cls = c && c->asClass ? c->asClass : nullptr;
+    for (VmObject* a : vm.level->actors())
+        if (!a->deleted && (!cls || (a->cls && a->cls->isA(cls))))
+            out.push_back(Value::objectValue(a));
+    return out;
+}
+
+std::string lower(const std::string& s) { return fs::toLower(s); }
+
+// An actor's mesh's animations (read once per mesh), for the animation
+// natives that ask about them.
+const std::vector<MeshAnimSeq>* meshAnims(Vm& vm, VmObject* a) {
+    static std::map<std::pair<const Package*, int>, std::vector<MeshAnimSeq>> cache;
+    Value* m = a ? a->find(vm, "Mesh") : nullptr;
+    VmObject* mesh = m ? m->asObject() : nullptr;
+    if (!mesh || !mesh->package)
+        return nullptr;
+    const auto key = std::make_pair(mesh->package, mesh->exportIndex);
+    auto it = cache.find(key);
+    if (it == cache.end()) {
+        Mesh read;
+        if (readMesh(*mesh->package, mesh->exportIndex, read))
+            read.anims.clear();
+        it = cache.emplace(key, std::move(read.anims)).first;
+    }
+    return &it->second;
+}
+
+} // namespace
+
+void registerEngineNatives(Vm& vm) {
+    if (vm.hasNative("Actor.Spawn"))
+        return;
+    auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
+    auto B = [](bool v) { return Value::boolValue(v); };
+
+    reg("Actor.Spawn", [](NativeCall& c) {
+        VmObject* cls = c.o(0);
+        if (!c.vm.level || !cls || !cls->asClass) {
+            c.result = Value::objectValue(nullptr);
+            return;
+        }
+        const bool hasLoc = c.given.size() > 3 && c.given[3], hasRot = c.given.size() > 4 && c.given[4];
+        // Where it's spawned: given, or the spawner's place.
+        Value here = c.self && c.self->find(c.vm, "Location") ? *c.self->find(c.vm, "Location") : Value();
+        Value turn = c.self && c.self->find(c.vm, "Rotation") ? *c.self->find(c.vm, "Rotation") : Value();
+        VmObject* owner = c.given.size() > 1 && c.given[1] ? c.o(1) : c.self;
+        c.result = Value::objectValue(c.vm.level->spawn(cls->asClass, owner, c.given.size() > 2 && c.given[2] ? c.i(2) : 0,
+                                                        hasLoc ? &c.args[3] : &here, hasRot ? &c.args[4] : &turn));
+    });
+    reg("Actor.Destroy", [=](NativeCall& c) {
+        VmObject* a = c.self;
+        Value* noDelete = a ? a->find(c.vm, "bNoDelete") : nullptr;
+        Value* isStatic = a ? a->find(c.vm, "bStatic") : nullptr;
+        if (!a || !c.vm.level || (noDelete && noDelete->asBool()) || (isStatic && isStatic->asBool())) {
+            c.result = B(false);
+            return;
+        }
+        c.vm.level->destroy(a);
+        c.result = B(true);
+    });
+    reg("Actor.SetTimer", [](NativeCall& c) {
+        if (!c.self)
+            return;
+        c.self->timerRate = std::max(0.0f, c.f(0));
+        c.self->timerCount = 0;
+        c.self->timerLoop = c.b(1);
+    });
+    reg("Actor.Sleep", [](NativeCall& c) { c.latentSeconds = std::max(0.0f, c.f(0)); });
+    // Latent functions that wait for animation or movement: done at once
+    // until those are simulated.
+    for (const char* done : {"Actor.FinishAnim", "Actor.FinishInterpolation", "Actor.C3DFinishAnim"})
+        reg(done, [](NativeCall& c) { c.latentSeconds = 0; });
+    reg("Actor.SetLocation", [=](NativeCall& c) {
+        if (Value* v = c.self ? c.self->find(c.vm, "Location") : nullptr)
+            c.vm.assign(*v, c.args[0]);
+        c.result = B(true);
+    });
+    reg("Actor.SetRotation", [=](NativeCall& c) {
+        if (Value* v = c.self ? c.self->find(c.vm, "Rotation") : nullptr)
+            c.vm.assign(*v, c.args[0]);
+        c.result = B(true);
+    });
+    reg("Actor.Move", [=](NativeCall& c) {
+        if (Value* v = c.self ? c.self->find(c.vm, "Location") : nullptr) {
+            const Vec a = Vm::vectorOf(*v), d = Vm::vectorOf(c.args[0]);
+            *v = c.vm.vectorValue(a[0] + d[0], a[1] + d[1], a[2] + d[2]);
+        }
+        c.result = B(true);
+    });
+    reg("Actor.MoveSmooth", [=](NativeCall& c) {
+        if (Value* v = c.self ? c.self->find(c.vm, "Location") : nullptr) {
+            const Vec a = Vm::vectorOf(*v), d = Vm::vectorOf(c.args[0]);
+            *v = c.vm.vectorValue(a[0] + d[0], a[1] + d[1], a[2] + d[2]);
+        }
+        c.result = B(true);
+    });
+    reg("Actor.SetCollision", [](NativeCall& c) {
+        if (!c.self)
+            return;
+        const char* names[] = {"bCollideActors", "bBlockActors", "bBlockPlayers"};
+        for (size_t k = 0; k < 3; ++k)
+            if (c.given.size() > k && c.given[k])
+                if (Value* v = c.self->find(c.vm, names[k]))
+                    v->i = c.b(k);
+    });
+    reg("Actor.SetCollisionSize", [=](NativeCall& c) {
+        if (c.self) {
+            if (Value* v = c.self->find(c.vm, "CollisionRadius"))
+                v->f = c.f(0);
+            if (Value* v = c.self->find(c.vm, "CollisionHeight"))
+                v->f = c.f(1);
+        }
+        c.result = B(true);
+    });
+    reg("Actor.SetPhysics", [](NativeCall& c) {
+        if (Value* v = c.self ? c.self->find(c.vm, "Physics") : nullptr)
+            v->i = c.i(0) & 0xff;
+    });
+    reg("Actor.SetOwner", [](NativeCall& c) {
+        if (Value* v = c.self ? c.self->find(c.vm, "Owner") : nullptr)
+            v->o = c.o(0);
+    });
+    reg("Actor.SetBase", [](NativeCall& c) {
+        if (Value* v = c.self ? c.self->find(c.vm, "Base") : nullptr)
+            v->o = c.o(0);
+    });
+    // Animation: the sequence remembered; it doesn't play yet.
+    for (const char* play : {"Actor.PlayAnim", "Actor.LoopAnim", "Actor.TweenAnim"})
+        reg(play, [](NativeCall& c) {
+            if (Value* v = c.self ? c.self->find(c.vm, "AnimSequence") : nullptr)
+                v->i = c.i(0);
+        });
+    reg("Actor.IsAnimating", [=](NativeCall& c) { c.result = B(false); });
+    reg("Actor.HasAnim", [=](NativeCall& c) {
+        const std::vector<MeshAnimSeq>* anims = meshAnims(c.vm, c.self);
+        const std::string want = lower(c.vm.nameText(c.i(0)));
+        c.result = B(anims && std::any_of(anims->begin(), anims->end(),
+                                          [&](const MeshAnimSeq& s) { return lower(s.name) == want; }));
+    });
+    reg("Actor.GetAnimGroup", [](NativeCall& c) {
+        c.result = Value::nameValue(0);
+        if (const std::vector<MeshAnimSeq>* anims = meshAnims(c.vm, c.self)) {
+            const std::string want = lower(c.vm.nameText(c.i(0)));
+            for (const MeshAnimSeq& s : *anims)
+                if (lower(s.name) == want)
+                    c.result = Value::nameValue(c.vm.name(s.group.empty() ? "None" : s.group));
+        }
+    });
+    // Sound: not played by scripts yet.
+    for (const char* quiet : {"Actor.PlaySound", "Actor.PlayOwnedSound", "Actor.DemoPlaySound", "Actor.MakeNoise",
+                              "Actor.PlayDummySound"})
+        reg(quiet, [](NativeCall&) {});
+    reg("Actor.GetMapName", [](NativeCall& c) { c.result = Value::stringValue(c.vm.level ? c.vm.level->map().name() : ""); });
+    reg("Actor.GetURLMap", [](NativeCall& c) { c.result = Value::stringValue(c.vm.level ? c.vm.level->map().name() : ""); });
+    reg("Actor.PlayerCanSeeMe", [=](NativeCall& c) { c.result = B(false); });
+    reg("Actor.Error", [](NativeCall& c) {
+        c.vm.reportError("Error() from " + (c.self && c.self->cls ? c.self->cls->name : std::string("?")) + ": " + c.s(0));
+        if (c.vm.level && c.self)
+            c.vm.level->destroy(c.self);
+    });
+
+    // Iterators: their results, put in the out parameter in turn.
+    reg("Actor.AllActors", [](NativeCall& c) {
+        const bool byTag = c.given.size() > 2 && c.given[2] && c.i(2) != 0;
+        for (Value& v : actorsOf(c.vm, c.args[0])) {
+            Value* tag = byTag ? v.o->find(c.vm, "Tag") : nullptr;
+            if (!byTag || (tag && tag->i == c.i(2)))
+                c.items.push_back(v);
+        }
+    });
+    reg("Actor.ChildActors", [](NativeCall& c) {
+        for (Value& v : actorsOf(c.vm, c.args[0]))
+            if (Value* owner = v.o->find(c.vm, "Owner"); owner && owner->o == c.self)
+                c.items.push_back(v);
+    });
+    reg("Actor.BasedActors", [](NativeCall& c) {
+        for (Value& v : actorsOf(c.vm, c.args[0]))
+            if (Value* base = v.o->find(c.vm, "Base"); base && base->o == c.self)
+                c.items.push_back(v);
+    });
+    // Within a radius (no line of sight yet, so the visible ones too).
+    for (const char* radius : {"Actor.RadiusActors", "Actor.VisibleActors", "Actor.VisibleCollidingActors"})
+        reg(radius, [](NativeCall& c) {
+            const Vec at = c.given.size() > 3 && c.given[3] ? Vm::vectorOf(c.args[3]) : location(c.vm, c.self);
+            for (Value& v : actorsOf(c.vm, c.args[0]))
+                if (distance(location(c.vm, v.o), at) <= c.f(2))
+                    c.items.push_back(v);
+        });
+    reg("Actor.TouchingActors", [](NativeCall&) {}); // no collision yet
+    reg("Actor.AllPawns", [](NativeCall& c) {
+        for (Value& v : actorsOf(c.vm, c.args[0]))
+            if (c.vm.isA(v.o, "Pawn"))
+                c.items.push_back(v);
+    });
+
+    // Pawns keep a list in the LevelInfo.
+    reg("Pawn.AddPawn", [](NativeCall& c) {
+        if (!c.vm.level || !c.self)
+            return;
+        Value* list = c.vm.level->levelInfo()->find(c.vm, "PawnList");
+        Value* next = c.self->find(c.vm, "nextPawn");
+        if (list && next) {
+            next->o = list->asObject();
+            list->o = c.self;
+        }
+    });
+    reg("Pawn.RemovePawn", [](NativeCall& c) {
+        if (!c.vm.level || !c.self)
+            return;
+        Value* link = c.vm.level->levelInfo()->find(c.vm, "PawnList");
+        for (int guard = 0; link && link->asObject() && guard < 100000; ++guard) {
+            if (link->o == c.self) {
+                Value* next = c.self->find(c.vm, "nextPawn");
+                link->o = next ? next->asObject() : nullptr;
+                return;
+            }
+            link = link->o->find(c.vm, "nextPawn");
+        }
+    });
+    reg("LevelInfo.GetLocalURL", [](NativeCall& c) {
+        c.result = Value::stringValue(c.vm.level ? c.vm.level->map().name() : "");
+    });
+    reg("LevelInfo.GetAddressURL", [](NativeCall& c) { c.result = Value::stringValue("127.0.0.1"); });
+}
+
+} // namespace reluva::unreal

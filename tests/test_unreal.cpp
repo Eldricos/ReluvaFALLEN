@@ -15,6 +15,7 @@
 #include "engines/unreal/procedural.h"
 #include "engines/unreal/script.h"
 #include "engines/unreal/script_text.h"
+#include "engines/unreal/vm.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package.h"
 #include "engines/unreal/package_set.h"
@@ -1381,6 +1382,105 @@ static void testScript() {
     CHECK(text.find("0x001A: return;") != std::string::npos);
 }
 
+static void testVm() {
+    // A class Counter: int Count, int Total (default 10); function
+    // SetCount(int N) { Count = N; }; native function Wait(float S); and
+    //   state Running { Begin: Count = 1; Wait(1); Count = 2; stop; }
+    PackageWriter w;
+    const int32_t classClass = 0;
+    (void)classClass;
+    const int32_t intProp = w.addImport("Core", "Class", 0, "IntProperty");
+    const int32_t floatProp = w.addImport("Core", "Class", 0, "FloatProperty");
+    const int32_t function = w.addImport("Core", "Class", 0, "Function");
+    const int32_t state = w.addImport("Core", "Class", 0, "State");
+    // Export references, in the order they're added below.
+    const int32_t counter = 1, count = 2, total = 3, setCount = 4, n = 5, wait = 6, s = 7, running = 8;
+    auto property = [&](int32_t next, uint32_t flags) {
+        Bytes b;
+        endProps(b, w);
+        b.index(0), b.index(next), b.i32(1), b.u32(flags), b.index(0);
+        return b.b;
+    };
+    auto structPart = [&](Bytes& b, int32_t next, int32_t children, const char* name, const Bytes& code, int32_t size) {
+        b.index(0), b.index(next), b.index(0), b.index(children), b.index(w.name(name));
+        b.i32(0), b.i32(0), b.i32(size);
+        b.b.insert(b.b.end(), code.b.begin(), code.b.end());
+    };
+    Bytes cls;
+    {
+        Bytes none;
+        structPart(cls, 0, count, "Counter", none, 0);
+        cls.u64(0), cls.u64(0), cls.u16(0xffff), cls.i32(0), cls.i32(0);
+        for (int i = 0; i < 16; ++i)
+            cls.u8(0);
+        cls.index(0), cls.index(0), cls.index(0), cls.index(w.name("System"));
+        tag(cls, w, "Total", PropertyType::Int, 4);
+        cls.i32(10);
+        endProps(cls, w);
+    }
+    CHECK(w.addExport(0, 0, "Counter", cls.b) == counter);
+    w.addExport(intProp, counter, "Count", property(total, 0));
+    w.addExport(intProp, counter, "Total", property(setCount, 0));
+    Bytes setCode; // Count = N; return;
+    setCode.u8(token::Let), setCode.u8(token::InstanceVariable), setCode.index(count), setCode.u8(token::LocalVariable),
+        setCode.index(n);
+    setCode.u8(token::Return), setCode.u8(token::Nothing);
+    Bytes fn;
+    endProps(fn, w);
+    structPart(fn, wait, n, "SetCount", setCode, 13);
+    fn.u16(0), fn.u8(0), fn.u32(funcflag::Defined);
+    w.addExport(function, counter, "SetCount", fn.b);
+    w.addExport(intProp, setCount, "N", property(0, propflag::Parm));
+    Bytes waitFn;
+    endProps(waitFn, w);
+    structPart(waitFn, running, s, "Wait", Bytes{}, 0);
+    waitFn.u16(0), waitFn.u8(0), waitFn.u32(funcflag::Native | funcflag::Latent);
+    w.addExport(function, counter, "Wait", waitFn.b);
+    w.addExport(floatProp, wait, "S", property(0, propflag::Parm));
+    Bytes stateCode; // Count = 1; Wait(1.0); Count = 2; stop; labels
+    stateCode.u8(token::Let), stateCode.u8(token::InstanceVariable), stateCode.index(count), stateCode.u8(token::IntOne);
+    stateCode.u8(token::FinalFunction), stateCode.index(wait), stateCode.u8(token::FloatConst), stateCode.f32(1),
+        stateCode.u8(token::EndFunctionParms);
+    stateCode.u8(token::Let), stateCode.u8(token::InstanceVariable), stateCode.index(count),
+        stateCode.u8(token::IntConstByte), stateCode.u8(2);
+    stateCode.u8(token::Stop);
+    stateCode.u8(token::LabelTable), stateCode.index(w.name("Begin")), stateCode.u32(0), stateCode.index(w.name("None")),
+        stateCode.u32(0);
+    Bytes st;
+    endProps(st, w);
+    structPart(st, 0, 0, "Running", stateCode, 7 + 11 + 8 + 1 + 17);
+    st.u64(0), st.u64(0), st.u16(27), st.i32(0);
+    w.addExport(state, counter, "Running", st.b);
+
+    PackageSet set;
+    set.addMemory("Counting", ".u", w.build());
+    const Package* p = set.get("Counting");
+    CHECK(p != nullptr);
+    if (!p)
+        return;
+    Vm vm(set);
+    VmClass* c = vm.classAt(*p, counter - 1);
+    CHECK(c && c->slots == 2 && c->functions.size() == 2 && c->states.size() == 1);
+    if (!c)
+        return;
+    VmObject* o = vm.create(c);
+    CHECK(o->find(vm, "Total") && o->find(vm, "Total")->asInt() == 10 && o->find(vm, "Count")->asInt() == 0);
+    vm.callEvent(o, "SetCount", {Value::intValue(5)});
+    CHECK(o->find(vm, "Count")->asInt() == 5);
+    vm.registerNative("Counter.Wait", [](NativeCall& call) { call.latentSeconds = call.f(0); });
+    vm.gotoState(o, vm.name("Running"));
+    CHECK(o->state && o->state->name == "Running" && o->codeAt == 0);
+    vm.tick(o, 0.1f);
+    CHECK(o->find(vm, "Count")->asInt() == 1 && o->latent);
+    vm.tick(o, 0.5f);
+    CHECK(o->find(vm, "Count")->asInt() == 1);
+    vm.tick(o, 0.6f);
+    CHECK(o->find(vm, "Count")->asInt() == 2 && o->codeAt == -1);
+    CHECK(vm.stats.errors.empty() && vm.stats.missingNatives.empty());
+    (void)total;
+    (void)setCount;
+}
+
 int main() {
     testCompactIndex();
     testPackageTables();
@@ -1400,6 +1500,7 @@ int main() {
     testAnimationSet();
     testClassDefaultsAndMeshActors();
     testScript();
+    testVm();
     testMapExtension();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

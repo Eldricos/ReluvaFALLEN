@@ -60,7 +60,7 @@ Linux (with each distro's packages) and Windows with Visual Studio 2022.
 - `reluva --hash <files...>` prints detection signatures for an engine's table.
 - `reluva-tool` has developer tools for studying game data: `hexdump`,
   `cat-probe`, `cat-list` and `cat-extract` (New Worlds archives); `ue-check`,
-  `ue-info`, `ue-exports`, `ue-props`, `ue-script` (compiled UnrealScript as text) and `ue-extract`
+  `ue-info`, `ue-exports`, `ue-props`, `ue-script` (compiled UnrealScript as text), `ue-run` (run a level's scripts) and `ue-extract`
   (Unreal packages).
 - In game: **Ctrl+F5** returns to the launcher, **Alt+Enter** toggles fullscreen.
 - New Worlds currently opens as a data viewer. **Tab** switches between missions, models,
@@ -111,7 +111,8 @@ Linux (with each distro's packages) and Windows with Visual Studio 2022.
   picks one, drag to look, **W/A/S/D** move, **Space/C** (or **E/Q**) go up and down,
   **Shift** goes faster, **R** returns to the PlayerStart, **T** turns textures off,
   **L** the lightmaps (pulsing and flickering lights animate, as do fire, water, ice and FLC textures), **[**/**]** dim or brighten them, **-**/**=** change the display's
-  gamma, **O** moves the doors and lifts to their next position, **K** turns the sky off,
+  gamma, **O** moves the doors and lifts to their next position, **P** turns the level's scripts off or on
+  (on, it's drawn as they leave it when play begins: lights off, icons hidden), **K** turns the sky off,
   **N** plays the placed meshes' animations, **M** changes how imported meshes are turned
   (the opposite of their float copies, as the game does; as stored; or as the float copies), **Y** turns
   them a further quarter turn about the vertical, **G** jumps to the next placed mesh (**H** the next

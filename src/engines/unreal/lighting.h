@@ -12,6 +12,7 @@
 // docs/formats/unreal/lighting.md.
 
 #include "common/image.h"
+#include "engines/unreal/actors.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package_set.h"
 
@@ -68,7 +69,10 @@ struct LevelLights {
     std::vector<LightSource> animated; // those of them whose brightness changes
     int unreadable = 0;               // light actors whose properties didn't read
 };
-LevelLights gatherLights(const PackageSet& packages, const Package& package, const Model& model);
+// `scripted`: what the level's scripts changed when it started (lights
+// they turned off or destroyed light nothing; actors.h).
+LevelLights gatherLights(const PackageSet& packages, const Package& package, const Model& model,
+                         const ScriptedActors* scripted = nullptr);
 
 // Where each surface's lightmap is in the pages, and how a point on the
 // surface maps into it.

@@ -201,8 +201,29 @@ std::optional<Vec3f> findSkyZone(const PackageSet& packages, const Package& pack
     return std::nullopt;
 }
 
+// The draw type an actor ends up with: its own, unless its scripts
+// changed it; -2 if they removed it.
+int scriptedDrawType(const ScriptedActors* scripted, int index, int drawType) {
+    if (!scripted)
+        return drawType;
+    auto it = scripted->find(index);
+    if (it == scripted->end())
+        return drawType;
+    if (it->second.removed)
+        return -2;
+    return it->second.drawType >= 0 ? it->second.drawType : drawType;
+}
+
+// Whether an actor is hidden: as saved, unless its scripts changed it.
+bool scriptedHidden(const ScriptedActors* scripted, int index, bool hidden) {
+    if (!scripted)
+        return hidden;
+    auto it = scripted->find(index);
+    return it == scripted->end() || it->second.hidden < 0 ? hidden : it->second.hidden == 1;
+}
+
 std::vector<MeshActor> findMeshActors(const PackageSet& packages, const Package& package, ClassDefaults& defaults,
-                                      MeshActorStats* stats) {
+                                      MeshActorStats* stats, const ScriptedActors* scripted) {
     constexpr uint8_t kDrawMesh = 2; // EDrawType's DT_Mesh
     MeshActorStats st;
     std::vector<MeshActor> out;
@@ -217,12 +238,15 @@ std::vector<MeshActor> findMeshActors(const PackageSet& packages, const Package&
             ++st.unreadable;
             continue;
         }
-        if (props.byte("DrawType", 1) != kDrawMesh)
+        const int drawType = scriptedDrawType(scripted, int(i), props.byte("DrawType", 1));
+        if (drawType == -2 && props.byte("DrawType", 1) == kDrawMesh)
+            ++st.hidden;
+        if (drawType != kDrawMesh)
             continue;
         const ObjectRef mesh = props.object(packages, "Mesh");
         if (!mesh || !isMeshClass(mesh.package->className(mesh.exportIndex + 1)))
             continue;
-        if (props.boolean("bHidden")) {
+        if (scriptedHidden(scripted, int(i), props.boolean("bHidden"))) {
             ++st.hidden;
             continue;
         }
@@ -249,7 +273,7 @@ std::vector<MeshActor> findMeshActors(const PackageSet& packages, const Package&
 }
 
 std::vector<SpriteActor> findSpriteActors(const PackageSet& packages, const Package& package, ClassDefaults& defaults,
-                                          SpriteActorStats* stats) {
+                                          SpriteActorStats* stats, const ScriptedActors* scripted) {
     // EDrawType's sprites.
     constexpr uint8_t kDrawSprite = 1, kDrawVerticalSprite = 5, kDrawSpriteAnimOnce = 7;
     SpriteActorStats st;
@@ -261,7 +285,11 @@ std::vector<SpriteActor> findSpriteActors(const PackageSet& packages, const Pack
         ActorProperties props;
         if (defaults.actorProperties(package, int(i), props))
             continue;
-        const uint8_t drawType = props.byte("DrawType", kDrawSprite);
+        const int drawType = scriptedDrawType(scripted, int(i), props.byte("DrawType", kDrawSprite));
+        if (drawType == -2) {
+            ++st.hidden;
+            continue;
+        }
         if (drawType != kDrawSprite && drawType != kDrawVerticalSprite && drawType != kDrawSpriteAnimOnce)
             continue;
         const ObjectRef texture = props.object(packages, "Texture");
@@ -269,7 +297,7 @@ std::vector<SpriteActor> findSpriteActors(const PackageSet& packages, const Pack
             continue;
         SpriteActor a;
         a.drawScale = props.number("DrawScale", 1);
-        if (props.boolean("bHidden") || a.drawScale <= 0) {
+        if (scriptedHidden(scripted, int(i), props.boolean("bHidden")) || a.drawScale <= 0) {
             ++st.hidden;
             continue;
         }

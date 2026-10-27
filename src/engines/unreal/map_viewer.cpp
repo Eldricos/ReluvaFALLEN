@@ -12,6 +12,7 @@
 #include "engines/unreal/class_defaults.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/procedural.h"
+#include "engines/unreal/vm_level.h"
 #include "engines/unreal/properties.h"
 #include "engines/unreal/texture.h"
 
@@ -181,9 +182,23 @@ void MapViewer::load(int index) {
         return;
     }
 
-    // The lightmaps, lit from the level's lights, as textures.
+    // The level's scripts, started (and a second of play): what they
+    // change by the time play begins (lights turned off, editor icons
+    // hidden, actors destroyed). P turns this off.
     const auto tModel = Clock::now();
-    const LevelLights lights = gatherLights(ctx_.packages, *pkg, model);
+    LevelStart start;
+    std::string startError;
+    bool started = false;
+    if (runScripts_) {
+        if (Error err = runLevelStart(ctx_.packages, *pkg, defaultGameType(ctx_.packages), 1.0f, start))
+            startError = err.message;
+        else
+            started = true;
+    }
+    const ScriptedActors* scripted = started ? &start.changed : nullptr;
+
+    // The lightmaps, lit from the level's lights, as textures.
+    const LevelLights lights = gatherLights(ctx_.packages, *pkg, model, scripted);
     const auto tLights = Clock::now();
     LightmapAtlas atlas = buildLightmaps(model, lights);
     const auto tLightmaps = Clock::now();
@@ -393,7 +408,7 @@ void MapViewer::load(int index) {
     std::map<std::pair<const Package*, int>, int> meshIndex; // -1: unreadable
     int badMeshes = 0, borrowed = 0;
     std::string firstBadMesh;
-    const std::vector<MeshActor> meshActors = findMeshActors(ctx_.packages, *pkg, defaults, &meshStats);
+    const std::vector<MeshActor> meshActors = findMeshActors(ctx_.packages, *pkg, defaults, &meshStats, scripted);
     // The animations each mesh's actors play, and the idles that may stand
     // in for a one-frame pose (below).
     std::map<std::pair<const Package*, int>, std::set<std::string>> wanted;
@@ -500,7 +515,7 @@ void MapViewer::load(int index) {
 
     // Actors drawn as sprites, on one square turned to face the camera.
     SpriteActorStats spriteStats;
-    for (const SpriteActor& a : findSpriteActors(ctx_.packages, *pkg, defaults, &spriteStats)) {
+    for (const SpriteActor& a : findSpriteActors(ctx_.packages, *pkg, defaults, &spriteStats, scripted)) {
         const auto [texture, size] = textureOf(a.texture);
         if (!texture)
             continue;
@@ -566,7 +581,7 @@ void MapViewer::load(int index) {
     }
     toStart();
 
-    char line[200];
+    char line[320];
     std::snprintf(line, sizeof line, "version %d/%d: %zu nodes, %zu surfaces, %zu polygons, %zu triangles in %zu batches",
                   pkg->version(), pkg->licensee(), model.nodes.size(), model.surfs.size(), polys.size(),
                   indices.size() / 3, batches_.size());
@@ -613,6 +628,17 @@ void MapViewer::load(int index) {
     std::snprintf(line, sizeof line, "%zu sprites (%d editor icons and %d hidden left out); %zu animated textures",
                   sprites_.size(), spriteStats.editorOnly, spriteStats.hidden, animatedTextures_.size());
     info_.push_back(line);
+    if (started) {
+        std::snprintf(line, sizeof line,
+                      "scripts started in %.0f ms (P turns them off): %d lights changed, %d actors hidden, %d shown, "
+                      "%d drawn differently, %d destroyed; %zu kinds of script error, %zu natives not written, None "
+                      "accessed %d times",
+                      start.milliseconds, start.lights, start.hidden, start.shown, start.drawTypes, start.removed, start.errors,
+                      start.missingNatives, start.accessedNone);
+        info_.push_back(line);
+    } else {
+        info_.push_back(runScripts_ ? "scripts didn't start: " + startError : "scripts off (P turns them on)");
+    }
     info_.push_back("Not drawn yet: lights' effects other than their brightness (flicker, pulse...), movers' own lighting");
 }
 
@@ -674,6 +700,15 @@ void MapViewer::handleEvent(const Event& ev) {
                 ctx_.meshYawQuarters = (ctx_.meshYawQuarters + 1) % 4;
             // Kept where it is: only the meshes need uploading again, but
             // the level loads quickly enough to just load it again.
+            const auto pos = pos_;
+            const float yaw = yaw_, pitch = pitch_;
+            load(index_);
+            pos_ = pos;
+            yaw_ = yaw;
+            pitch_ = pitch;
+        }
+        else if (ev.key == 'p') {
+            runScripts_ = !runScripts_;
             const auto pos = pos_;
             const float yaw = yaw_, pitch = pitch_;
             load(index_);

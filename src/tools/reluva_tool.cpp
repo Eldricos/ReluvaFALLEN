@@ -102,6 +102,8 @@
 //   reluva-tool ue-script <game folder> <class | Class.Function | -all <dir>>  compiled UnrealScript as
 //                                                  text: a class, struct, function or state, or every class
 //                                                  written to <dir>/<package>/<class>.uc
+//   reluva-tool ue-run <game folder> <map | -all> [seconds]  run a level's scripts: start-up events,
+//                                                  then ticks; report errors and natives missing
 //   reluva-tool ue-extract <game folder> <package> <export>  write a texture as .tga, a sound or music
 //                                                  as the file it holds
 
@@ -145,6 +147,8 @@
 #include "engines/unreal/procedural.h"
 #include "engines/unreal/script.h"
 #include "engines/unreal/script_text.h"
+#include "engines/unreal/vm.h"
+#include "engines/unreal/vm_level.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package_set.h"
 #include "engines/unreal/properties.h"
@@ -4510,6 +4514,120 @@ int cmdUeProps(int argc, char** argv) {
     return 0;
 }
 
+// Runs a level's scripts (vm_level.h): its actors made, the game type
+// spawned, the start-up events sent, then `seconds` of ticks at 30 a
+// second. Reports what the scripts did and what's missing: errors,
+// natives not written yet, None accessed. -all: every map, totalled.
+int cmdUeRun(int argc, char** argv) {
+    if (argc < 4 || argc > 5) {
+        std::fprintf(stderr, "usage: reluva-tool ue-run <game folder> <map | -all> [seconds]\n");
+        return 2;
+    }
+    using namespace reluva::unreal;
+    PackageSet set;
+    if (reluva::Error err = set.open(argv[2], "DS9.ini")) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    const float seconds = argc == 5 ? float(std::atof(argv[4])) : 5.0f;
+    const bool all = std::strcmp(argv[3], "-all") == 0;
+    std::vector<std::string> maps = all ? set.mapNames() : std::vector<std::string>{argv[3]};
+    std::map<std::string, int> missing, errors;
+    int ran = 0, failed = 0;
+    uint64_t calls = 0, statements = 0;
+    int accessedNone = 0;
+    for (const std::string& name : maps) {
+        const Package* map = set.get(name);
+        if (!map) {
+            std::printf("%s: %s\n", name.c_str(), set.error(name).c_str());
+            ++failed;
+            continue;
+        }
+        Vm vm(set);
+        std::vector<std::string> logs;
+        vm.logger = [&](const std::string& line) { logs.push_back(line); };
+        ScriptLevel level(vm, *map);
+        const auto t0 = std::chrono::steady_clock::now();
+        if (reluva::Error err = level.load()) {
+            std::printf("%s: %s\n", name.c_str(), err.message.c_str());
+            ++failed;
+            continue;
+        }
+        const size_t before = level.actors().size();
+        level.beginPlay("DS9.DS9_GameInfo");
+        const auto t1 = std::chrono::steady_clock::now();
+        for (int i = 0; i < int(seconds * 30); ++i)
+            level.tick(1.0f / 30);
+        const auto t2 = std::chrono::steady_clock::now();
+        ++ran;
+        // What changed that shows: actors hidden or gone, lights out.
+        int hidden = 0, dark = 0;
+        for (VmObject* a : level.actors()) {
+            if (Value* v = a->find(vm, "DrawType"); v && v->i == 0)
+                ++hidden;
+            if (vm.isA(a, "Light"))
+                if (Value* v = a->find(vm, "LightBrightness"); v && v->i == 0)
+                    ++dark;
+        }
+        std::printf("%-20s %5zu actors (%zu after %.0f s), game %s; %d drawn as nothing, %d lights at brightness 0; "
+                    "start %.0f ms, %.0f s run %.0f ms; %llu calls, %d None accessed, %zu errors, %zu natives missing\n",
+                    name.c_str(), before, level.actors().size(), double(seconds),
+                    level.game() ? level.game()->cls->name.c_str() : "none", hidden, dark,
+                    std::chrono::duration<double, std::milli>(t1 - t0).count(), double(seconds),
+                    std::chrono::duration<double, std::milli>(t2 - t1).count(), (unsigned long long)vm.stats.calls,
+                    vm.stats.accessedNone, vm.stats.errors.size(), vm.stats.missingNatives.size());
+        calls += vm.stats.calls;
+        statements += vm.stats.statements;
+        accessedNone += vm.stats.accessedNone;
+        for (const auto& [k, v] : vm.stats.missingNatives)
+            missing[k] += v;
+        for (const auto& [k, v] : vm.stats.errors)
+            errors[k] += v;
+        if (!all) {
+            // The scripts' log, repeated lines counted.
+            std::vector<std::pair<std::string, int>> lines;
+            for (const std::string& l : logs) {
+                auto it = std::find_if(lines.begin(), lines.end(), [&](const auto& e) { return e.first == l; });
+                if (it == lines.end())
+                    lines.push_back({l, 1});
+                else
+                    ++it->second;
+            }
+            for (size_t k = 0; k < lines.size() && k < 40; ++k)
+                std::printf("  log: %s%s\n", lines[k].first.c_str(),
+                            lines[k].second > 1 ? (" (x" + std::to_string(lines[k].second) + ")").c_str() : "");
+            if (lines.size() > 40)
+                std::printf("  log: ... %zu more lines\n", lines.size() - 40);
+        }
+    }
+    auto top = [](const std::map<std::string, int>& m, size_t n) {
+        std::vector<std::pair<int, std::string>> v;
+        for (const auto& [k, c] : m)
+            v.push_back({c, k});
+        std::sort(v.rbegin(), v.rend());
+        if (v.size() > n)
+            v.resize(n);
+        return v;
+    };
+    std::printf("\n%d maps ran, %d didn't load; %llu calls, %llu statements, None accessed %d times\n", ran, failed,
+                (unsigned long long)calls, (unsigned long long)statements, accessedNone);
+    std::printf("natives not written yet (%zu, by calls):\n", missing.size());
+    for (const auto& [n, k] : top(missing, all ? 60 : 40))
+        std::printf("  %7d %s\n", n, k.c_str());
+    // Script errors in full; None accessed (mostly scripts looking for a
+    // player, as none has joined) the most common.
+    std::map<std::string, int> none, other;
+    for (const auto& [k, n] : errors)
+        (k.rfind("Accessed None", 0) == 0 ? none : other)[k] = n;
+    std::printf("errors (%zu kinds):\n", other.size());
+    for (const auto& [n, k] : top(other, 1000))
+        std::printf("  %7d %s\n", n, k.c_str());
+    std::printf("None accessed (%zu places, the most):\n", none.size());
+    for (const auto& [n, k] : top(none, all ? 15 : 10))
+        std::printf("  %7d %s\n", n, k.c_str());
+    return failed ? 1 : 0;
+}
+
 // Compiled UnrealScript as text (script_text.h): one class, struct,
 // function or state, or (-all) every class of every package written to
 // <dir>/<package>/<class>.uc.
@@ -5186,6 +5304,8 @@ int main(int argc, char** argv) {
         return cmdUeProbe(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-script") == 0)
         return cmdUeScript(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-run") == 0)
+        return cmdUeRun(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-extract") == 0)
         return cmdUeExtract(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-check") == 0)
@@ -5245,6 +5365,7 @@ int main(int argc, char** argv) {
                  "  reluva-tool ue-extract <game folder> <package name> <export>\n"
                  "  reluva-tool ue-probe <package | game folder> <export> [-all | -at <offset> <bytes>]\n"
                  "  reluva-tool ue-script <game folder> <class | Class.Function | -all <dir>>\n"
+                 "  reluva-tool ue-run <game folder> <map | -all> [seconds]\n"
 #endif
                  "");
     return 2;

@@ -308,6 +308,7 @@ private:
     // screenshots: see lighting.md.
     float displayGamma_ = 1.3f;
     bool hasLightmaps_ = false;
+    bool runScripts_ = true; // the level's scripts started, for how it looks when play begins (P)
     // Lights whose brightness changes, and the lightmaps they reach,
     // redrawn as they do.
     void updateLightmaps(float dt);

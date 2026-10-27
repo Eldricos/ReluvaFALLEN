@@ -14,6 +14,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -67,6 +68,17 @@ std::vector<Mover> findMovers(const PackageSet& packages, const Package& package
 // location. nullopt when the level has none.
 std::optional<Vec3f> findSkyZone(const PackageSet& packages, const Package& package);
 
+// What a level's scripts changed when it started (runLevelStart() in
+// vm_level.h), for the actors whose look it changed: by the actor's export
+// index in the level's package. -1: unchanged.
+struct ScriptedActor {
+    bool removed = false; // destroyed
+    int hidden = -1;      // bHidden now: 1 hidden, 0 shown
+    int drawType = -1;
+    int lightType = -1, lightBrightness = -1;
+};
+using ScriptedActors = std::map<int, ScriptedActor>;
+
 // An actor drawn as a mesh (DrawType DT_Mesh), with what it needs from
 // its properties and its classes' defaults (class_defaults.h).
 struct MeshActor {
@@ -89,8 +101,10 @@ struct MeshActorStats {
 };
 
 class ClassDefaults;
+// `scripted`: what the level's scripts changed (removed, hidden or turned
+// to another draw type are left out).
 std::vector<MeshActor> findMeshActors(const PackageSet& packages, const Package& package, ClassDefaults& defaults,
-                                      MeshActorStats* stats = nullptr);
+                                      MeshActorStats* stats = nullptr, const ScriptedActors* scripted = nullptr);
 
 // Engine.Actor's ERenderStyle: how an actor's sprite or mesh blends.
 constexpr uint8_t kStyleNormal = 1, kStyleMasked = 2, kStyleTranslucent = 3, kStyleModulated = 4;
@@ -119,7 +133,7 @@ struct SpriteActorStats {
 // left out: the game hides them, by bHidden or by their scripts when it
 // starts (which don't run yet), and the icon gives them away (actors.md).
 std::vector<SpriteActor> findSpriteActors(const PackageSet& packages, const Package& package, ClassDefaults& defaults,
-                                          SpriteActorStats* stats = nullptr);
+                                          SpriteActorStats* stats = nullptr, const ScriptedActors* scripted = nullptr);
 
 // A rotator's axes in Unreal's space: forward, right, up.
 std::array<Vec3f, 3> rotationAxes(const Rotator& r);
