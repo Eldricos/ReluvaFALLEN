@@ -19,7 +19,8 @@
 //           Enter plays the level: its scripts run live with the player
 //           in it, seen from the game's own camera. W/S move, A/D step
 //           aside, Left/Right turn, Up/Down look, drag to turn and look,
-//           Space jumps, Ctrl or F fires; Enter stops.
+//           Space jumps, Ctrl or F fires; V lets the camera loose (to
+//           fly round the level as it plays) and back; Enter stops.
 // Textures: Left/Right step through a package's textures, PageUp/PageDown
 //           pick the package (.utx, then maps' own, then .u).
 // Meshes:   every Mesh and LodMesh. Left/Right step, PageUp/PageDown pick
@@ -236,6 +237,9 @@ public:
     // Shows the map of that name (once active); false if there's none.
     bool selectMap(const std::string& name);
     bool playing() const { return play_ != nullptr; }
+    // Playing: the camera let loose, in front of the live actor of that
+    // name looking at it; false if there's none.
+    bool watchActor(const std::string& name);
 
 private:
     void load(int index);
@@ -340,6 +344,7 @@ private:
     float playClock_ = 0, fov_ = 90;
     LevelPlay::View view_;
     float mouseDx_ = 0, mouseDy_ = 0;
+    bool freeCam_ = false; // playing with the camera flown (V), the player standing
     Surface overlay_;
     std::string error_;
     std::vector<std::string> info_;

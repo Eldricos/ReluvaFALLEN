@@ -58,29 +58,55 @@ const char* meshTurnName(MeshTurn turn) {
     }
 }
 
+namespace {
+
+// A vector already by Scale (Origin taken off, for a point) on through the
+// mesh's turn (imported meshes: as `turn` says, then the quarter turns of
+// yaw) and RotOrigin.
+Vec3f turnScaled(const Mesh& mesh, Vec3f s, MeshTurn turn, int yawQuarters) {
+    if (mesh.importAxes && turn != MeshTurn::None) {
+        // The opposite turn is the transpose (the turn's rows as columns).
+        const auto& m = *mesh.importAxes;
+        const bool t = turn == MeshTurn::Reverse;
+        auto at = [&](size_t row, size_t col) { return t ? m[col][row] : m[row][col]; };
+        s = {at(0, 0) * s[0] + at(0, 1) * s[1] + at(0, 2) * s[2], at(1, 0) * s[0] + at(1, 1) * s[1] + at(1, 2) * s[2],
+             at(2, 0) * s[0] + at(2, 1) * s[1] + at(2, 2) * s[2]};
+        // A quarter turn of yaw takes X to Y: (x, y) to (-y, x).
+        for (int q = 0; q < (yawQuarters % 4 + 4) % 4; ++q)
+            s = {-s[1], s[0], s[2]};
+    }
+    const std::array<Vec3f, 3> axes = rotationAxes(mesh.rotOrigin);
+    Vec3f p{};
+    for (size_t k = 0; k < 3; ++k)
+        p[k] = axes[0][k] * s[0] + axes[1][k] * s[1] + axes[2][k] * s[2];
+    return p;
+}
+
+} // namespace
+
+Vec3f placeMeshVertex(const Mesh& mesh, const Vec3f& v, MeshTurn turn, int yawQuarters) {
+    return turnScaled(mesh,
+                      {(v[0] - mesh.origin[0]) * mesh.scale[0], (v[1] - mesh.origin[1]) * mesh.scale[1],
+                       (v[2] - mesh.origin[2]) * mesh.scale[2]},
+                      turn, yawQuarters);
+}
+
+Vec3f placeMeshFloatVector(const Mesh& mesh, const Vec3f& v, MeshTurn turn, int yawQuarters) {
+    // The float copy is the scaled vertices turned by the import turn; back
+    // from it by the turn's transpose.
+    Vec3f s = v;
+    if (mesh.importAxes) {
+        const auto& m = *mesh.importAxes;
+        s = {m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2], m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2],
+             m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2]};
+    }
+    return turnScaled(mesh, s, turn, yawQuarters);
+}
+
 Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn, int yawQuarters) {
     out = GpuMesh{};
     // The mesh's own placement: less Origin, scaled by Scale, turned by RotOrigin.
-    const std::array<Vec3f, 3> axes = rotationAxes(mesh.rotOrigin);
-    auto place = [&](const Vec3f& v) {
-        Vec3f s{(v[0] - mesh.origin[0]) * mesh.scale[0], (v[1] - mesh.origin[1]) * mesh.scale[1],
-                (v[2] - mesh.origin[2]) * mesh.scale[2]};
-        if (mesh.importAxes && turn != MeshTurn::None) {
-            // The opposite turn is the transpose (the turn's rows as columns).
-            const auto& m = *mesh.importAxes;
-            const bool t = turn == MeshTurn::Reverse;
-            auto at = [&](size_t row, size_t col) { return t ? m[col][row] : m[row][col]; };
-            s = {at(0, 0) * s[0] + at(0, 1) * s[1] + at(0, 2) * s[2], at(1, 0) * s[0] + at(1, 1) * s[1] + at(1, 2) * s[2],
-                 at(2, 0) * s[0] + at(2, 1) * s[1] + at(2, 2) * s[2]};
-            // A quarter turn of yaw takes X to Y: (x, y) to (-y, x).
-            for (int q = 0; q < (yawQuarters % 4 + 4) % 4; ++q)
-                s = {-s[1], s[0], s[2]};
-        }
-        Vec3f p{};
-        for (size_t k = 0; k < 3; ++k)
-            p[k] = axes[0][k] * s[0] + axes[1][k] * s[1] + axes[2][k] * s[2];
-        return p;
-    };
+    auto place = [&](const Vec3f& v) { return placeMeshVertex(mesh, v, turn, yawQuarters); };
 
     // Each (vertex, texture coordinates) pair once; triangles by texture and flags.
     std::map<std::tuple<int32_t, float, float>, uint32_t> cornerOf;

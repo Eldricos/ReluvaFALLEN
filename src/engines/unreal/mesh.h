@@ -41,6 +41,19 @@ struct MeshTri {
     uint32_t polyFlags = 0;
 };
 
+// The Fallen's attachment points (kept in its imported-model block): named
+// places on a mesh, moving with it, where what's held or worn is put
+// (C3DAttach) and where effects start (C3DGetAttachPtCoords: GunTip,
+// FirePoint, KickPoint...). See mesh.md.
+struct MeshAttachPoint {
+    std::string name;
+    int type = 1;          // 1: on a triangle, following it as the mesh moves; 2: on the mesh's own origin
+    int32_t triangle = -1; // which (type 1)
+    std::array<Vec3f, 3> axes{Vec3f{1, 0, 0}, Vec3f{0, 1, 0}, Vec3f{0, 0, 1}}; // its turn (rows: X, Y, Z)
+    Vec3f offset{};        // from the triangle or the origin, in the float copy's space
+    int32_t kind = 0;
+};
+
 struct Mesh {
     bool lod = false;           // a LodMesh
     int32_t frameVerts = 0;     // vertices per frame
@@ -78,6 +91,12 @@ struct Mesh {
     int framesFromClips = 0;
     int droppedAnims = 0; // animations left out, their frames past the mesh's
     std::vector<MeshAnimSeq> otherAnims; // those animations
+    std::vector<MeshAttachPoint> attachPoints;
+    // Places worked out in advance (C3DGetAttachPtCoordsPrecomputed: the
+    // gun's tip in a firing pose, FireGunTipLoc...), from the mesh's origin
+    // as a type 2 point.
+    std::vector<MeshAttachPoint> precomputedPoints;
+    std::vector<std::string> animationSetNames; // the shared sets its animations come from ("shared.Male")
 
     const MeshAnimSeq* findAnim(std::string_view name) const;
 };
@@ -149,6 +168,12 @@ public:
     // bones of each layer's part blended towards where its animation has
     // them. False if an animation isn't the mesh's.
     bool pose(std::string_view base, float fraction, const std::vector<Layer>& layers, std::vector<Vec3f>& out) const;
+    // A bone's place in the same pose: its origin and axes (rows X, Y, Z),
+    // in packed units as the vertices. False if there's no such bone or an
+    // animation isn't the mesh's.
+    bool bone(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
+              Vec3f& origin, std::array<Vec3f, 3>& axes) const;
+    bool hasBone(std::string_view name) const;
 
     struct Impl;
     std::unique_ptr<Impl> impl;

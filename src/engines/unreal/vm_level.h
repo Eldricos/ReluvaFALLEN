@@ -12,6 +12,7 @@
 
 #include "engines/unreal/actors.h"
 #include "engines/unreal/collision.h"
+#include "engines/unreal/mesh.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/vm.h"
 
@@ -156,6 +157,24 @@ public:
     void setSkin(VmObject* actor, NameId tag, NameId sequence, float frame, float weight, float tween);
     void clearSkin(VmObject* actor, NameId tag);
     void copySkins(VmObject* to, VmObject* from);
+
+    // Parts of an actor's mesh where they are now (vm_attach.cpp), in its
+    // animation at this tick: one of its bones (C3DGetJointWorldPos), one
+    // of its attachment points (C3DGetAttachPtCoords) or places worked out
+    // in advance (C3DGetAttachPtCoordsPrecomputed); in the world, or (not
+    // `world`) from the actor's own location, unturned. False if its mesh
+    // has no such part.
+    using Vec = std::array<float, 3>;
+    using Rot = std::array<int32_t, 3>;
+    bool boneAt(VmObject* actor, NameId bone, bool world, Vec& location, Rot& rotation);
+    bool attachPointAt(VmObject* actor, NameId point, bool precomputed, bool world, Vec& location, Rot& rotation);
+    bool hasBone(VmObject* actor, NameId bone);
+    int attachPointCount(VmObject* actor);
+    // C3DAttach: `child` kept, from each tick on, with its point `childPoint`
+    // on `parent`'s `parentPoint` (a weapon's RightHand in the player's
+    // hand); C3DDetach lets it go.
+    void attach(VmObject* child, VmObject* parent, NameId parentPoint, NameId childPoint);
+    void detach(VmObject* child, VmObject* parent);
     // Movement so far, for diagnostics.
     struct MovementStats {
         int moves = 0, blockedByWorld = 0, blockedByActors = 0, steps = 0, landings = 0, touches = 0,
@@ -227,6 +246,21 @@ private:
     std::map<VmObject*, std::map<NameId, AnimLayer>> layers_;
     std::map<VmObject*, std::map<NameId, SkinChannel>> skins_;
     std::map<VmObject*, std::pair<NameId, int>> layerWaits_; // in C3DFinishAnim: the group, the state serial
+    struct ActorMesh;
+    ActorMesh* actorMesh(VmObject* actor);
+    const std::vector<Vec>* posedVertices(VmObject* actor, ActorMesh& mesh); // packed, as this tick has them
+    bool attachFrame(VmObject* actor, ActorMesh& mesh, const MeshAttachPoint& point, Vec& at, std::array<Vec, 3>& axes);
+    void toWorld(VmObject* actor, Vec& at, std::array<Vec, 3>* axes);
+    void placeAttached();
+    std::map<const VmObject*, std::shared_ptr<ActorMesh>> actorMeshes_; // by mesh object
+    std::shared_ptr<std::vector<AnimationSet>> animationSets_;
+    std::map<VmObject*, std::pair<int, std::vector<Vec>>> posed_; // each actor's vertices, and which tick's
+    struct Attachment {
+        VmObject* parent = nullptr;
+        NameId parentPoint = 0, childPoint = 0;
+    };
+    std::map<VmObject*, Attachment> attachments_;
+    int ticks_ = 0;
     int skinChannels_ = 0;
     std::vector<VmObject*> movers_; // the level's, which traces of the world meet
     int editorCameras_ = 0;
@@ -267,5 +301,7 @@ void registerMovementNatives(Vm& vm);
 void registerSplineNatives(Vm& vm);
 // The animation natives (vm_anim.cpp).
 void registerAnimationNatives(Vm& vm);
+// Bones, attachment points and attaching (vm_attach.cpp).
+void registerAttachNatives(Vm& vm);
 
 } // namespace reluva::unreal

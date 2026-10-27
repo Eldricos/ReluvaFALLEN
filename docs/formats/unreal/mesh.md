@@ -206,3 +206,44 @@ characters play 814 borrowed animations and 85 of their own. Rendered in
 checking: Kira at a low console (SitOpConLo), Worf in WoundedIdle, Dax
 running (runf), an ensign sneaking (SneakF). The Meshes page steps
 through a character's shared animations too, borrowing each when picked.
+
+**Attachment points.** After the block's groups (`FullBody`,
+`LowerTorso`, `UpperTorso`: `(g, g, 10)` and names, 16-bit lengths) come
+two empty `(0, 0, 10)` arrays, then `(n, n, 5)` attachment points. Each
+point is:
+- a name: `RightHand`, `Face`, `GunTip`, `FirePoint`, `KickPoint`...;
+- an i32 type, 1 or 2;
+- an i32 triangle;
+- 12 floats: the point's turn, rows X Y Z, then its offset;
+- an i32 kind, 4 or 7.
+
+What the type means:
+- **Type 1** is on a triangle and moves with it. On Kira, 5 of 8
+  numbers are past her 388 vertices but within her 772 triangles. The
+  prison rat's `BitePoint` (no turn, no offset) is a triangle at the end
+  of its body on its middle line. The phaser rifle's `FirePoint` (offset
+  half a unit) is a triangle at the very end of its barrel.
+- **Type 2** is from the mesh's own origin, in the float copy's space.
+  The breather's `Face` is at its origin; the rifle's hand grips are a
+  few units out.
+
+Then come `(s, s, 5)`, the shared animation sets the mesh's animations
+come from (`shared.MaleTwo`, `shared.Male`), and `(m, m, 4)` places
+worked out in advance. Each place is a name, 12 floats and an i32, from
+the origin as a type 2 point: the Jem'Hadar's gun tip in each firing
+pose, `FireGunTipLoc`, `FireCrchGunTipLoc`, `FireShldrGunTipLoc`... A
+crouched shot's tip is lowest and a shot from the shoulder highest, with
+Y up in the float copy.
+
+Checked:
+- On The Fallen, all 419 meshes with the block read: 429 attachment
+  points in 135 meshes, every triangle within its mesh, and 74
+  precomputed places in 14.
+- How a triangle's own axes are set isn't stored. Reluva takes the
+  triangle's middle, X along its first edge and Z along its normal.
+
+On Kira, standing:
+- **Hands and feet:** her `RightHand` point is on her right at hip
+  height, and her `RightFoot` point 40 units down (her middle is 47
+  above the floor).
+- **Face:** her `Face` point is 4 units in front of her head.

@@ -598,6 +598,31 @@ void MapViewer::load(int index) {
     info_.push_back("Not drawn yet: lights' effects other than their brightness (flicker, pulse...), movers' own lighting");
 }
 
+bool MapViewer::watchActor(const std::string& name) {
+    if (!play_)
+        return false;
+    for (VmObject* a : play_->level().actors()) {
+        if (a->deleted || fs::toLower(play_->vm().nameText(a->name)) != fs::toLower(name))
+            continue;
+        LevelPlay::Look look;
+        if (!play_->look(a, look))
+            return false;
+        // In front of it, a little above, looking back at it.
+        const Value* radius = a->find(play_->vm(), "CollisionRadius");
+        const float back = std::max(60.0f, (radius ? radius->asFloat() : 20) * 4);
+        const Vec3f ahead = rotationAxes(look.rotation)[0];
+        const Vec3f eye{look.location[0] + ahead[0] * back, look.location[1] + ahead[1] * back,
+                        look.location[2] + back * 0.3f};
+        pos_ = toWorld(eye);
+        const gfx::Vec3 d{look.location[0] - eye[0], -(look.location[1] - eye[1]), look.location[2] - eye[2]};
+        yaw_ = std::atan2(d[1], d[0]);
+        pitch_ = std::atan2(d[2], std::sqrt(d[0] * d[0] + d[1] * d[1]));
+        freeCam_ = true;
+        return true;
+    }
+    return false;
+}
+
 bool MapViewer::selectMap(const std::string& name) {
     for (size_t i = 0; i < names_.size(); ++i)
         if (fs::toLower(names_[i]) == fs::toLower(name)) {
@@ -620,7 +645,7 @@ void MapViewer::handleEvent(const Event& ev) {
     if (!renderer_ || names_.empty())
         return;
     auto hold = [&](uint32_t k, bool down) {
-        if (play_) // playing, the arrows turn and look, and Ctrl or F fires
+        if (play_ && !freeCam_) // playing, the arrows turn and look, and Ctrl or F fires
             switch (k) {
             case key::Left: held_[TurnLeft] = down; return true;
             case key::Right: held_[TurnRight] = down; return true;
@@ -643,7 +668,13 @@ void MapViewer::handleEvent(const Event& ev) {
     if (ev.type == EventType::KeyUp) {
         hold(ev.key, false);
     } else if (ev.type == EventType::KeyDown) {
-        if (play_ && !ev.repeat) { // the keys bound to exec functions
+        if (play_ && !ev.repeat && ev.key == 'v') { // the camera let loose, or back to the game's
+            freeCam_ = !freeCam_;
+            for (bool& h : held_)
+                h = false;
+            return;
+        }
+        if (play_ && !freeCam_ && !ev.repeat) { // the keys bound to exec functions
             if (ev.key == key::Space)
                 play_->press("Jump");
             else if (ev.key == key::LCtrl || ev.key == key::RCtrl || ev.key == 'f')
@@ -720,7 +751,7 @@ void MapViewer::handleEvent(const Event& ev) {
         lastY_ = ev.mouseY;
     } else if (ev.type == EventType::MouseUp && ev.button == MouseButton::Left) {
         dragging_ = false;
-    } else if (ev.type == EventType::MouseMove && dragging_ && play_) {
+    } else if (ev.type == EventType::MouseMove && dragging_ && play_ && !freeCam_) {
         // Playing, the mouse's movement goes to the player's input.
         mouseDx_ += float(ev.mouseX - lastX_);
         mouseDy_ -= float(ev.mouseY - lastY_);
@@ -740,10 +771,11 @@ void MapViewer::update(uint64_t nowMs) {
     const float dt = lastMs_ ? std::min(0.1f, float(nowMs - lastMs_) / 1000.0f) : 0.0f;
     lastMs_ = nowMs;
 
-    if (play_) {
+    if (play_)
         updatePlay(dt);
-    } else {
-        fov_ = 90; // Unreal's default field of view, across
+    if (!play_ || freeCam_) { // flying: not playing, or playing with the camera let loose (V)
+        if (!play_)
+            fov_ = 90; // Unreal's default field of view, across
         const gfx::Vec3 f{std::cos(pitch_) * std::cos(yaw_), std::cos(pitch_) * std::sin(yaw_), std::sin(pitch_)};
         const gfx::Vec3 r{std::sin(yaw_), -std::cos(yaw_), 0};
         const float step = kSpeed * (held_[Fast] ? 3.0f : 1.0f) * dt;
@@ -1053,9 +1085,10 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
         lines.push_back(error_);
     if (!playError_.empty())
         lines.push_back("Can't play: " + playError_);
-    lines.push_back(play_ ? "Playing (Enter stops): W/S move, A/D step aside, arrows turn and look, drag to look, Space "
-                            "jumps, Ctrl or F fires"
-                          : "Enter plays the level");
+    lines.push_back(!play_     ? "Enter plays the level"
+                    : freeCam_ ? "Playing, the camera loose (V back to the game's): W/S/A/D, Space/C and drag fly it"
+                               : "Playing (Enter stops): W/S move, A/D step aside, arrows turn and look, drag to look, Space "
+                                 "jumps, Ctrl or F fires, V lets the camera loose");
     char where[200];
     // Shown in Unreal's own coordinates.
     std::snprintf(where, sizeof where, "at %.0f %.0f %.0f, %.0f fps; lightmaps %s, brightness x%.2f, display gamma %.2f",
@@ -1181,6 +1214,7 @@ void MapViewer::startPlay() {
 }
 
 void MapViewer::stopPlay() {
+    freeCam_ = false;
     if (renderer_)
         for (const GpuMesh& g : posedMeshes_)
             if (g.mesh)
@@ -1193,6 +1227,13 @@ void MapViewer::stopPlay() {
 
 void MapViewer::updatePlay(float dt) {
     ScriptLevel::Controls& c = play_->controls();
+    if (freeCam_) { // the keys fly the camera: the player stands
+        c = {};
+        play_->advance(dt);
+        playClock_ += dt;
+        view_ = play_->view();
+        return;
+    }
     c.forward = float(held_[Forward] - held_[Back]);
     c.strafe = float(held_[Right] - held_[Left]);
     c.turn = float(held_[TurnRight] - held_[TurnLeft]);

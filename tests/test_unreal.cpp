@@ -1552,6 +1552,15 @@ static void testAnimationPose() {
     CHECK(p.frame == 2 && p.next == 3 && p.lerp == 0);
 }
 
+static void testRotatorFromAxes() {
+    // Back from a rotation's axes to the rotation, all three turns at once.
+    for (const Rotator& r : {Rotator{0, 0, 0}, Rotator{2000, 16384, 0}, Rotator{-3000, -12000, 5000},
+                             Rotator{8000, 30000, -9000}}) {
+        const Rotator back = rotatorFromAxes(rotationAxes(r));
+        CHECK(std::abs(back.pitch - r.pitch) <= 2 && std::abs(back.yaw - r.yaw) <= 2 && std::abs(back.roll - r.roll) <= 2);
+    }
+}
+
 int main() {
     testCompactIndex();
     testPackageTables();
@@ -1574,6 +1583,7 @@ int main() {
     testVm();
     testCollision();
     testAnimationPose();
+    testRotatorFromAxes();
     testMapExtension();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

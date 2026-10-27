@@ -441,6 +441,60 @@ Not done:
 - **Speed-scaled rates:** a negative rate, which no script uses.
 - **Tweens:** blending from the old pose (drawn at the first frame).
 
+### Bones and attachment points
+
+`vm_attach.cpp` says where parts of an actor's mesh are: its bones, its
+attachment points and its precomputed places ([mesh.md](../formats/unreal/mesh.md)).
+Each is worked out in the mesh's animation now:
+- **The pose:** posed through its skeleton with its layers (once a tick,
+  kept for the tick), or between its frames.
+- **Placing it:** placed as the Maps page draws the mesh, so they agree
+  (`placeMeshVertex`, then the actor's Location, PrePivot, Rotation and
+  DrawScale).
+
+The natives:
+- `C3DGetJointWorldPos(Bone, out Location, out Rotation)`: a bone's place
+  and axes. The cut-scene cameras aim at a speaker's `Bip01_Head`.
+  `C3DGetJointLocalPos` gives it from the actor's own location, unturned;
+  the `Rel` forms are taken as the same.
+- `C3DDoesBoneExist`.
+- `C3DGetAttachPtCoords(Name, out Pos, out Orientation)`: an attachment
+  point in the world (`GunTip`, `FirePoint`, `KickPoint`...). On a
+  triangle it's the triangle's frame (above) with the point's offset
+  and turn; on the origin, its offset and turn from the mesh's float
+  copy.
+- `C3DGetAttachPtCoordsPrecomputed`: the places worked out in advance
+  (`FireGunTipLoc`).
+- `C3DGetAttachPtOffset` (from the actor), `C3DGetNumAttachPts`.
+- A part the mesh hasn't answers with the actor's own location and
+  rotation, so what starts there starts at the actor.
+- **Attaching:** `C3DAttach(Obj, ObjPt, ThisPt)` keeps this actor, from
+  each tick on, with its point `ThisPt` on `Obj`'s `ObjPt`. It's turned
+  so its point's axes are `Obj`'s point's, and moved so the two meet.
+  This runs after every actor's tick, until `C3DDetach`.
+  - What's attached in the levels: the ensigns' tricorders and phasers
+    on their belts (`BeltAttach` on `BeltClip`), and the gun nests'
+    spotlights.
+  - What's attached in play: the flashlight on the wrist, the breather
+    on the face, the bat'leth in the hand. The player's guns are held
+    by IK, not attached.
+- `C3DActorInit` and `C3DInitAltMeshes` set up The Fallen's renderer, so
+  they do nothing here.
+
+On M01_KiraL2, standing, Kira's points and bones are:
+- head bone 35 above her middle (her top is 47);
+- feet 40 below;
+- hands at her hips, 14 to 15 units to each side, the right on her
+  right;
+- `Face` in front of her head.
+
+On M11_KiraL1, an ensign's tricorder hangs upright at her belt.
+
+Not done:
+- How a triangle's frame is set is a guess, so a point's turn may be
+  off, though not its place, since the offsets are a few units at most.
+- A bone's place doesn't take the layers into account.
+
 ## Playing a level
 
 `LevelPlay` (`level_play.cpp`) is a level being played. It starts the
@@ -480,10 +534,15 @@ falling further behind. The Maps page plays one with Enter:
 
   Lighting is the level's lightmaps, as worked out when it loaded.
 
+While playing, V lets the camera loose: the keys fly it round the level
+as it plays on, the player standing, and V again gives it back to the
+game.
+
 `reluva-tool ue-play` plays the page without a window, through a
 software renderer (`tools/soft_renderer.cpp`: textured, depth tested,
 blended triangles, enough to see a frame), driven by steps:
 `play`, `wait <s>`, `hold <key> <s>`, `down`/`up <key>`, `press <key>`,
+`watch <actor>` (the camera let loose in front of a live actor),
 `drag <dx> <dy>`, `shot <file.ppm>`. Checked that way:
 - **M01_KiraL2:** Kira runs down the stone corridor from behind, the
   camera swinging to her side, and turns into the wall with the camera

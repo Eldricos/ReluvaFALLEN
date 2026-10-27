@@ -330,4 +330,11 @@ std::array<Vec3f, 3> rotationAxes(const Rotator& r) {
             Vec3f{-(cr * sp * cy + sr * sy), cy * sr - cr * sp * sy, cr * cp}};
 }
 
+Rotator rotatorFromAxes(const std::array<Vec3f, 3>& a) {
+    // From rotationAxes: X = (cp cy, cp sy, sp), Y.z = -sr cp, Z.z = cr cp.
+    auto angle = [](float radians) { return int32_t(std::lround(radians * 32768.0f / kPi)); };
+    const float sp = std::clamp(a[0][2], -1.0f, 1.0f);
+    return {angle(std::asin(sp)), angle(std::atan2(a[0][1], a[0][0])), angle(std::atan2(-a[1][2], a[2][2]))};
+}
+
 } // namespace reluva::unreal

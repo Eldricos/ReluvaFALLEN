@@ -4697,12 +4697,13 @@ private:
 // ue-play <game folder> <map> [step...]: the Maps page on that map, driven
 // by steps, its frames drawn in software. Steps: play (Enter), wait <s>,
 // hold <key> <s> (w a s d left right up down space f), down <key> and
-// up <key> (held across other steps), press <key>,
+// up <key> (held across other steps), press <key>, watch <actor> (the
+// camera let loose in front of it),
 // drag <dx> <dy>, shot <file.ppm> (the next frame, saved).
 int cmdUePlay(int argc, char** argv) {
     if (argc < 4) {
         std::fprintf(stderr, "usage: reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | "
-                             "down <key> | up <key> | press <key> | drag <dx> <dy> | shot <file.ppm>]...\n");
+                             "down <key> | up <key> | press <key> | watch <actor> | drag <dx> <dy> | shot <file.ppm>]...\n");
         return 2;
     }
     using namespace reluva::unreal;
@@ -4764,6 +4765,10 @@ int cmdUePlay(int argc, char** argv) {
             for (int f = 0; f < int(s * 30); ++f)
                 frame();
             send(reluva::EventType::KeyUp, key);
+        } else if (step == "watch" && i + 1 < argc) {
+            const std::string who = argv[++i];
+            std::printf("watch %s: %s\n", who.c_str(), page.watchActor(who) ? "looking at it" : "no such actor");
+            frame();
         } else if ((step == "down" || step == "up") && i + 1 < argc) {
             send(step == "down" ? reluva::EventType::KeyDown : reluva::EventType::KeyUp, keyOf(argv[++i]));
         } else if (step == "press" && i + 1 < argc) {
@@ -5559,7 +5564,7 @@ int main(int argc, char** argv) {
                  "  reluva-tool ue-probe <package | game folder> <export> [-all | -at <offset> <bytes>]\n"
                  "  reluva-tool ue-script <game folder> <class | Class.Function | -all <dir>>\n"
                  "  reluva-tool ue-run <game folder> <map | -all> [seconds]\n"
-                 "  reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | down <key> | up <key> | press <key> | drag <dx> <dy> | shot <file.ppm>]...\n"
+                 "  reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | down <key> | up <key> | press <key> | watch <actor> | drag <dx> <dy> | shot <file.ppm>]...\n"
 #endif
                  "");
     return 2;

@@ -137,5 +137,8 @@ std::vector<SpriteActor> findSpriteActors(const PackageSet& packages, const Pack
 
 // A rotator's axes in Unreal's space: forward, right, up.
 std::array<Vec3f, 3> rotationAxes(const Rotator& r);
+// The rotation whose axes (X forward, Y right, Z up) those are, as near as
+// they're square to each other.
+Rotator rotatorFromAxes(const std::array<Vec3f, 3>& axes);
 
 } // namespace reluva::unreal

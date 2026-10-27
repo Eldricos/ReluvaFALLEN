@@ -345,6 +345,9 @@ void ScriptLevel::tick(float seconds) {
         if (!a->deleted)
             animate(a, seconds);
     }
+    // What's attached (C3DAttach) goes where its holder now is.
+    placeAttached();
+    ++ticks_;
     actors_.erase(std::remove_if(actors_.begin(), actors_.end(), [](VmObject* a) { return a->deleted; }),
                   actors_.end());
 }
@@ -527,6 +530,7 @@ void registerEngineNatives(Vm& vm) {
     registerMovementNatives(vm);
     registerSplineNatives(vm);
     registerAnimationNatives(vm);
+    registerAttachNatives(vm);
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     auto B = [](bool v) { return Value::boolValue(v); };
 
