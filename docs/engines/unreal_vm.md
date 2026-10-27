@@ -159,28 +159,33 @@ about 17 seconds in.
 `reluva-tool ue-run <game> <map | -all> [seconds]` runs it and reports
 what scripts did: their log (repeats counted), errors, natives not
 written yet by calls, None accessed by place, and the player as it ends
-up (its state and HUD). On The Fallen (October 2026), all 74 maps, 20
-seconds each: 174 million calls; 0.3 s to start a map on average
-(M01_KiraL1A, 3,275 actors, 0.9 s), ticking at about a fifteenth of real
-time on average but half of it on the biggest map. A player logs in on
-every map, as twelve characters (DS9_Sisko and DS9_Worf on 15 maps each,
-DS9_Kira, their EVA, ES, Beaten and Kira's Cardassian disguise on the
-rest), all with their HUD but on Entry (the menu's level, whose start
-isn't The Fallen's); 72 are walking by 20 seconds in, and on the other
-two (M01_KiraL1B, M05_SiskoL2) the player starts in water and swims.
+up (its state and HUD), and how things moved. On The Fallen (October
+2026), all 74 maps, 20 seconds each, in 6 minutes: 185 million calls. A
+player logs in on every map, as twelve characters (DS9_Sisko and DS9_Worf
+on 15 maps each, DS9_Kira, their EVA, ES, Beaten and Kira's Cardassian
+disguise on the rest), all with their HUD but on Entry (the menu's level,
+whose start isn't The Fallen's). 20 seconds in:
+- 62 are walking.
+- 7 are still frozen in their map's opening cut scene.
+- 4 started in water and swim.
+- On CM_Endcredits, the credits, the player falls: there's nothing under
+  its start.
+
+The movement: 187,000 moves, 6,837 landings, 8,341 touches.
+- 9,908 placings refused: scripts putting things where there's no room,
+  mostly SR3_Raptor and DS9_SmallFishSchool on M05_SiskoL1b, again and
+  again at one spot.
+- 367 walks to a goal given up: SR3_Leech mostly.
 
 What's left before play, by what `ue-run` reports:
 
-- **Natives not written** (43): The Fallen's own skeletal meshes
+- **Natives not written** (45): The Fallen's own skeletal meshes
   (`C3DActorInit`, `C3DIsBoned`, `C3DGetAttachPtCoords`...), its
   `ListActors` iterator (an AI's list of known actors, not yet
-  understood), `CheckFOV`, `GetRendererFlags`; and the engine's
-  movement, collision and AI (`Trace`, `MoveTo`, `TurnToward`,
-  `FindPathToward`, `PointCheck`, the path node iterators), which need
-  collision against the level; its splines (`CTVE_Spline.GetSplineData`),
-  which the camera directors of the opening sequences read, so they
-  access None most of all; its dialogue (`FindBestDialogLine`,
-  `StartDialog`) and documents.
+  understood), `CheckFOV`, `GetRendererFlags`. The AI's paths
+  (`FindPathToward`, `RadiusPathNodes` and the other path node
+  iterators). Its dialogue (`FindBestDialogLine`, `StartDialog`,
+  `DialogTick`) and documents.
 - **Speed**: values are copied freely and calls looked up by name; the
   biggest maps tick at half real time.
 - **The game's own mistakes**: `DS9_GrigariSentryDrone` (and its kin)
