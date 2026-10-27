@@ -130,6 +130,8 @@ Error ScriptLevel::load() {
             levelInfo_ = a;
         // A mover's brush's own BSP (UnrealEd builds one for each), to
         // collide with it where it's moved to.
+        if (vm_.isA(a, "Mover"))
+            movers_.push_back(a);
         if (auto it = brushes_.find(index); it != brushes_.end())
             if (Value* brush = a->find(vm_, "Brush"); brush && brush->asObject() && brush->o->package) {
                 auto model = std::make_shared<Model>();

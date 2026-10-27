@@ -72,8 +72,10 @@ give.
 ## How movement uses it
 
 `ScriptLevel` ([unreal_vm.md](../../engines/unreal_vm.md)) sweeps each
-move through the world first, then actors' cylinders and movers' boxes.
-An actor that does start in solid (spawned into a wall, or pushed there
+move through the world first, then actors' cylinders and movers. Movers
+are collided with the same way as the world, through their brush's own
+BSP, with the move first turned into the brush's coordinates (a mover
+without one is a box). An actor that does start in solid (spawned into a wall, or pushed there
 by a script) may move if the move ends in open space. Otherwise it is
 first nudged to the nearest open spot (up first, then sideways, in 2-unit
 steps up to 32), as spawning does. If no open spot is near, it stays put.

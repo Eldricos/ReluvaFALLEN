@@ -4594,9 +4594,9 @@ int cmdUeRun(int argc, char** argv) {
             if (const Value* phys = player->find(vm, "Physics"))
                 where = ", the player's physics " + std::to_string(phys->asInt());
         std::printf("%-20s movement: %d moves, blocked %d by the world and %d by actors, %d steps, %d landings, "
-                    "%d touches, %d zone changes, %d stuck%s\n",
+                    "%d touches, %d zone changes, %d placings refused, %d moves to a goal given up%s\n",
                     "", m.moves, m.blockedByWorld, m.blockedByActors, m.steps, m.landings, m.touches, m.zoneChanges,
-                    m.stuck, where.c_str());
+                    m.refused, m.gaveUp, where.c_str());
         moved.moves += m.moves;
         moved.blockedByWorld += m.blockedByWorld;
         moved.blockedByActors += m.blockedByActors;
@@ -4604,7 +4604,8 @@ int cmdUeRun(int argc, char** argv) {
         moved.landings += m.landings;
         moved.touches += m.touches;
         moved.zoneChanges += m.zoneChanges;
-        moved.stuck += m.stuck;
+        moved.refused += m.refused;
+        moved.gaveUp += m.gaveUp;
         calls += vm.stats.calls;
         statements += vm.stats.statements;
         accessedNone += vm.stats.accessedNone;
@@ -4641,9 +4642,9 @@ int cmdUeRun(int argc, char** argv) {
     std::printf("\n%d maps ran, %d didn't load; %llu calls, %llu statements, None accessed %d times\n", ran, failed,
                 (unsigned long long)calls, (unsigned long long)statements, accessedNone);
     std::printf("movement: %d moves, blocked %d by the world and %d by actors, %d steps, %d landings, %d touches, "
-                "%d zone changes, %d stuck\n",
+                "%d zone changes, %d placings refused, %d moves to a goal given up\n",
                 moved.moves, moved.blockedByWorld, moved.blockedByActors, moved.steps, moved.landings, moved.touches,
-                moved.zoneChanges, moved.stuck);
+                moved.zoneChanges, moved.refused, moved.gaveUp);
     std::printf("natives not written yet (%zu, by calls):\n", missing.size());
     for (const auto& [n, k] : top(missing, all ? 60 : 40))
         std::printf("  %7d %s\n", n, k.c_str());

@@ -171,11 +171,16 @@ Vec ScriptLevel::extentOf(VmObject* a) {
 
 // --- The world -----------------------------------------------------------------------------
 
-bool ScriptLevel::clear(const Vec& point, const Vec& extent) const {
-    if (!collision_)
-        return true;
-    return extent[0] > 0 || extent[2] > 0 ? !collision_->solid(Vec3f{point[0], point[1], point[2]}, Vec3f{extent[0], extent[1], extent[2]})
-                                         : !collision_->solid(Vec3f{point[0], point[1], point[2]});
+bool ScriptLevel::clear(const Vec& point, const Vec& extent, VmObject* self) {
+    if (collision_ && (extent[0] > 0 || extent[2] > 0 ? collision_->solid(Vec3f{point[0], point[1], point[2]}, Vec3f{extent[0], extent[1], extent[2]})
+                                                      : collision_->solid(Vec3f{point[0], point[1], point[2]})))
+        return false;
+    // Movers that block it count too.
+    for (VmObject* m : movers_)
+        if (m != self && !m->deleted && boolOf(prop(m, "bCollideActors")) &&
+            (boolOf(prop(m, "bBlockActors")) || boolOf(prop(m, "bBlockPlayers"))) && moverOverlaps(m, point, extent))
+            return false;
+    return true;
 }
 
 bool ScriptLevel::place(VmObject* a, const Vec& point) {
@@ -183,7 +188,7 @@ bool ScriptLevel::place(VmObject* a, const Vec& point) {
     if (!loc)
         return false;
     const Vec e = extentOf(a);
-    if (!boolOf(prop(a, "bCollideWorld")) || clear(point, e)) {
+    if (!boolOf(prop(a, "bCollideWorld")) || clear(point, e, a)) {
         *loc = vm_.vectorValue(point[0], point[1], point[2]);
         updateRegion(a);
         return true;
@@ -196,14 +201,14 @@ bool ScriptLevel::place(VmObject* a, const Vec& point) {
                              {d, -d, d}, {-d, d, d}, {0, 0, -d}};
         for (const Vec& t : tries) {
             const Vec at = add(point, t);
-            if (clear(at, e)) {
+            if (clear(at, e, a)) {
                 *loc = vm_.vectorValue(at[0], at[1], at[2]);
                 updateRegion(a);
                 return true;
             }
         }
     }
-    ++movement.stuck;
+    ++movement.refused;
     return false;
 }
 
@@ -232,46 +237,83 @@ bool ScriptLevel::brushBox(VmObject* m, Vec& min, Vec& max) {
     return true;
 }
 
-bool ScriptLevel::moverHit(VmObject* m, const Vec& start, const Vec& delta, const Vec& e, float& time, Vec& normal) {
+// A mover's brush's own space: a brush point v is at
+// location + postScale * (rotation * (mainScale * (v - prePivot))).
+struct ScriptLevel::MoverSpace {
+    const BrushBox* b = nullptr;
+    Vec loc{};
+    std::array<Vec, 3> ax{};
+    static float nz(float v) { return v != 0 ? v : 1; }
+    // A world point (or direction) in the brush's space.
+    Vec local(const Vec& w, bool point) const {
+        Vec u{};
+        for (size_t k = 0; k < 3; ++k)
+            u[k] = (w[k] - (point ? loc[k] : 0)) / nz(b->postScale[k]);
+        Vec v{dot(u, ax[0]), dot(u, ax[1]), dot(u, ax[2])};
+        for (size_t k = 0; k < 3; ++k)
+            v[k] = v[k] / nz(b->mainScale[k]) + (point ? b->prePivot[k] : 0);
+        return v;
+    }
+    // A box's half sizes there (bounding it, if the mover is turned).
+    Vec extent(const Vec& e) const {
+        Vec le{};
+        for (size_t k = 0; k < 3; ++k) {
+            for (size_t j = 0; j < 3; ++j)
+                le[k] += std::fabs(ax[k][j]) * e[j] / std::fabs(nz(b->postScale[j]));
+            le[k] /= std::fabs(nz(b->mainScale[k]));
+        }
+        return le;
+    }
+    // A normal there back in the world.
+    Vec normal(const Vec3f& n) const {
+        Vec w{};
+        for (size_t k = 0; k < 3; ++k)
+            w = add(w, mul(ax[k], n[k] / nz(b->mainScale[k])));
+        for (size_t k = 0; k < 3; ++k)
+            w[k] /= nz(b->postScale[k]);
+        return normalOf(w);
+    }
+};
+
+bool ScriptLevel::moverSpace(VmObject* m, MoverSpace& space) {
     auto it = m->package == &map_ ? brushes_.find(m->exportIndex) : brushes_.end();
-    if (it == brushes_.end() || !it->second.collision) {
+    if (it == brushes_.end() || !it->second.collision)
+        return false;
+    space.b = &it->second;
+    space.loc = vecOf(prop(m, "Location"));
+    space.ax = axes(prop(m, "Rotation") ? Vm::rotatorOf(*prop(m, "Rotation")) : std::array<int32_t, 3>{0, 0, 0});
+    return true;
+}
+
+bool ScriptLevel::moverHit(VmObject* m, const Vec& start, const Vec& delta, const Vec& e, float& time, Vec& normal) {
+    MoverSpace sp;
+    if (!moverSpace(m, sp)) {
         Vec bmin, bmax;
         return brushBox(m, bmin, bmax) && boxHit(start, delta, e, bmin, bmax, time, normal);
     }
-    // Into the brush's own space: a brush point v is at
-    // location + postScale * (rotation * (mainScale * (v - prePivot))).
-    const BrushBox& b = it->second;
-    const Vec loc = vecOf(prop(m, "Location"));
-    const auto ax = axes(prop(m, "Rotation") ? Vm::rotatorOf(*prop(m, "Rotation")) : std::array<int32_t, 3>{0, 0, 0});
-    auto local = [&](const Vec& w, bool point) {
-        Vec u{};
-        for (size_t k = 0; k < 3; ++k)
-            u[k] = (w[k] - (point ? loc[k] : 0)) / (b.postScale[k] != 0 ? b.postScale[k] : 1);
-        Vec v{dot(u, ax[0]), dot(u, ax[1]), dot(u, ax[2])};
-        for (size_t k = 0; k < 3; ++k)
-            v[k] = v[k] / (b.mainScale[k] != 0 ? b.mainScale[k] : 1) + (point ? b.prePivot[k] : 0);
-        return v;
-    };
-    Vec le{};
-    for (size_t k = 0; k < 3; ++k) {
-        for (size_t j = 0; j < 3; ++j)
-            le[k] += std::fabs(ax[k][j]) * e[j] / std::fabs(b.postScale[j] != 0 ? b.postScale[j] : 1);
-        le[k] /= std::fabs(b.mainScale[k] != 0 ? b.mainScale[k] : 1);
-    }
-    const Vec s0 = local(start, true), s1 = add(s0, local(delta, false));
-    const LevelCollision::Hit h = b.collision->trace(Vec3f{s0[0], s0[1], s0[2]}, Vec3f{s1[0], s1[1], s1[2]},
-                                                     Vec3f{le[0], le[1], le[2]});
+    const Vec s0 = sp.local(start, true), s1 = add(s0, sp.local(delta, false)), le = sp.extent(e);
+    const LevelCollision::Hit h = sp.b->collision->trace(Vec3f{s0[0], s0[1], s0[2]}, Vec3f{s1[0], s1[1], s1[2]},
+                                                         Vec3f{le[0], le[1], le[2]});
     if (!h.hit() || h.startSolid) // starting in it (it moved into the actor): let it get out
         return false;
     time = h.time;
-    // The normal back out to the world.
-    Vec n{};
-    for (size_t k = 0; k < 3; ++k)
-        n = add(n, mul(ax[k], h.normal[k] / (b.mainScale[k] != 0 ? b.mainScale[k] : 1)));
-    for (size_t k = 0; k < 3; ++k)
-        n[k] /= (b.postScale[k] != 0 ? b.postScale[k] : 1);
-    normal = normalOf(n);
+    normal = sp.normal(h.normal);
     return true;
+}
+
+bool ScriptLevel::moverOverlaps(VmObject* m, const Vec& centre, const Vec& e) {
+    MoverSpace sp;
+    if (!moverSpace(m, sp)) {
+        Vec bmin, bmax;
+        if (!brushBox(m, bmin, bmax))
+            return false;
+        for (size_t k = 0; k < 3; ++k)
+            if (centre[k] + e[k] <= bmin[k] || centre[k] - e[k] >= bmax[k])
+                return false;
+        return true;
+    }
+    const Vec c = sp.local(centre, true), le = sp.extent(e);
+    return sp.b->collision->solid(Vec3f{c[0], c[1], c[2]}, Vec3f{le[0], le[1], le[2]});
 }
 
 // --- Moving ---------------------------------------------------------------------------------
@@ -295,7 +337,7 @@ ScriptLevel::MoveHit ScriptLevel::moveActor(VmObject* a, const Vec& delta) {
                                      Vec3f{start[0] + delta[0], start[1] + delta[1], start[2] + delta[2]}, Vec3f{e[0], e[1], e[2]});
         };
         LevelCollision::Hit h = sweep();
-        if (h.startSolid && !clear(add(start, delta), e)) {
+        if (h.startSolid && !clear(add(start, delta), e, a)) {
             // Starting a little in solid (a sliver at a corner the box
             // sweep doesn't round off) and not moving out of it: nudged
             // to the nearest open spot first, else it stays put.
@@ -478,7 +520,7 @@ VmObject* ScriptLevel::trace(VmObject* self, const Vec& start, const Vec& end, c
     // Movers count as the world; other actors only if asked.
     {
         const Vec d = sub(end, start);
-        for (VmObject* o : actors_) {
+        for (VmObject* o : actors ? actors_ : movers_) {
             if (o == self || o->deleted || !boolOf(prop(o, "bCollideActors")))
                 continue;
             if (!boolOf(prop(o, "bBlockActors")) && !boolOf(prop(o, "bProjTarget")) && !boolOf(prop(o, "bBlockPlayers")))
@@ -622,7 +664,7 @@ void ScriptLevel::steer(VmObject* a, float dt) {
                             (g.target ? floatOf(prop(g.target, "CollisionRadius")) : 0);
         if (length(to) <= reach || g.timeLeft <= 0) {
             if (g.timeLeft <= 0)
-                ++movement.stuck;
+                ++movement.gaveUp;
             finish();
             return;
         }

@@ -216,8 +216,12 @@ movement, built from what the scripts set and expect.
   across, down onto a floor). Otherwise it gets `HitWall` and the rest of
   the move slides along the wall, twice at most. Walkers don't climb
   walls by sliding.
-- **Placing** (`SetLocation`, spawning): if the spot is solid, the
-  actor is nudged up or sideways to the nearest open one.
+- **Placing** (`SetLocation`, spawning): if the spot is solid (the
+  world, or a mover that blocks), the actor is nudged up or sideways to
+  the nearest open one, else refused. Starts are placed for the default
+  pawn height (40), and The Fallen's characters are taller (Worf is 52).
+  So a player starting on a lift begins a little into its floor and is
+  lifted onto it.
 
 Physics each tick, after the actor's scripts:
 

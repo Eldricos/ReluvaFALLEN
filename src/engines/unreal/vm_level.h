@@ -94,8 +94,9 @@ public:
     VmObject* trace(VmObject* self, const std::array<float, 3>& start, const std::array<float, 3>& end,
                     const std::array<float, 3>& extent, bool actors, std::array<float, 3>& hitLocation,
                     std::array<float, 3>& hitNormal);
-    // Whether a box at a point is clear of the world.
-    bool clear(const std::array<float, 3>& point, const std::array<float, 3>& extent) const;
+    // Whether a box at a point is clear of the world and the movers that
+    // block (but `self`).
+    bool clear(const std::array<float, 3>& point, const std::array<float, 3>& extent, VmObject* self = nullptr);
     // Puts an actor somewhere it fits, near `point` if it doesn't there;
     // false if there's nowhere near.
     bool place(VmObject* actor, const std::array<float, 3>& point);
@@ -113,7 +114,9 @@ public:
     // Movement so far, for diagnostics.
     struct MovementStats {
         int moves = 0, blockedByWorld = 0, blockedByActors = 0, steps = 0, landings = 0, touches = 0,
-            zoneChanges = 0, stuck = 0;
+            zoneChanges = 0;
+        int refused = 0; // placed (SetLocation, spawned) where there's no room, nor near
+        int gaveUp = 0;  // latent moves (MoveTo...) that timed out short of their goal
     } movement;
 
     Vm& vm() { return vm_; }
@@ -146,6 +149,9 @@ private:
     bool brushBox(VmObject* mover, std::array<float, 3>& min, std::array<float, 3>& max);
     // A box swept by `delta` against a mover where it is now: its brush's
     // BSP if it has one, else its box.
+    struct MoverSpace;
+    bool moverSpace(VmObject* mover, MoverSpace& space);
+    bool moverOverlaps(VmObject* mover, const std::array<float, 3>& centre, const std::array<float, 3>& extent);
     bool moverHit(VmObject* mover, const std::array<float, 3>& start, const std::array<float, 3>& delta,
                   const std::array<float, 3>& extent, float& time, std::array<float, 3>& normal);
 
@@ -163,6 +169,7 @@ private:
     std::map<VmObject*, std::vector<VmObject*>> touching_;
     std::map<VmObject*, Goal> goals_;
     std::set<VmObject*> fallers_; // falling since a tick before
+    std::vector<VmObject*> movers_; // the level's, which traces of the world meet
     int editorCameras_ = 0;
     std::vector<VmObject*> actors_;
     float time_ = 0;
