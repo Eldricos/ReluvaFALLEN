@@ -126,6 +126,36 @@ public:
     void tweenAnim(VmObject* actor, NameId sequence, float seconds);
     bool animating(VmObject* actor);
     void waitForAnim(VmObject* actor);
+
+    // The Fallen's layered animation (vm_anim.cpp, C3DPlayAnim and kin):
+    // an animation on part of a skeleton (a group, 'UpperTorso': a bone
+    // and those under it; 'LowerTorso': the rest), over the actor's own,
+    // fading in and out by its weight; and its face's channels (a frame of
+    // Blink, EyeBrows or Phonemes each), set by C3DTweenSkinAnimDelay.
+    struct AnimLayer {
+        NameId sequence = 0;
+        NameId bone = 0;      // where the part starts
+        bool rest = false;    // the part is the skeleton but that (LowerTorso)
+        float frame = 0, rate = 0; // as AnimFrame (below 0: tweening into it) and AnimRate
+        bool loop = false, finished = false;
+        float weight = 0, weightRate = 0; // how much it shows (0-1), and its change a second
+    };
+    struct SkinChannel {
+        NameId sequence = 0;
+        float frame = 0, weight = 0;       // where it is: seconds into the sequence
+        float target = 0, targetWeight = 0, tweenRate = 0; // where it's tweening to, and how fast
+    };
+    const std::map<NameId, AnimLayer>* layersOf(VmObject* actor) const;
+    const std::map<NameId, SkinChannel>* skinsOf(VmObject* actor) const;
+    void playLayer(VmObject* actor, NameId group, NameId sequence, float rate, float tween, bool loop, NameId bone);
+    void tweenLayer(VmObject* actor, NameId group, NameId sequence, float seconds, NameId bone);
+    void tweenOutLayer(VmObject* actor, NameId group, float seconds);
+    bool layerAnimating(VmObject* actor, NameId group);
+    void waitForLayer(VmObject* actor, NameId group);
+    NameId newSkinChannel(VmObject* actor);
+    void setSkin(VmObject* actor, NameId tag, NameId sequence, float frame, float weight, float tween);
+    void clearSkin(VmObject* actor, NameId tag);
+    void copySkins(VmObject* to, VmObject* from);
     // Movement so far, for diagnostics.
     struct MovementStats {
         int moves = 0, blockedByWorld = 0, blockedByActors = 0, steps = 0, landings = 0, touches = 0,
@@ -156,6 +186,12 @@ private:
     void moveBrush(VmObject* mover, float seconds);
     void animate(VmObject* actor, float seconds); // its animation on by a tick
     void endAnimWait(VmObject* actor, bool ended);
+    void animateLayers(VmObject* actor, float seconds);
+    // A pawn with one of The Fallen's meshes gets UpdateHeadAnimation each
+    // tick: where its head looks, and its face (blinks, expressions).
+    void updateHead(VmObject* actor);
+    std::map<const VmClass*, bool> pawnClasses_;
+    void endLayerWait(VmObject* actor, NameId group);
     std::array<float, 3> extentOf(VmObject* a);
     struct BrushBox {
         std::array<float, 3> min{}, max{}; // in the brush's own coordinates
@@ -187,6 +223,10 @@ private:
     std::map<VmObject*, Goal> goals_;
     std::set<VmObject*> fallers_; // falling since a tick before
     std::map<VmObject*, int> animWaits_; // actors in a latent FinishAnim, by their state serial then
+    std::map<VmObject*, std::map<NameId, AnimLayer>> layers_;
+    std::map<VmObject*, std::map<NameId, SkinChannel>> skins_;
+    std::map<VmObject*, std::pair<NameId, int>> layerWaits_; // in C3DFinishAnim: the group, the state serial
+    int skinChannels_ = 0;
     std::vector<VmObject*> movers_; // the level's, which traces of the world meet
     int editorCameras_ = 0;
     std::vector<VmObject*> actors_;

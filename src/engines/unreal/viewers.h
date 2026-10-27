@@ -326,6 +326,17 @@ private:
     std::string playError_;
     std::vector<VmObject*> moverActors_; // each of movers_'s live actor
     std::map<std::pair<const Package*, int>, int> liveMeshes_;
+    // Meshes posed at draw time for The Fallen's layered animations: each
+    // mesh's poser (none if it has no skeleton) and its parts, and the
+    // frames posed for the last frame drawn (kept until the next).
+    struct Poser {
+        std::unique_ptr<LayeredPoser> poser;
+        std::map<std::pair<std::string, bool>, std::vector<bool>> parts;
+    };
+    std::map<std::pair<const Package*, int>, Poser> posers_;
+    std::vector<GpuMesh> posedMeshes_;
+    bool drawLayered(const LevelPlay::Look& look, int mesh, const gfx::Mat4& placement,
+                     const std::vector<gfx::TextureId>& skins, const MeshLight& light);
     float playClock_ = 0, fov_ = 90;
     LevelPlay::View view_;
     float mouseDx_ = 0, mouseDy_ = 0;

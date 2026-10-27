@@ -123,6 +123,37 @@ std::vector<AnimationSet> findAnimationSets(const PackageSet& packages);
 bool borrowNamedAnimation(const Package& package, int exportIndex, const std::vector<AnimationSet>& sets,
                           std::string_view name, Mesh& mesh);
 
+// A mesh built on a skeleton, posed at draw time from more than one
+// animation: The Fallen's layered animation (C3DPlayAnim) plays one on a
+// part of the skeleton over the actor's own, which the frames posed when
+// it's read (one animation each) can't show.
+class LayeredPoser {
+public:
+    LayeredPoser();
+    ~LayeredPoser();
+    // Its skeleton and animation tables (read again from its export); the
+    // shared sets for those past its own frames. None if it has no bones.
+    static std::unique_ptr<LayeredPoser> open(const Package& package, int exportIndex,
+                                              const std::vector<AnimationSet>& sets);
+    // The bones from `bone` down (with `rest`, all the others); empty if
+    // there's no bone of that name.
+    std::vector<bool> part(std::string_view bone, bool rest) const;
+    struct Layer {
+        std::string_view anim;
+        float fraction = 0;             // through it, as an actor's AnimFrame
+        const std::vector<bool>* part = nullptr;
+        float weight = 1;               // how much it shows over what's under it
+    };
+    // One frame of vertices (FrameVerts, in packed units as Mesh::verts):
+    // every bone placed as `base` has it `fraction` through, then the
+    // bones of each layer's part blended towards where its animation has
+    // them. False if an animation isn't the mesh's.
+    bool pose(std::string_view base, float fraction, const std::vector<Layer>& layers, std::vector<Vec3f>& out) const;
+
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+};
+
 bool isMeshClass(std::string_view className);
 
 // For working out a mesh's layout (reluva-tool ue-probe): the arrays

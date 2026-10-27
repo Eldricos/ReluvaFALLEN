@@ -139,6 +139,7 @@ void MapViewer::unload() {
     textureCache_.clear();
     lights_ = {};
     stopPlay();
+    posers_.clear();
 }
 
 void MapViewer::activate() {
@@ -1180,6 +1181,11 @@ void MapViewer::startPlay() {
 }
 
 void MapViewer::stopPlay() {
+    if (renderer_)
+        for (const GpuMesh& g : posedMeshes_)
+            if (g.mesh)
+                renderer_->destroyMesh(g.mesh);
+    posedMeshes_.clear();
     play_.reset();
     moverActors_.clear();
     // The live actors' meshes stay uploaded (in meshes_), for playing again.
@@ -1245,6 +1251,10 @@ int MapViewer::liveMesh(const ObjectRef& ref, const std::string& anim) {
 // The level's actors as they are now: meshes posed where their animation
 // is (AnimFrame), and sprites.
 void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right) {
+    for (const GpuMesh& g : posedMeshes_) // the last frame's, drawn by now
+        if (g.mesh)
+            renderer_->destroyMesh(g.mesh);
+    posedMeshes_.clear();
     constexpr int kDrawSprite = 1, kDrawMesh = 2, kDrawVerticalSprite = 5, kDrawSpriteAnimOnce = 7;
     std::vector<SpriteDraw> sprites;
     LevelPlay::Look look;
@@ -1267,14 +1277,18 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
                     tex = ctx_.packages.resolve(*look.mesh.package, mesh.textures[k]);
                 skins.push_back(textured_ ? textureOf(tex).first : 0);
             }
-            drawMesh(*renderer_, gpuMeshes_[size_t(at)], meshPlacement(look.location, look.rotation, look.drawScale, look.prePivot),
-                     poseAtFraction(mesh, anim, look.animFrame, look.animLoop), skins, meshLightAt(look.location), kExposure,
-                     look.style);
+            play_->drawn(a);
+            const gfx::Mat4 placement = meshPlacement(look.location, look.rotation, look.drawScale, look.prePivot);
+            const MeshLight light = meshLightAt(look.location);
+            if (look.layers.empty() || !mesh.bones || !drawLayered(look, at, placement, skins, light))
+                drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, poseAtFraction(mesh, anim, look.animFrame, look.animLoop),
+                         skins, light, kExposure, look.style);
         } else if ((look.drawType == kDrawSprite || look.drawType == kDrawVerticalSprite ||
                     look.drawType == kDrawSpriteAnimOnce) && look.texture) {
             const auto [texture, size] = textureOf(look.texture);
             if (!texture)
                 continue;
+            play_->drawn(a);
             SpriteDraw d;
             d.texture = texture;
             d.at = toWorld(Vec3f{look.location[0] - look.prePivot[0], look.location[1] - look.prePivot[1],
@@ -1289,6 +1303,51 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
         }
     }
     drawSprites(sprites, forward, right);
+}
+
+// A mesh with layered animations playing on parts of it: posed now from
+// its own animation and theirs, uploaded as one frame (kept until the next
+// frame is drawn) and drawn. False if it can't be (no skeleton, an
+// animation it hasn't): drawn as its own animation alone then.
+bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4& placement,
+                            const std::vector<gfx::TextureId>& skins, const MeshLight& light) {
+    auto it = posers_.find({look.mesh.package, look.mesh.exportIndex});
+    if (it == posers_.end()) {
+        Poser p;
+        p.poser = LayeredPoser::open(*look.mesh.package, look.mesh.exportIndex, ctx_.sets());
+        it = posers_.emplace(std::make_pair(look.mesh.package, look.mesh.exportIndex), std::move(p)).first;
+    }
+    Poser& p = it->second;
+    if (!p.poser)
+        return false;
+    std::vector<LayeredPoser::Layer> layers;
+    for (const LevelPlay::Look::Layer& l : look.layers) {
+        auto part = p.parts.find({l.bone, l.rest});
+        if (part == p.parts.end())
+            part = p.parts.emplace(std::make_pair(l.bone, l.rest), p.poser->part(l.bone, l.rest)).first;
+        if (!part->second.empty())
+            layers.push_back({l.anim, l.frame, &part->second, l.weight});
+    }
+    std::vector<Vec3f> verts;
+    if (layers.empty() || !p.poser->pose(look.animSequence, look.animFrame, layers, verts))
+        return false;
+    // One frame of the mesh: its vertices swapped for the posed ones while
+    // it's uploaded.
+    Mesh& mesh = meshes_[size_t(at)];
+    if (verts.size() != size_t(mesh.frameVerts))
+        return false;
+    std::swap(mesh.verts, verts);
+    const int32_t frames = mesh.animFrames;
+    mesh.animFrames = 1;
+    GpuMesh gpu;
+    const Error err = uploadMesh(*renderer_, mesh, gpu, ctx_.meshTurn, ctx_.meshYawQuarters);
+    mesh.animFrames = frames;
+    std::swap(mesh.verts, verts);
+    if (err)
+        return false;
+    posedMeshes_.push_back(gpu);
+    drawMesh(*renderer_, gpu, placement, MeshPose{}, skins, light, kExposure, look.style);
+    return true;
 }
 
 // A line of how the game's going (the cut scene's bars are drawn under

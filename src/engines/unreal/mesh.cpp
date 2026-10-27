@@ -1439,4 +1439,152 @@ std::vector<std::string> describeBones(const Package& package, int index) {
     return out;
 }
 
+// --- Posed at draw time ---------------------------------------------------------------------
+
+struct LayeredPoser::Impl {
+    std::vector<uint8_t> data;
+    size_t base = 0, from = 0;
+    std::vector<BoneRecord> bones;
+    std::vector<int> clipStart; // the mesh's own clips: where each one's frames start
+    Mesh mesh;                  // its tables (frames dropped)
+    const std::vector<AnimationSet>* sets = nullptr;
+    // Each set's bone for each of the mesh's, by name, worked out once.
+    mutable std::map<const AnimationSet*, std::vector<const BoneRecord*>> keys;
+
+    BoneReader reader() const { return BoneReader{data, base, from, base + data.size()}; }
+
+    // Where an animation's keys are: the clip, and with `set` another
+    // skeleton's; false if it isn't the mesh's.
+    bool find(std::string_view anim, const AnimationSet*& set, size_t& clip, int& frames) const {
+        set = nullptr;
+        const std::string wanted = fs::toLower(anim);
+        for (const MeshAnimSeq& a : mesh.anims)
+            if (fs::toLower(a.name) == wanted) {
+                const auto it = std::find(clipStart.begin(), clipStart.end(), a.startFrame);
+                if (it == clipStart.end())
+                    return false;
+                clip = size_t(it - clipStart.begin());
+                frames = a.numFrames;
+                return true;
+            }
+        for (const MeshAnimSeq& a : mesh.otherAnims)
+            if (fs::toLower(a.name) == wanted && sets)
+                for (const AnimationSet& s : *sets)
+                    if (const int c = s.clipFor(a.startFrame, a.numFrames, a.name); c >= 0) {
+                        set = &s;
+                        clip = size_t(c);
+                        frames = a.numFrames;
+                        return true;
+                    }
+        return false;
+    }
+    const std::vector<const BoneRecord*>& keysOf(const AnimationSet& set) const {
+        auto it = keys.find(&set);
+        if (it == keys.end()) {
+            std::vector<const BoneRecord*> k(bones.size(), nullptr);
+            for (size_t i = 0; i < bones.size(); ++i)
+                for (const BoneRecord& sb : set.impl->bones)
+                    if (sb.name == bones[i].name) {
+                        k[i] = &sb;
+                        break;
+                    }
+            it = keys.emplace(&set, std::move(k)).first;
+        }
+        return it->second;
+    }
+};
+
+LayeredPoser::LayeredPoser() = default;
+LayeredPoser::~LayeredPoser() = default;
+
+std::unique_ptr<LayeredPoser> LayeredPoser::open(const Package& package, int index, const std::vector<AnimationSet>& sets) {
+    auto impl = std::make_unique<Impl>();
+    if (readMesh(package, index, impl->mesh) || impl->mesh.bones == 0)
+        return nullptr;
+    impl->mesh.verts.clear();
+    impl->mesh.verts.shrink_to_fit();
+    if (readBones(package, index, impl->data, impl->from, impl->bones))
+        return nullptr;
+    impl->base = size_t(package.exports()[size_t(index)].serialOffset);
+    impl->sets = &sets;
+    const BoneReader r = impl->reader();
+    const BonePoser poser{r, impl->bones};
+    int start = 0;
+    for (size_t c = 0; c < impl->bones[0].clipList.size(); ++c) {
+        impl->clipStart.push_back(start);
+        start += poser.clipFrames(c);
+    }
+    auto out = std::make_unique<LayeredPoser>();
+    out->impl = std::move(impl);
+    return out;
+}
+
+std::vector<bool> LayeredPoser::part(std::string_view bone, bool rest) const {
+    const std::vector<BoneRecord>& bones = impl->bones;
+    const std::string wanted = fs::toLower(bone);
+    std::vector<bool> in(bones.size(), false);
+    bool found = false;
+    // Parents come before their children.
+    for (size_t i = 0; i < bones.size(); ++i) {
+        const bool root = fs::toLower(bones[i].name) == wanted;
+        found = found || root;
+        in[i] = root || (bones[i].parent >= 0 && in[size_t(bones[i].parent)]);
+    }
+    if (!found)
+        return {};
+    if (rest)
+        in.flip();
+    return in;
+}
+
+bool LayeredPoser::pose(std::string_view base, float fraction, const std::vector<Layer>& layers,
+                        std::vector<Vec3f>& out) const {
+    const Impl& m = *impl;
+    const BoneReader r = m.reader();
+    // Each bone's placement in its parent at a time of an animation.
+    struct Source {
+        const AnimationSet* set = nullptr;
+        size_t clip = 0;
+        float time = 0; // seconds into the clip (its keys are 30 a second)
+    };
+    auto sourceOf = [&](std::string_view anim, float f, Source& s) {
+        int frames = 0;
+        if (!m.find(anim, s.set, s.clip, frames))
+            return false;
+        // Frame fraction * frames, as the frames were posed (30 a second).
+        s.time = std::min(std::max(0.0f, f) * float(frames), float(std::max(0, frames - 1))) / 30;
+        return true;
+    };
+    auto local = [&](const Source& s, size_t i) {
+        const BoneRecord& b = m.bones[i];
+        if (!s.set)
+            return BonePoser::localWith(b, r, b, s.clip, s.time);
+        const BoneRecord* k = m.keysOf(*s.set)[i];
+        return k ? BonePoser::localWith(b, s.set->impl->reader(), *k, s.clip, s.time) : b.placement;
+    };
+    Source under;
+    if (!sourceOf(base, fraction, under))
+        return false;
+    std::vector<Source> over(layers.size());
+    for (size_t l = 0; l < layers.size(); ++l)
+        if (!sourceOf(layers[l].anim, layers[l].fraction, over[l]))
+            return false;
+    const auto frame = size_t(m.mesh.frameVerts);
+    out.assign(frame, Vec3f{});
+    poseVertices(r, m.bones, frame, m.mesh.scale, m.mesh.origin, out.data(), [&](size_t i) {
+        Mat43 placed = local(under, i);
+        for (size_t l = 0; l < layers.size(); ++l) {
+            const Layer& layer = layers[l];
+            if (!layer.part || i >= layer.part->size() || !(*layer.part)[i] || layer.weight <= 0)
+                continue;
+            const Mat43 theirs = local(over[l], i);
+            const float w = std::min(1.0f, layer.weight);
+            for (size_t k = 0; k < placed.size(); ++k)
+                placed[k] += (theirs[k] - placed[k]) * w;
+        }
+        return placed;
+    });
+    return true;
+}
+
 } // namespace reluva::unreal

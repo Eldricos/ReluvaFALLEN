@@ -13,7 +13,8 @@ LevelPlay::LevelPlay(const PackageSet& packages, const Package& map)
       level_(std::make_unique<ScriptLevel>(*vm_, map)) {
     const char* names[FieldCount] = {"Location", "PrePivot", "Rotation", "DrawScale", "DrawType",
                                      "bHidden",  "Mesh",     "Skin",     "Texture",   "MultiSkins",
-                                     "AnimSequence", "AnimFrame", "AnimRate", "bAnimLoop", "Style", "ScaleGlow"};
+                                     "AnimSequence", "AnimFrame", "AnimRate", "bAnimLoop", "Style", "ScaleGlow",
+                                     "LastRenderTime"};
     for (size_t k = 0; k < FieldCount; ++k)
         names_[k] = vm_->name(names[k]);
 }
@@ -136,7 +137,23 @@ bool LevelPlay::look(VmObject* a, Look& out) {
         out.style = uint8_t(v->asInt());
     if (const Value* v = at(ScaleGlow))
         out.scaleGlow = v->asFloat();
+    out.layers.clear();
+    if (const auto* layers = level_->layersOf(a))
+        for (const auto& [group, l] : *layers)
+            if (l.weight > 0 && l.sequence)
+                out.layers.push_back({vm.nameText(l.sequence), l.bone ? vm.nameText(l.bone) : std::string(), l.rest,
+                                      l.frame, l.weight});
     return true;
+}
+
+void LevelPlay::drawn(VmObject* a) {
+    auto it = a ? slots_.find(a->cls) : slots_.end();
+    if (it == slots_.end())
+        return;
+    const int k = it->second[LastRenderTime];
+    if (k >= 0 && size_t(k) < a->values.size())
+        if (const Value* now = level_->levelInfo()->find(*vm_, "TimeSeconds"))
+            a->values[size_t(k)] = Value::floatValue(now->asFloat());
 }
 
 int LevelPlay::health() {

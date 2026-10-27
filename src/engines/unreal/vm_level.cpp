@@ -563,9 +563,8 @@ void registerEngineNatives(Vm& vm) {
         c.self->timerLoop = c.b(1);
     });
     reg("Actor.Sleep", [](NativeCall& c) { c.latentSeconds = std::max(0.0f, c.f(0)); });
-    // Latent functions that wait for animation or movement: done at once
-    // until those are simulated.
-    for (const char* done : {"Actor.FinishInterpolation", "Actor.C3DFinishAnim"})
+    // Latent functions that wait for what isn't simulated yet: done at once.
+    for (const char* done : {"Actor.FinishInterpolation"})
         reg(done, [](NativeCall& c) { c.latentSeconds = 0; });
     reg("Actor.SetRotation", [=](NativeCall& c) {
         if (Value* v = c.self ? c.self->find(c.vm, "Rotation") : nullptr)

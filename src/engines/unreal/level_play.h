@@ -18,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace reluva::unreal {
 
@@ -62,8 +63,18 @@ public:
         bool animLoop = false;
         uint8_t style = 1;
         float scaleGlow = 1;
+        // The Fallen's layered animations on parts of it (C3DPlayAnim).
+        struct Layer {
+            std::string anim, bone;
+            bool rest = false; // the part is all but the bone and those under it
+            float frame = 0, weight = 0;
+        };
+        std::vector<Layer> layers;
     };
     bool look(VmObject* actor, Look& out);
+    // It was drawn this frame (its LastRenderTime: The Fallen's heads and
+    // faces only move on pawns drawn in the last few seconds).
+    void drawn(VmObject* actor);
 
     Vm& vm() { return *vm_; }
     ScriptLevel& level() { return *level_; }
@@ -80,7 +91,7 @@ private:
     // once per class (looking properties up by name for every actor every
     // frame took as long as the scripts' ticks).
     enum Field { Location, PrePivot, Rotation, DrawScale, DrawType, Hidden, MeshField, Skin, Texture, MultiSkins,
-                 AnimSequence, AnimFrame, AnimRate, AnimLoop, Style, ScaleGlow, FieldCount };
+                 AnimSequence, AnimFrame, AnimRate, AnimLoop, Style, ScaleGlow, LastRenderTime, FieldCount };
     std::map<const VmClass*, std::array<int, FieldCount>> slots_;
     std::array<NameId, FieldCount> names_{};
 

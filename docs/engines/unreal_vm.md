@@ -374,10 +374,72 @@ On M01_KiraL2:
 - Jumping plays `Jump` (0.4 s), whose notification pushes her up about
   77 units. Its `AnimEnd` then starts the in-air loop, `LeapIdleU`.
 
-Not done: The Fallen's own layered skeletal animation (`C3DPlayAnim`,
-`C3DTweenSkinAnim`... 26 calls in its scripts) and `C3DFinishAnim`
-(returns at once); rates scaled by speed (a negative rate, which no
-script uses); and blending from the old pose while tweening.
+### The Fallen's layered animation
+
+The Fallen's meshes built on skeletons can play an animation on part of
+the skeleton over the actor's own. Its scripts do it through `C3D`
+natives:
+- **Melee:** a punch or weapon swing while running (`CTV_Human`, on
+  `UpperTorso`, from `Bip01_Spine`).
+- **Using things:** the player's activate gesture.
+- **Cut scenes:** the animators' upper or lower body.
+
+`vm_anim.cpp` keeps each actor's layers, one per group.
+- **Starting:** `C3DPlayAnim(Group, Sequence, Boned, Rate, TweenTime,
+  InheritBone, ...)` and `C3DLoopAnim` play the sequence on the bone
+  named and those under it. A group named lower (`LowerTorso`) is the
+  rest of the skeleton. It fades in over the tween, its weight rising
+  from 0 to 1.
+- **Holding a pose:** `C3DTweenAnim` fades to the first frame.
+- **Ticking:** a layer moves on at its rate, calls the sequence's
+  notifications, and at its end (and each loop's) sends
+  `C3DAnimEnd(Group)`. The scripts answer that with
+  `C3DTweenOutAnim(Group, 0.1)`, which fades it out, and then it goes.
+- **Waiting and asking:** `C3DFinishAnim(Group)` (latent) waits for that
+  end, and `C3DIsAnimating(Group)` says whether one's playing.
+
+Faces are channels:
+- `C3DPlaySkinAnim()` hands out a tag. `Pawn` asks for one each for
+  `Phonemes`, `Blink`, `EyeBrows` and `Mouth` if its mesh has them.
+- `C3DSetSkinAnim(Tag, Sequence, FrameTime, Weight)` and
+  `C3DTweenSkinAnim(Delay)` set a channel to a time in the sequence
+  (seconds: the scripts pass frame × 0.033), tweening there.
+- `C3DClearSkinAnim` and `C3DCopySkinAnimState` clear and copy them.
+- The engine sends `UpdateHeadAnimation` to each pawn with one of
+  The Fallen's meshes every tick. It sets the face's expression and
+  blinks, and where the head looks. It returns at once for a pawn not
+  drawn in the last four seconds (`LastRenderTime`, which the Maps
+  page's drawing sets).
+- `C3DUsesC3DMesh` says whether the mesh is in The Fallen's own layout
+  (its imported-model block), and `C3DIsBoned` whether it's built on
+  bones. `Pawn` sets its face's channels up only if the first is true.
+
+Drawing a layer (`LayeredPoser`, `mesh.cpp`): the frames posed when a
+mesh is read are one animation each, so an actor with a layer showing
+is posed at draw time instead.
+- Each bone takes its place in its parent from the actor's own
+  animation. Those of the layer's part are blended towards the layer's
+  animation's by its weight.
+- Keys come from the mesh's own clips, or the shared set's for an
+  animation past its own frames, as borrowing does.
+- The vertices are placed as reading does, and that frame is uploaded
+  for the frame drawn.
+- With no layer, it gives exactly the frames read: no difference on
+  Kira's idle, run, or the punch borrowed from the shared sets.
+
+On M01_KiraL2, firing while running throws `MelRunPnchL`. The frame
+drawn mid-punch has her legs exactly as in the run without it, and her
+upper body turned into the punch.
+
+Not done:
+- **Faces:** drawing them. Their sequences are vertex animations
+  ([mesh.md](../formats/unreal/mesh.md): `Blink`, `EyeBrows` and `Phonemes` are the clips with
+  vertex keys), still to be combined with the bones' pose.
+- **The heads' look-at:** `C3DApplyRotation`, `C3DSetIkTarget...` and
+  the IK.
+- **Layer options:** the layers' `ClearYaw`/`ClearPitch`/`ClearRoll`.
+- **Speed-scaled rates:** a negative rate, which no script uses.
+- **Tweens:** blending from the old pose (drawn at the first frame).
 
 ## Playing a level
 
