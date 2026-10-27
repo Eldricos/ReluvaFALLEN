@@ -61,9 +61,11 @@ struct TextureInfo {
 // Procedural textures that store no pixels get a still stand-in of their
 // size (see TextureInfo::standIn): Wet and Ice textures their source
 // texture, the others (Fire, Wave, Water) a gradient through their
-// palette, until their effects are worked out.
+// palette, until their effects are worked out. With `seeThroughZero`, a
+// palette texture's colour 0 is see-through as a masked one's is, whether
+// or not it's marked so (fonts aren't, and draw that way).
 Error decodeTexture(const PackageSet& packages, const Package& package, int exportIndex, image::Image& out,
-                    TextureInfo* info = nullptr);
+                    TextureInfo* info = nullptr, bool seeThroughZero = false);
 
 // Whether a class name is a texture's (Texture and its procedural
 // subclasses, which keep a first frame in their mipmaps).

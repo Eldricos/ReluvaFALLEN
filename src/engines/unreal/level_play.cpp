@@ -3,6 +3,8 @@
 
 #include "engines/unreal/level_play.h"
 
+#include "common/fs.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -50,26 +52,84 @@ void LevelPlay::press(const char* exec) {
         vm_->invoke(f, player_, {Value::floatValue(0)});
 }
 
-bool LevelPlay::pressKey(const std::string& key) {
-    std::string binding = iniSetting(packages_, "User.ini", "Engine.Input", key);
-    if (binding.empty())
-        binding = iniSetting(packages_, "DefUser.ini", "Engine.Input", key);
-    // "Jump | Axis aUp Speed=+300": the commands between the bars; those
-    // with arguments (and the axes and buttons, which are held) are left out.
+// A setting of the player's [Engine.Input]: User.ini's, else DefUser.ini's.
+std::string LevelPlay::inputSetting(const std::string& key) const {
+    std::string v = iniSetting(packages_, "User.ini", "Engine.Input", key);
+    return v.empty() ? iniSetting(packages_, "DefUser.ini", "Engine.Input", key) : v;
+}
+
+bool LevelPlay::pressKey(const std::string& key, bool down) {
+    // "Jump | Axis aUp Speed=+300": the commands between the bars. A name
+    // among the aliases (Aliases[n]=(Command="Button bShowObjectives",Alias=ShowObjectives))
+    // is its command. "Button bX" holds the player's input bX while the key
+    // is down; an exec function is called as the key goes down, with its
+    // argument if it has one ("SwitchWeapon 2"); axes are left out (the
+    // page's own controls steer).
+    if (aliases_.empty())
+        for (int k = 0; k < 64; ++k) {
+            const std::string a = inputSetting("Aliases[" + std::to_string(k) + "]");
+            const size_t c = a.find("Command=\""), n = a.find("Alias=");
+            if (c == std::string::npos || n == std::string::npos)
+                continue;
+            const size_t cEnd = a.find('"', c + 9);
+            std::string alias = a.substr(n + 6);
+            alias = alias.substr(0, alias.find_first_of(",)"));
+            if (cEnd != std::string::npos)
+                aliases_[fs::toLower(alias)] = a.substr(c + 9, cEnd - c - 9);
+        }
+    std::vector<std::string> commands;
+    auto split = [&](const std::string& binding, auto& self, int depth) -> void {
+        size_t at = 0;
+        while (at <= binding.size()) {
+            size_t end = binding.find('|', at);
+            if (end == std::string::npos)
+                end = binding.size();
+            std::string command = binding.substr(at, end - at);
+            at = end + 1;
+            command.erase(0, command.find_first_not_of(' '));
+            command.erase(command.find_last_not_of(' ') + 1);
+            if (command.empty())
+                continue;
+            auto alias = aliases_.find(fs::toLower(command));
+            if (alias != aliases_.end() && depth < 4)
+                self(alias->second, self, depth + 1);
+            else
+                commands.push_back(command);
+        }
+    };
+    split(inputSetting(key), split, 0);
     bool any = false;
-    size_t at = 0;
-    while (at <= binding.size()) {
-        size_t end = binding.find('|', at);
-        if (end == std::string::npos)
-            end = binding.size();
-        std::string command = binding.substr(at, end - at);
-        at = end + 1;
-        command.erase(0, command.find_first_not_of(' '));
-        command.erase(command.find_last_not_of(' ') + 1);
-        if (command.empty() || command.find(' ') != std::string::npos)
+    for (const std::string& command : commands) {
+        const size_t space = command.find(' ');
+        const std::string verb = command.substr(0, space);
+        const std::string rest = space == std::string::npos ? std::string() : command.substr(space + 1);
+        if (fs::toLower(verb) == "axis")
             continue;
-        press(command.c_str());
         any = true;
+        if (fs::toLower(verb) == "button") {
+            if (player_ && !player_->deleted)
+                if (Value* v = player_->find(*vm_, rest.substr(0, rest.find(' '))))
+                    v->i = down ? 1 : 0;
+            continue;
+        }
+        if (!down || !player_ || player_->deleted)
+            continue;
+        VmFunction* f = vm_->findFunction(player_, vm_->name(verb));
+        if (!f)
+            continue;
+        std::vector<Value> args;
+        if (!rest.empty() && !f->params.empty()) {
+            const VmProperty* p = f->params[0];
+            switch (p->type) {
+            case VType::Byte:
+            case VType::Int: args.push_back(Value::intValue(std::atoi(rest.c_str()))); break;
+            case VType::Float: args.push_back(Value::floatValue(std::strtof(rest.c_str(), nullptr))); break;
+            case VType::Name: args.push_back(Value::nameValue(vm_->name(rest))); break;
+            case VType::String: args.push_back(Value::stringValue(rest)); break;
+            default: break;
+            }
+        }
+        vm_->invoke(f, player_, args);
     }
     return any;
 }

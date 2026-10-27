@@ -563,6 +563,7 @@ void registerEngineNatives(Vm& vm) {
     registerPathNatives(vm);
     registerDialogNatives(vm);
     registerDocumentNatives(vm);
+    registerCanvasNatives(vm);
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     auto B = [](bool v) { return Value::boolValue(v); };
 

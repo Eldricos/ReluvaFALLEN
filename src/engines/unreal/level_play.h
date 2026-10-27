@@ -37,10 +37,10 @@ public:
     ScriptLevel::Controls& controls() { return level_->controls; }
     // A key bound to an exec function pressed: the player's Jump, Fire...
     void press(const char* exec);
-    // A key pressed ("2"), as the player's .ini binds it ([Engine.Input]
-    // in User.ini, else DefUser.ini: "2=Rifle"): the exec functions it
-    // names. False if it's bound to none.
-    bool pressKey(const std::string& key);
+    // A key pressed or let go ("2", "F1"), as the player's .ini binds it
+    // ([Engine.Input] in User.ini, else DefUser.ini: "2=Rifle"): the exec
+    // functions it names, the buttons it holds. False if it's bound to none.
+    bool pressKey(const std::string& key, bool down = true);
 
     // Where the camera is, as the game puts it each frame
     // (PlayerCalcView): behind the player, or a cut scene's camera.
@@ -100,6 +100,8 @@ public:
 
 private:
     ObjectRef refOf(const Value* v) const;
+    std::string inputSetting(const std::string& key) const;
+    std::map<std::string, std::string> aliases_; // the input aliases, by name (lower case)
     // Where each property look() reads is in a class's values, found
     // once per class (looking properties up by name for every actor every
     // frame took as long as the scripts' ticks).

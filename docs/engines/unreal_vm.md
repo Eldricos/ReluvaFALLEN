@@ -4,8 +4,8 @@ Status: **runs The Fallen's levels with the player in them**: the
 Maps page plays a level (Enter), its scripts live, the player moved by
 the keyboard and mouse, seen from the game's own camera, the AI finding
 its way along the level's paths and the characters' lines shown as
-they're said. It isn't the game yet: nothing makes a sound, and the HUD
-and menus aren't drawn. Every class of the game loads (`vm.cpp`), every default
+they're said, and its own HUD drawn over it. It isn't the game yet:
+nothing makes a sound, and the menus aren't drawn. Every class of the game loads (`vm.cpp`), every default
 property converts to its type, and all 74 maps start: their actors made,
 the game type spawned, the start-up events sent, the player logged in as
 the level's character, then twenty seconds of ticks, with no crash. The
@@ -44,6 +44,22 @@ and floats 4, names and objects compact indices, strings as strings,
 bools 1 byte); every one of The Fallen's reads to its end. Objects' own
 built-in properties (`Outer`, `Name`, `Class`) are set when they're made:
 scripts read them (CTVE_DllObject checks its `Outer` is an actor).
+
+Objects the VM doesn't run are given their own stored properties over
+their class's defaults when they're first met: textures always, anything
+else under 64 KB (meshes and sounds aren't read whole for it). The
+Fallen's HUD textures keep where they go on the screen in theirs (below).
+
+Classes' `config` properties take the player's and the game's settings
+from the `.ini` files as the class loads (`Vm::applyConfig`):
+- a `config` property from the class's own section (`[Engine.HUD]`);
+- a `globalconfig` one from the section of the class that declares it;
+- User.ini first, then DefUser.ini, then the game's own `.ini`;
+- an array's elements as `Key[n]`; structs aren't read.
+
+So the HUD shows dialogue (`bDisplayDialog=True`) but not cut scenes'
+subtitles (`bDisplaySubtitles=False`), as DefUser.ini has it, and the
+player's mouse sensitivity is 3.
 
 An object as a string (`string(Level)`, `$`) is its path, as UnrealScript
 gives it:
@@ -391,6 +407,84 @@ Not done: the voices aren't played (nothing makes a sound yet);
 RETURNLINE (the communicator's menus) and the CAMERA column; the AI's
 own lines.
 
+### The HUD
+
+The engine hands the player a Canvas object each frame, before the world
+is drawn (`PreRender`) and after (`PostRender`), and the player hands it
+to its HUD. `vm_canvas.cpp` does the same: the Maps page asks for it once
+the world's drawn (`ScriptLevel::renderHud`). The canvas is made ready
+first: `Reset`, its size and clip the screen's, its origin and pen at 0.
+What the Canvas natives draw is kept as a list for the page:
+- **tiles:** a texture's rectangle (in texels) at a rectangle of the
+  screen (in pixels), with a colour (`DrawColor`) and a style (`Style`:
+  normal, masked, translucent, modulated);
+- **actors:** drawn in the world's view over what's there.
+
+The natives:
+- **`DrawTile(Tex, XL, YL, U, V, UL, VL)`** at the pen (`OrgX + CurX`,
+  `OrgY + CurY`); the pen moves on by its width. `DrawTileClipped` is cut
+  to the clip (`OrgX` to `OrgX + ClipX`...), its texture rectangle cut
+  with it. Canvas's own `DrawIcon`, `DrawRect` and `DrawPattern` are
+  script, on top of these.
+- **`DrawText(Text, CR)`** draws at the pen in the canvas's font
+  ([font.md](../formats/unreal/font.md)), a tile a letter. Each letter's
+  width plus `SpaceX` moves it on, and the tallest letter plus `SpaceY`
+  makes a line. The text wraps between words at the clip's right edge,
+  each line centred in the clip with `bCenter`. The pen moves past it
+  (with CR, to the next line's start), and `CurYL` keeps the line's height.
+- **`DrawTextClipped`** draws one line, cut to the clip, with '&' (a
+  menu's hot key) left out if asked. `DrawScaledText` scales the letters.
+- **`StrLen`** measures text wrapped as `DrawText` would; `TextSize` on
+  one line.
+- **`DrawActor`, `DrawClippedActor`** draw the actor where it is, in the
+  world's view, the depth cleared first if asked; the page draws it,
+  hidden or not. The HUD uses them for the tricorder's dots and markers,
+  beacons and the beam-down cloud. The rectangle of `DrawClippedActor`
+  isn't kept to yet.
+- **`GetScreenCoords(Location, X, Y, Scale)`** is where a place falls on
+  the screen in the frame's view; false behind it.
+- `DrawPortal` and `SetRenderFrame` (another view drawn into part of the
+  screen) aren't drawn yet.
+
+The Fallen's HUD (`DS9_Hud`) is built from textures that draw themselves
+(`Texture.Draw(Canvas)`, script). Each HUD texture keeps where it goes in
+properties it borrows:
+- `Specular` and `Friction`: its place, in 800 × 600 units;
+- `PrimeCount`: the corner or edge that place is from;
+- `Alpha`: its style.
+
+That's why textures need their own stored properties (above): with the
+defaults, every piece of the HUD was off the screen.
+
+On the Maps page, while playing, the tiles are drawn over the world in
+screen pixels:
+- see-through texels stay so in every style, as letters are drawn masked
+  however they blend;
+- translucent tiles are added, modulated ones multiplied in.
+
+On M04_KiraL1 the HUD shows:
+- the medical panel bottom left: its meter and Kira's health (100) in the
+  HUD's number font;
+- the weapon panel bottom right: the phaser rifle's picture and its
+  ammunition (150);
+- F1, the communicator: the Starfleet badge and the crew list (O'Brien,
+  Dax, Bashir) with its selection marker.
+
+The keys:
+- **Passed to the game** while playing: F1 to F12 and the number keys,
+  as the game binds them, on press and release.
+- **Aliases** are followed: `ShowObjectives` is `Button bShowObjectives`.
+- **A `Button`** holds the player's input flag while the key is down.
+- **An exec function** is called as the key goes down, with its argument
+  if it has one (`SwitchWeapon 2`).
+
+With the game's HUD drawn, the page leaves the objectives and subtitles
+to it and puts its status line between the HUD's panels.
+
+Not done: `DrawPortal` (security cameras, the HUD's portraits), the HUD
+textures that animate (`FliTexture`'s FLC frames are drawn still),
+`DrawClippedActor`'s rectangle.
+
 ### Documents and objectives
 
 `vm_documents.cpp` reads The Fallen's other text files in `int`
@@ -425,9 +519,8 @@ The natives:
   (`LoadText`, a line), `IMAGE` (`DefineImage`), `Title` (`SetTitle`).
   An image's `Justify=` becomes the HUD's justification: it takes 2 as
   right and 3 as centred, anything else as left. Those events draw
-  through the HUD onto its canvas, which isn't drawn yet. They're called
-  (the Grigari report: 12 lines and an image), and they stop at the
-  HUD's missing canvas.
+  through the HUD onto its canvas (the Grigari report: 12 lines and an
+  image).
 
 The Maps page shows the level's title and its active objectives while
 playing.

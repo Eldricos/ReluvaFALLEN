@@ -180,8 +180,16 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
         out.z = mvp[2] * p[0] + mvp[6] * p[1] + mvp[10] * p[2] + mvp[14];
         out.w = mvp[3] * p[0] + mvp[7] * p[1] + mvp[11] * p[2] + mvp[15];
         const float* uv = call.texGen == gfx::TexGen::Uv2 ? v.uv2 : v.uv;
+        // Through the pre and post rows (the turbulence between them left out).
+        auto rows = [](const std::array<float, 3>& r0, const std::array<float, 3>& r1, float& u, float& w) {
+            const float nu = r0[0] * u + r0[1] * w + r0[2], nw = r1[0] * u + r1[1] * w + r1[2];
+            u = nu;
+            w = nw;
+        };
         out.u = uv[0];
         out.v = uv[1];
+        rows(call.preRow0, call.preRow1, out.u, out.v);
+        rows(call.postRow0, call.postRow1, out.u, out.v);
         std::array<float, 4> c = call.color;
         auto source = [&](gfx::ColorSource s, int k) {
             const float vc = float(v.color[k]) / 255.0f;

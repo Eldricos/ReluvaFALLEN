@@ -3,12 +3,15 @@
 
 #include "engines/unreal/vm.h"
 
+#include "engines/unreal/script.h"
+
 #include "common/fs.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 
 namespace reluva::unreal {
 
@@ -344,8 +347,106 @@ VmStruct* Vm::structAt(const Package& package, int exportIndex) {
             continue;
         c->defaults[size_t(at)] = valueOf(*prop, package, p);
     }
+    applyConfig(*c);
     classObject(c);
     return c;
+}
+
+// The settings the player's and the game's .ini files hold for a class's
+// config properties, over its defaults: a config property from the class's
+// own section ([Engine.HUD]), a globalconfig one from the section of the
+// class that declares it; User.ini first, then DefUser.ini, then the
+// game's own .ini (DS9.ini). An array's elements as Key[n]; structs aren't
+// read.
+void Vm::applyConfig(VmClass& c) {
+    if (!c.package)
+        return;
+    const std::string own = c.package->name() + "." + c.name;
+    for (const VmProperty* prop : c.properties) {
+        if (!(prop->flags & (propflag::Config | propflag::GlobalConfig)) || prop->type == VType::Struct)
+            continue;
+        std::string section = own;
+        if (prop->flags & propflag::GlobalConfig)
+            for (const VmClass* up = &c; up; up = up->parent())
+                if (std::find(up->properties.begin(), up->properties.end(), prop) != up->properties.end() && up->package)
+                    section = up->package->name() + "." + up->name;
+        for (int k = 0; k < prop->arrayDim; ++k) {
+            const std::string key = prop->arrayDim > 1 ? prop->name + "[" + std::to_string(k) + "]" : prop->name;
+            const std::string* text = configSetting(section, key);
+            if (!text)
+                continue;
+            Value& v = c.defaults[size_t(prop->slot + k)];
+            switch (prop->type) {
+            case VType::Bool: v = Value::boolValue(lower(*text) == "true" || *text == "1"); break;
+            case VType::Int: v = Value::intValue(std::atoi(text->c_str())); break;
+            case VType::Float: v = Value::floatValue(std::strtof(text->c_str(), nullptr)); break;
+            case VType::Name: v = Value::nameValue(name(*text)); break;
+            case VType::String: v = Value::stringValue(*text); break;
+            case VType::Byte: {
+                int b = std::atoi(text->c_str());
+                if (prop->enumNames)
+                    for (size_t e = 0; e < prop->enumNames->size(); ++e)
+                        if (lower(nameText((*prop->enumNames)[e])) == lower(*text))
+                            b = int(e);
+                v = Value::byteValue(b);
+                break;
+            }
+            case VType::Object:
+                if (VmObject* o = findObject(*text))
+                    v = Value::objectValue(o);
+                break;
+            default: break;
+            }
+        }
+    }
+}
+
+// A setting from the .ini files, in the order applyConfig says; each file
+// read once.
+const std::string* Vm::configSetting(const std::string& section, const std::string& key) {
+    const std::filesystem::path system = packages_.iniFile().parent_path();
+    for (const std::filesystem::path& file :
+         {system / "User.ini", system / "DefUser.ini", packages_.iniFile()}) {
+        const std::string fileKey = file.string();
+        auto it = iniFiles_.find(fileKey);
+        if (it == iniFiles_.end()) {
+            IniFile parsed;
+            FILE* f = std::fopen(fileKey.c_str(), "rb");
+            if (f) {
+                std::string text;
+                char buf[4096];
+                for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;)
+                    text.append(buf, n);
+                std::fclose(f);
+                std::map<std::string, std::string>* current = nullptr;
+                size_t at = 0;
+                while (at < text.size()) {
+                    size_t end = text.find('\n', at);
+                    if (end == std::string::npos)
+                        end = text.size();
+                    std::string line = text.substr(at, end - at);
+                    at = end + 1;
+                    while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+                        line.pop_back();
+                    if (line.size() >= 2 && line.front() == '[' && line.back() == ']') {
+                        current = &parsed[lower(line.substr(1, line.size() - 2))];
+                        continue;
+                    }
+                    const size_t eq = line.find('=');
+                    if (current && eq != std::string::npos)
+                        current->emplace(lower(line.substr(0, eq)), line.substr(eq + 1));
+                }
+            }
+            it = iniFiles_.emplace(fileKey, std::move(parsed)).first;
+        }
+        auto sec = it->second.find(lower(section));
+        if (sec == it->second.end())
+            continue;
+        auto value = sec->second.find(lower(key));
+        if (value != sec->second.end())
+            return &value->second;
+    }
+    return nullptr;
 }
 
 void Vm::loadStruct(VmStruct& s, const ScriptObject& so) {
@@ -580,6 +681,21 @@ VmObject* Vm::objectAt(const Package& package, int32_t ref) {
     VmObject* out = o.get();
     objects_.push_back(std::move(o));
     exportObjects_[key] = out;
+    // Its own properties over the defaults: scripts read them (The Fallen's
+    // HUD textures keep where they go on the screen in theirs). Textures
+    // and anything small; meshes and sounds aren't read whole for it.
+    bool texture = false;
+    for (const VmClass* c = cls; c && !texture; c = c->parent())
+        texture = lower(c->name) == "texture";
+    if (cls && (texture || e.serialSize < 65536)) {
+        std::vector<uint8_t> data;
+        PropertyList props;
+        if (!r.package->readExport(r.exportIndex, data)) {
+            Reader rd(data, size_t(e.serialOffset));
+            if (!beginObject(*r.package, r.exportIndex, rd, props))
+                applyProperties(out, *r.package, props);
+        }
+    }
     return out;
 }
 

@@ -4759,6 +4759,8 @@ int cmdUePlay(int argc, char** argv) {
         if (k == "down") return reluva::key::Down;
         if (k == "space") return reluva::key::Space;
         if (k == "enter") return reluva::key::Return;
+        if (k.size() >= 2 && (k[0] == 'f' || k[0] == 'F') && std::isdigit(uint8_t(k[1])))
+            return reluva::key::F1 + uint32_t(std::atoi(k.c_str() + 1) - 1);
         return k.empty() ? 0 : uint32_t(k[0]);
     };
     auto send = [&](reluva::EventType type, uint32_t key) {

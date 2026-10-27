@@ -323,6 +323,10 @@ private:
     void drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right);
     void drawPlayHud();
     void drawSubtitles(int bottom);
+    void drawGameHud(const gfx::Vec3& forward, const gfx::Vec3& right);
+    void drawLiveActor(VmObject* actor, std::vector<SpriteDraw>& sprites, bool evenHidden);
+    std::pair<gfx::TextureId, std::array<int, 2>> hudTexture(const ObjectRef& texture, bool seeThrough);
+    std::map<std::pair<const Package*, int>, std::pair<gfx::TextureId, std::array<int, 2>>> seeThroughTextures_;
     // A mesh for live actors (by the mesh object), with the animation
     // they play borrowed from the shared sets if it's not its own: an
     // index into meshes_ / gpuMeshes_, -1 if it doesn't read.

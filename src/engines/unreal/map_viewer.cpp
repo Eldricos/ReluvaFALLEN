@@ -137,6 +137,7 @@ void MapViewer::unload() {
     changingLights_.clear();
     lightmapPages_.clear();
     textureCache_.clear();
+    seeThroughTextures_.clear();
     lights_ = {};
     stopPlay();
     posers_.clear();
@@ -501,8 +502,9 @@ void MapViewer::load(int index) {
             d.color[k] = light[k] * a.scaleGlow * kExposure;
         sprites_.push_back(d);
     }
-    if (!sprites_.empty()) {
-        // A square of side 1 across X (right) and Y (up), its texture upright.
+    {
+        // A square of side 1 across X (right) and Y (up), its texture
+        // upright: the sprites', and the HUD's tiles when playing.
         std::vector<gfx::Vertex> quad(4);
         const float corners[4][2] = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
         for (size_t k = 0; k < 4; ++k) {
@@ -666,6 +668,8 @@ void MapViewer::handleEvent(const Event& ev) {
         }
     };
     if (ev.type == EventType::KeyUp) {
+        if (play_ && !freeCam_ && ev.key >= key::F1 && ev.key < key::F1 + 12)
+            play_->pressKey("F" + std::to_string(ev.key - key::F1 + 1), false);
         hold(ev.key, false);
     } else if (ev.type == EventType::KeyDown) {
         if (play_ && !ev.repeat && ev.key == 'v') { // the camera let loose, or back to the game's
@@ -681,6 +685,8 @@ void MapViewer::handleEvent(const Event& ev) {
                 play_->press("Fire");
             else if (ev.key >= '0' && ev.key <= '9') // the weapons, as the game binds them
                 play_->pressKey(std::string(1, char(ev.key)));
+            else if (ev.key >= key::F1 && ev.key < key::F1 + 12) // the communicator, the tricorder...
+                play_->pressKey("F" + std::to_string(ev.key - key::F1 + 1));
         }
         if (hold(ev.key, true) || ev.repeat)
             return;
@@ -863,10 +869,105 @@ void MapViewer::update(uint64_t nowMs) {
         }
         drawSprites(sprites_, forward, right);
     }
+    if (play_ && !freeCam_)
+        drawGameHud(forward, right);
     drawOverlay(nowMs);
     if (play_)
         drawPlayHud();
     renderer_->endFrame(&overlay_);
+}
+
+// The game's own HUD, over the world: the player's PreRender and
+// PostRender with the canvas (ScriptLevel::renderHud), then the actors and
+// tiles they drew, in screen pixels: cut out where see-through, translucent ones added,
+// modulated ones multiplied in.
+void MapViewer::drawGameHud(const gfx::Vec3& forward, const gfx::Vec3& right) {
+    const int w = renderer_->width(), h = renderer_->height();
+    ScriptLevel::HudView v;
+    v.location = {view_.location[0], view_.location[1], view_.location[2]};
+    v.rotation = {view_.rotation.pitch, view_.rotation.yaw, view_.rotation.roll};
+    v.fov = view_.fov;
+    v.width = w;
+    v.height = h;
+    play_->level().renderHud(v);
+    const ScriptLevel::Hud& hud = play_->level().hud();
+    // The actors it drew (the tricorder's markers, beacons), in the world's
+    // view over what's there, the depth cleared first if it asked.
+    std::vector<SpriteDraw> sprites;
+    for (const ScriptLevel::HudActor& a : hud.actors) {
+        if (a.clearZ)
+            renderer_->clearDepth();
+        drawLiveActor(a.actor, sprites, true);
+    }
+    drawSprites(sprites, forward, right);
+    if (hud.tiles.empty())
+        return;
+    gfx::Mat4 pixels = gfx::identity();
+    pixels[0] = 2.0f / float(w);
+    pixels[5] = -2.0f / float(h);
+    pixels[10] = 0;
+    pixels[12] = -1;
+    pixels[13] = 1;
+    renderer_->setView(pixels, gfx::Vec3{0, 0, 0});
+    renderer_->clearDepth();
+    for (const ScriptLevel::HudTile& t : hud.tiles) {
+        const auto [id, size] = hudTexture(t.texture, t.seeThrough);
+        if (!id)
+            continue;
+        gfx::DrawCall call;
+        call.mesh = spriteQuad_;
+        call.indexCount = 6;
+        call.model = gfx::identity();
+        // The quad's corners are -0.5..0.5 with v down from its top.
+        call.model[0] = t.w;
+        call.model[5] = -t.h;
+        call.model[12] = t.x + t.w / 2;
+        call.model[13] = t.y + t.h / 2;
+        call.texture = id;
+        const float tw = float(size[0]), th = float(size[1]);
+        call.preRow0 = {t.ul / tw, 0, t.u / tw};
+        call.preRow1 = {0, t.vl / th, t.v / th};
+        call.color = {float(t.color[0]) / 255, float(t.color[1]) / 255, float(t.color[2]) / 255, 1};
+        call.state.cull = gfx::Cull::None;
+        call.state.depthTest = false;
+        call.state.depthWrite = false;
+        // See-through texels stay so in every style (letters are drawn
+        // masked however they blend).
+        call.state.alphaTest = gfx::AlphaTest::Ge128;
+        if (t.style == kStyleTranslucent) {
+            call.state.src = call.state.dst = gfx::Blend::One;
+        } else if (t.style == kStyleModulated) {
+            call.color = {1, 1, 1, 1};
+            call.state.src = gfx::Blend::DstColor;
+            call.state.dst = gfx::Blend::SrcColor;
+        }
+        renderer_->draw(call);
+    }
+}
+
+// A texture for the HUD, with its colour 0 see-through if asked (letters,
+// masked tiles), kept by both.
+std::pair<gfx::TextureId, std::array<int, 2>> MapViewer::hudTexture(const ObjectRef& tex, bool seeThrough) {
+    if (!seeThrough)
+        return textureOf(tex);
+    auto it = seeThroughTextures_.find({tex.package, tex.exportIndex});
+    if (it == seeThroughTextures_.end()) {
+        image::Image img;
+        gfx::TextureId id = 0;
+        gfx::TextureParams params;
+        params.nearest = true;
+        params.mipmaps = false;
+        if (!decodeTexture(ctx_.packages, *tex.package, tex.exportIndex, img, nullptr, true) &&
+            !renderer_->createTexture(img.w, img.h, img.rgba.data(), params, id))
+            textures_.push_back(id);
+        else
+            id = 0;
+        it = seeThroughTextures_
+                 .emplace(std::make_pair(tex.package, tex.exportIndex),
+                          std::make_pair(id, std::array<int, 2>{std::max(1, img.w), std::max(1, img.h)}))
+                 .first;
+    }
+    return it->second;
 }
 
 // The sprites, facing the camera: those drawn solid first, then the
@@ -1090,7 +1191,7 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
     lines.push_back(!play_     ? "Enter plays the level"
                     : freeCam_ ? "Playing, the camera loose (V back to the game's): W/S/A/D, Space/C and drag fly it"
                                : "Playing (Enter stops): W/S move, A/D step aside, arrows turn and look, drag to look, Space "
-                                 "jumps, Ctrl or F fires, 0-9 pick weapons, V lets the camera loose");
+                                 "jumps, Ctrl or F fires, 0-9 pick weapons, F1-F12 as the game binds them, V lets the camera loose");
     char where[200];
     // Shown in Unreal's own coordinates.
     std::snprintf(where, sizeof where, "at %.0f %.0f %.0f, %.0f fps; lightmaps %s, brightness x%.2f, display gamma %.2f",
@@ -1298,61 +1399,65 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
         if (g.mesh)
             renderer_->destroyMesh(g.mesh);
     posedMeshes_.clear();
-    constexpr int kDrawSprite = 1, kDrawMesh = 2, kDrawVerticalSprite = 5, kDrawSpriteAnimOnce = 7;
     std::vector<SpriteDraw> sprites;
-    LevelPlay::Look look;
-    for (VmObject* a : play_->level().actors()) {
-        look = {};
-        if (!play_->look(a, look) || look.hidden)
-            continue;
-        if (look.drawType == kDrawMesh && look.mesh) {
-            // About to be drawn: its scripts get their say first, and it's
-            // drawn as they leave it.
-            play_->preRender(a);
-            look = {};
-            if (!play_->look(a, look) || look.hidden || look.drawType != kDrawMesh || !look.mesh)
-                continue;
-            const int at = liveMesh(look.mesh, look.animSequence);
-            if (at < 0)
-                continue;
-            const Mesh& mesh = meshes_[size_t(at)];
-            const MeshAnimSeq* anim = mesh.findAnim(look.animSequence);
-            std::vector<gfx::TextureId> skins;
-            for (size_t k = 0; k < std::max<size_t>(mesh.textures.size(), 8); ++k) {
-                ObjectRef tex = k < look.multiSkins.size() ? look.multiSkins[k] : ObjectRef{};
-                if (!tex)
-                    tex = look.skin;
-                if (!tex && k < mesh.textures.size())
-                    tex = ctx_.packages.resolve(*look.mesh.package, mesh.textures[k]);
-                skins.push_back(textured_ ? textureOf(tex).first : 0);
-            }
-            play_->drawn(a);
-            const gfx::Mat4 placement = meshPlacement(look.location, look.rotation, look.drawScale, look.prePivot);
-            const MeshLight light = meshLightAt(look.location);
-            if ((look.layers.empty() && look.adjust.empty()) || !mesh.bones ||
-                !drawLayered(look, at, placement, skins, light))
-                drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, poseAtFraction(mesh, anim, look.animFrame, look.animLoop),
-                         skins, light, kExposure, look.style);
-        } else if ((look.drawType == kDrawSprite || look.drawType == kDrawVerticalSprite ||
-                    look.drawType == kDrawSpriteAnimOnce) && look.texture) {
-            const auto [texture, size] = textureOf(look.texture);
-            if (!texture)
-                continue;
-            play_->drawn(a);
-            SpriteDraw d;
-            d.texture = texture;
-            d.at = toWorld(Vec3f{look.location[0] - look.prePivot[0], look.location[1] - look.prePivot[1],
-                                 look.location[2] - look.prePivot[2]});
-            d.width = float(size[0]) * look.drawScale;
-            d.height = float(size[1]) * look.drawScale;
-            d.style = look.style;
-            d.vertical = look.drawType == kDrawVerticalSprite;
-            const float glow = look.scaleGlow * kExposure;
-            d.color = {glow, glow, glow};
-            sprites.push_back(d);
-        }
-    }
+    for (VmObject* a : play_->level().actors())
+        drawLiveActor(a, sprites, false);
     drawSprites(sprites, forward, right);
+}
+
+// One of the level's actors, as it looks now: a mesh drawn, a sprite kept
+// for drawSprites. Hidden ones only if `evenHidden` (the HUD draws some).
+void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, bool evenHidden) {
+    constexpr int kDrawSprite = 1, kDrawMesh = 2, kDrawVerticalSprite = 5, kDrawSpriteAnimOnce = 7;
+    LevelPlay::Look look;
+    if (!play_->look(a, look) || (look.hidden && !evenHidden))
+        return;
+    if (look.drawType == kDrawMesh && look.mesh) {
+        // About to be drawn: its scripts get their say first, and it's
+        // drawn as they leave it.
+        play_->preRender(a);
+        look = {};
+        if (!play_->look(a, look) || (look.hidden && !evenHidden) || look.drawType != kDrawMesh || !look.mesh)
+            return;
+        const int at = liveMesh(look.mesh, look.animSequence);
+        if (at < 0)
+            return;
+        const Mesh& mesh = meshes_[size_t(at)];
+        const MeshAnimSeq* anim = mesh.findAnim(look.animSequence);
+        std::vector<gfx::TextureId> skins;
+        for (size_t k = 0; k < std::max<size_t>(mesh.textures.size(), 8); ++k) {
+            ObjectRef tex = k < look.multiSkins.size() ? look.multiSkins[k] : ObjectRef{};
+            if (!tex)
+                tex = look.skin;
+            if (!tex && k < mesh.textures.size())
+                tex = ctx_.packages.resolve(*look.mesh.package, mesh.textures[k]);
+            skins.push_back(textured_ ? textureOf(tex).first : 0);
+        }
+        play_->drawn(a);
+        const gfx::Mat4 placement = meshPlacement(look.location, look.rotation, look.drawScale, look.prePivot);
+        const MeshLight light = meshLightAt(look.location);
+        if ((look.layers.empty() && look.adjust.empty()) || !mesh.bones ||
+            !drawLayered(look, at, placement, skins, light))
+            drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, poseAtFraction(mesh, anim, look.animFrame, look.animLoop),
+                     skins, light, kExposure, look.style);
+    } else if ((look.drawType == kDrawSprite || look.drawType == kDrawVerticalSprite ||
+                look.drawType == kDrawSpriteAnimOnce) && look.texture) {
+        const auto [texture, size] = textureOf(look.texture);
+        if (!texture)
+            return;
+        play_->drawn(a);
+        SpriteDraw d;
+        d.texture = texture;
+        d.at = toWorld(Vec3f{look.location[0] - look.prePivot[0], look.location[1] - look.prePivot[1],
+                             look.location[2] - look.prePivot[2]});
+        d.width = float(size[0]) * look.drawScale;
+        d.height = float(size[1]) * look.drawScale;
+        d.style = look.style;
+        d.vertical = look.drawType == kDrawVerticalSprite;
+        const float glow = look.scaleGlow * kExposure;
+        d.color = {glow, glow, glow};
+        sprites.push_back(d);
+    }
 }
 
 // A mesh with layered animations playing on parts of it, or its bones bent
@@ -1413,12 +1518,18 @@ void MapViewer::drawPlayHud() {
                   play_->behind() > 1 ? ("  " + std::to_string(int(play_->behind())) + " s behind real time").c_str() : "");
     const int y = kFrameH - font::kLineHeight - 4;
     const int width = std::min(kFrameW, int(font::length(line)) * font::kAdvance + 8);
+    // With the game's own HUD drawn, between its panels at the bottom
+    // corners, and its objectives and subtitles are its own.
+    const bool gameHud = !play_->level().hud().tiles.empty();
+    const int left = gameHud ? std::max(0, (kFrameW - width) / 2) : 0;
     for (int yy = y - 2; yy < kFrameH; ++yy) {
         uint8_t* p = overlay_.row(yy);
-        for (int x = 0; x < width; ++x)
+        for (int x = left; x < std::min(kFrameW, left + width); ++x)
             p[x * 4 + 3] = std::max<uint8_t>(p[x * 4 + 3], 150);
     }
-    font::drawText(overlay_, 4, y, line, Color{230, 230, 230});
+    font::drawText(overlay_, left + 4, y, line, Color{230, 230, 230});
+    if (gameHud)
+        return;
     // The objectives active now, above it.
     int above = y - 2;
     const std::vector<std::string> objectives = play_->activeObjectives();

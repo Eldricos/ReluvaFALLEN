@@ -13,6 +13,7 @@
 #include "engines/unreal/actors.h"
 #include "engines/unreal/collision.h"
 #include "engines/unreal/dialog_table.h"
+#include "engines/unreal/font.h"
 #include "engines/unreal/mesh.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/vm.h"
@@ -163,6 +164,39 @@ public:
         std::string speaker, text, type;
     };
     std::vector<Subtitle> subtitles() const;
+    // The HUD (vm_canvas.cpp): each frame, the canvas handed to the
+    // player's PreRender and PostRender, and what its natives drew: tiles
+    // (a texture's rectangle, in texels, drawn at a rectangle of the
+    // screen, in pixels; letters are tiles from their font's pages) and
+    // actors drawn over the world (a held weapon, a talker's picture).
+    struct HudView {
+        std::array<float, 3> location{};
+        std::array<int32_t, 3> rotation{};
+        float fov = 90;
+        int width = 640, height = 480;
+    };
+    struct HudTile {
+        ObjectRef texture;
+        float x = 0, y = 0, w = 0, h = 0, u = 0, v = 0, ul = 0, vl = 0;
+        std::array<uint8_t, 3> color{255, 255, 255};
+        uint8_t style = 1;       // Actor's ERenderStyle: 1 normal, 2 masked, 3 translucent, 4 modulated
+        bool seeThrough = false; // its texture's colour 0 see-through (letters, masked tiles)
+    };
+    struct HudActor {
+        VmObject* actor = nullptr;
+        bool clearZ = false;
+        int x = 0, y = 0, xb = 0, yb = 0; // DrawClippedActor's rectangle; 0s: the whole screen
+    };
+    struct Hud {
+        std::vector<HudTile> tiles;
+        std::vector<HudActor> actors;
+    };
+    void renderHud(const HudView& view);
+    Hud& hud() { return hud_; }
+    const HudView& hudView() const { return hudView_; }
+    const Font* fontOf(VmObject* font);
+    VmObject* canvas();
+
     // The game's text files (vm_documents.cpp): the int folder, and a
     // section of one of its .int files, its keys and values in order
     // (none if there's no such file or section).
@@ -386,6 +420,10 @@ private:
     };
     std::map<VmObject*, Bends> bends_;
     void loadPaths();
+    Hud hud_;
+    HudView hudView_;
+    VmObject* canvas_ = nullptr;
+    std::map<std::pair<const Package*, int>, std::shared_ptr<Font>> fonts_;
     using IntFile = std::map<std::string, std::vector<std::pair<std::string, std::string>>>; // by section, lower case
     std::map<std::string, IntFile> intFiles_; // by file name, lower case
     struct DialogThread {
@@ -470,6 +508,8 @@ void registerPathNatives(Vm& vm);
 void registerDialogNatives(Vm& vm);
 // The Fallen's documents and objectives (vm_documents.cpp).
 void registerDocumentNatives(Vm& vm);
+// The HUD's canvas (vm_canvas.cpp).
+void registerCanvasNatives(Vm& vm);
 // A map's reach list as stored (object references, not yet actors).
 struct RawReachSpec {
     int distance = 0, start = 0, end = 0, radius = 0, height = 0, flags = 0;

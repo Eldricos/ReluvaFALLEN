@@ -97,7 +97,7 @@ Error proceduralStandIn(const PackageSet& packages, const Package& package, cons
 
 } // namespace
 
-static Error decodeAt(const PackageSet& packages, const Package& package, int index, image::Image& out,
+static Error decodeAt(const PackageSet& packages, const Package& package, int index, image::Image& out, bool seeThroughZero,
                       TextureInfo* info, int depth) {
     std::vector<uint8_t> data;
     if (Error err = package.readExport(index, data))
@@ -215,7 +215,7 @@ static Error decodeAt(const PackageSet& packages, const Package& package, int in
             std::copy_n(palette.rgba.data() + size_t(c) * 4, 3, p);
             // The palettes' alpha isn't used for P8 textures; masked ones
             // see through colour 0.
-            p[3] = (ti.masked || (ti.polyFlags & polyflag::Masked)) && c == 0 ? 0 : 255;
+            p[3] = (seeThroughZero || ti.masked || (ti.polyFlags & polyflag::Masked)) && c == 0 ? 0 : 255;
         }
         return Error::success();
     }
@@ -261,7 +261,7 @@ Error proceduralStandIn(const PackageSet& packages, const Package& package, cons
         const int32_t ref = props.object(name);
         const ObjectRef src = packages.resolve(package, ref);
         image::Image img;
-        if (!src || depth > 4 || decodeAt(packages, *src.package, src.exportIndex, img, nullptr, depth + 1))
+        if (!src || depth > 4 || decodeAt(packages, *src.package, src.exportIndex, img, false, nullptr, depth + 1))
             continue;
         for (int y = 0; y < h; ++y)
             for (int x = 0; x < w; ++x)
@@ -291,8 +291,8 @@ Error proceduralStandIn(const PackageSet& packages, const Package& package, cons
 } // namespace
 
 Error decodeTexture(const PackageSet& packages, const Package& package, int index, image::Image& out,
-                    TextureInfo* info) {
-    return decodeAt(packages, package, index, out, info, 0);
+                    TextureInfo* info, bool seeThroughZero) {
+    return decodeAt(packages, package, index, out, seeThroughZero, info, 0);
 }
 
 } // namespace reluva::unreal

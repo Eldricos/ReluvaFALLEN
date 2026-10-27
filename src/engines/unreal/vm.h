@@ -241,6 +241,9 @@ public:
     // Finds an object by its path ("Package.Group.Name"), for
     // DynamicLoadObject.
     VmObject* findObject(std::string_view path);
+    // A class's config properties from the .ini files (Vm::applyConfig).
+    void applyConfig(VmClass& cls);
+    const std::string* configSetting(const std::string& section, const std::string& key);
     // An object's name or a class's, as scripts see it.
     std::string objectName(const VmObject* o) const;
     std::string pathName(const VmObject* o); // string() of it: "Package.Name"
@@ -293,6 +296,8 @@ private:
     std::vector<std::string> names_;
     std::unordered_map<std::string, NameId> nameIds_;
     std::map<std::pair<const Package*, int>, std::unique_ptr<VmStruct>> structs_;
+    using IniFile = std::map<std::string, std::map<std::string, std::string>>; // section, key (lower case): value
+    std::map<std::string, IniFile> iniFiles_;
     std::map<std::pair<const Package*, int>, VmProperty*> properties_;
     std::deque<VmProperty> propertyStore_;
     std::deque<std::vector<NameId>> enumStore_;

@@ -188,6 +188,8 @@ if(RELUVA_ENGINE_UNREAL)
         src/engines/unreal/vm_paths.cpp
         src/engines/unreal/vm_dialog.cpp
         src/engines/unreal/vm_documents.cpp
+        src/engines/unreal/vm_canvas.cpp
+        src/engines/unreal/font.cpp
         src/engines/unreal/dialog_table.cpp
         src/engines/unreal/level_play.cpp
         src/engines/unreal/actors.cpp
