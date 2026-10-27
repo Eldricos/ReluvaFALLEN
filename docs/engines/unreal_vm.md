@@ -463,12 +463,22 @@ The natives:
 - `C3DGetJointWorldPos(Bone, out Location, out Rotation)`: a bone's place
   and axes. The cut-scene cameras aim at a speaker's `Bip01_Head`.
   `C3DGetJointLocalPos` gives it from the actor's own location, unturned.
+  - **The axes are in the scripts' order:** X is the skeleton's -Z, Y its
+    -X, and Z its Y. This was worked out from what the scripts do with
+    them, and fits Kira's skeleton in every case:
+    - a head's -Z is where it looks (`Pawn`'s look-at, `CTVE_Pawn`'s
+      sight);
+    - the eyes, nose and mouth are along -Z and up -X (`NosePos`,
+      `CTV_ColdBreath`);
+    - a foot standing flat has Z along the ground's normal and X
+      toward its toes (`CalcFootZ`).
   The `Rel` forms are taken as relative to the bone's parent:
   - `C3DGetJointWorldPosRel` is the step from the parent bone to this
     one, in the world's axes. Its rotation is the bone's turn from the
     parent's.
   - `C3DGetJointLocalPosRel` is that step in the parent's own axes: the
-    skeleton's offset for the bone, as posed, times DrawScale.
+    skeleton's offset for the bone, as posed, times DrawScale. Both the
+    step and the turn use the scripts' order of axes.
   - No script calls them, so what they're meant to give is a guess
     from their names.
 - `C3DDoesBoneExist`.
@@ -494,12 +504,61 @@ The natives:
   - The player's guns aren't attached. `UpdateEyeHeight`, which the
     engine sends the player each tick after it moves, calls the game's
     `UpdatePlayerIK`. Its `ApplyWeaponIK` puts the gun in front of her
-    chest, aimed where she looks.
+    chest, aimed where she looks, and sets IK targets for her hands on
+    it (below).
 - **Before drawing:** the Maps page sends `C3DPreRender` to each mesh it
   is about to draw. The player's weapon then works out its tip
   (`FirePoint`, as `WeaponTipLocation`) and traces the crosshair.
 - `C3DActorInit` and `C3DInitAltMeshes` set up The Fallen's renderer, so
   they do nothing here.
+
+**Bending the bones.** The scripts change a pose on top of its
+animations. What they set is kept per actor until they change it. The
+pose for drawing, for the bone natives and for the attachment points
+includes it, in this order:
+- **`C3DApplyRotation(Bone, Axis, Angle)`:** degrees about one of the
+  bone's axes (in the scripts' order), turning as a rotator's `Pitch`,
+  `Yaw` or `Roll` would. In the skeleton's own axes, Pitch is about X,
+  Yaw about Y and Roll about Z. A positive Pitch bends the back and nods
+  the head forward, which is what the scripts mean when the player looks
+  down (`ApplyBackBend`). The upper arms' Roll then swings them back
+  against the bend.
+- **`C3DApplyWorldRotation(Bone, Rotation)`:** the bone turned where it
+  is, its children with it. The turn is taken in the actor's axes, not
+  the world's: the scripts build these from the player's own yaw and
+  pitch (the hips' and spine's twist in `ApplyBackTwist`, a head turning
+  to look at someone in `Pawn`). In the world's axes, a pitch would tip
+  the head sideways whenever the actor faced along Y.
+- **The IK chains:** `C3DSetIkTargetPositionAbs` / `C3DSetIkTargetOrientationAbs`
+  (in the world), and `C3DSetIkTargetPosition` / `C3DSetIkTargetOrientation`
+  (from another actor's place and turn). Each takes a chain's name and a
+  weight that blends it in. `C3DClearIkTarget` lets go.
+  - The chains aren't in the meshes, so the engine must know them by
+    name. `LeftArm`/`RightArm` move a hand to a place and
+    `LeftHand`/`RightHand` turn it; `LeftLeg`/`RightLeg` and
+    `LeftFoot`/`RightFoot` do the same for the feet. Each bends the end
+    bone's two parents: upper arm, forearm, hand (`Bip01_R_Hand`), or
+    thigh, calf, foot.
+  - **What reaches.** For a hand it's the mesh's attachment point of the
+    same name: the player's `RightHand` goes onto the gun's `RightHand`,
+    turned to its axes, as `C3DAttach` would put them. For a foot it's
+    the bone itself, in the scripts' axes, since the scripts work the
+    targets out from `C3DGetJointWorldPos` (`CalcFootZ`).
+  - **The solve.** The upper bone turns so the elbow or knee is where the
+    two bones' lengths put it on the way to the target, bending in the
+    plane it bends in now. The middle bone points at the target. When
+    the hand is also turned, the forearm rolls to match it, so the wrist
+    keeps the bend the animation gives it.
+  - **Correcting for the skin.** A hand's grip point is on skin at the
+    wrist that the forearm moves too. So each tick the point is measured
+    on the hand once without the IK and once with it, and the solve is
+    done again from that. On M04_KiraL1, with the phaser rifle drawn,
+    Kira's grip points are 0.5 and 0.0 units from the rifle's, and their
+    turns agree to within 10°.
+- **`InterpolateRotation(A, B, Alpha)`:** Alpha of the way from A to B,
+  each of pitch, yaw and roll the shorter way round. The scripts ease
+  the IK turns and the head's look with it. While it was missing, every
+  foot target came out as turn 0, which faced the feet backward.
 
 On M01_KiraL2, standing, Kira's points and bones are:
 - head bone 35 above her middle (her top is 47);
@@ -509,14 +568,20 @@ On M01_KiraL2, standing, Kira's points and bones are:
 - `Face` in front of her head.
 
 On M11_KiraL1, an ensign's tricorder hangs upright at her belt. On
-M04_KiraL1, once 2 is pressed, Kira's phaser rifle is at her right
-shoulder with its tip 17 units ahead.
+M04_KiraL1, once 2 is pressed, Kira raises the phaser rifle to her right
+shoulder with both hands on it. Its tip is 17 units ahead.
 
 Not done:
 - How a triangle's frame is set is a guess, so a point's turn may be
   off, though not its place, since the offsets are a few units at most.
-- The arms' IK (`C3DSetIkTarget...`): the gun is placed, but her hands
-  stay at her sides.
+- The meanings above are Reluva's readings of how the scripts use the
+  natives: the order of a bone's axes, the axes `C3DApplyRotation` turns
+  about, the actor's axes for `C3DApplyWorldRotation`, and what reaches
+  in an IK chain.
+- `C3DApplyIKOnBasePose` and `C3DRemoveRotation` aren't written; no
+  script calls them.
+- `CheckFOV` isn't written, so a pawn's head never picks anyone to look
+  at.
 
 ## Playing a level
 

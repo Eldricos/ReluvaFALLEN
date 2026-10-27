@@ -407,6 +407,7 @@ void ScriptLevel::destroy(VmObject* a) {
     if (Value* v = a->find(vm_, "bDeleteMe"))
         v->i = 1;
     a->deleted = true;
+    bends_.erase(a);
 }
 
 namespace {

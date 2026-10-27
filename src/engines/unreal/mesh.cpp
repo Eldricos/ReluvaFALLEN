@@ -1551,6 +1551,88 @@ std::vector<std::string> describeBones(const Package& package, int index) {
 
 // --- Posed at draw time ---------------------------------------------------------------------
 
+namespace {
+
+Vec3f vsub(const Vec3f& a, const Vec3f& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
+Vec3f vadd(const Vec3f& a, const Vec3f& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
+Vec3f vmul(const Vec3f& a, float s) { return {a[0] * s, a[1] * s, a[2] * s}; }
+float vdot(const Vec3f& a, const Vec3f& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+Vec3f vcross(const Vec3f& a, const Vec3f& b) {
+    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+}
+float vlen(const Vec3f& a) { return std::sqrt(vdot(a, a)); }
+Vec3f vunit(const Vec3f& a) {
+    const float l = vlen(a);
+    return l > 1e-6f ? vmul(a, 1 / l) : Vec3f{0, 0, 0};
+}
+
+Vec3f rowOf(const Mat43& m, size_t row) { return {m[row * 3], m[row * 3 + 1], m[row * 3 + 2]}; }
+void setRow(Mat43& m, size_t row, const Vec3f& v) {
+    for (size_t c = 0; c < 3; ++c)
+        m[row * 3 + c] = v[c];
+}
+
+// The matrix that undoes m (its turn may scale).
+Mat43 inverseOf(const Mat43& m) {
+    const float a = m[0], b = m[1], c = m[2], d = m[3], e = m[4], f = m[5], g = m[6], h = m[7], i = m[8];
+    const float det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (std::fabs(det) < 1e-12f)
+        return {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+    const float k = 1 / det;
+    Mat43 out{(e * i - f * h) * k, (c * h - b * i) * k, (b * f - c * e) * k,
+              (f * g - d * i) * k, (a * i - c * g) * k, (c * d - a * f) * k,
+              (d * h - e * g) * k, (b * g - a * h) * k, (a * e - b * d) * k, 0, 0, 0};
+    const Vec3f t{m[9], m[10], m[11]};
+    for (size_t col = 0; col < 3; ++col)
+        out[9 + col] = -(t[0] * out[col] + t[1] * out[3 + col] + t[2] * out[6 + col]);
+    return out;
+}
+
+// A turn by `radians` about `axis` (a unit vector), as a row-vector matrix:
+// p * it is p turned (right-handed about the axis).
+Mat43 turnAbout(const Vec3f& axis, float radians) {
+    const float c = std::cos(radians), s = std::sin(radians), t = 1 - c;
+    const float x = axis[0], y = axis[1], z = axis[2];
+    // The column-vector matrix's transpose.
+    return {t * x * x + c,     t * x * y + s * z, t * x * z - s * y,
+            t * x * y - s * z, t * y * y + c,     t * y * z + s * x,
+            t * x * z + s * y, t * y * z - s * x, t * z * z + c,
+            0, 0, 0};
+}
+
+// The least turn that takes direction u to direction v.
+Mat43 turnFromTo(const Vec3f& u, const Vec3f& v) {
+    const Vec3f a = vunit(u), b = vunit(v);
+    const Vec3f axis = vcross(a, b);
+    const float sine = vlen(axis), cosine = vdot(a, b);
+    if (sine < 1e-6f) {
+        if (cosine > 0)
+            return {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+        // Opposite: half a turn about any axis across them.
+        Vec3f across = vcross(a, Vec3f{1, 0, 0});
+        if (vlen(across) < 1e-3f)
+            across = vcross(a, Vec3f{0, 1, 0});
+        return turnAbout(vunit(across), 3.14159265f);
+    }
+    return turnAbout(vmul(axis, 1 / sine), std::atan2(sine, cosine));
+}
+
+// Axes `from` moved `t` of the way to `to`, kept square to each other.
+std::array<Vec3f, 3> blendAxes(const std::array<Vec3f, 3>& from, const std::array<Vec3f, 3>& to, float t) {
+    std::array<Vec3f, 3> m;
+    for (size_t k = 0; k < 3; ++k)
+        m[k] = vadd(from[k], vmul(vsub(to[k], from[k]), t));
+    const Vec3f x = vunit(m[0]);
+    const Vec3f y = vunit(vsub(m[1], vmul(x, vdot(m[1], x))));
+    Vec3f z = vsub(m[2], vadd(vmul(x, vdot(m[2], x)), vmul(y, vdot(m[2], y))));
+    z = vunit(z);
+    if (vlen(x) == 0 || vlen(y) == 0 || vlen(z) == 0)
+        return t < 0.5f ? from : to;
+    return {x, y, z};
+}
+
+} // namespace
+
 struct LayeredPoser::Impl {
     std::vector<uint8_t> data;
     size_t base = 0, from = 0;
@@ -1563,7 +1645,26 @@ struct LayeredPoser::Impl {
 
     BoneReader reader() const { return BoneReader{data, base, from, base + data.size()}; }
     bool locals(std::string_view base, float fraction, const std::vector<Layer>& layers,
-                std::vector<std::array<float, 12>>& out) const;
+                std::vector<std::array<float, 12>>& out, const Adjust* adjust = nullptr) const;
+    void adjusted(std::vector<Mat43>& local, const Adjust& adjust) const;
+    // Each bone's place in the skeleton (its parents' placements and its own).
+    std::vector<Mat43> worlds(const std::vector<Mat43>& local) const {
+        std::vector<Mat43> world(local.size());
+        for (size_t i = 0; i < local.size(); ++i)
+            world[i] = bones[i].parent >= 0 ? then(local[i], world[size_t(bones[i].parent)]) : local[i];
+        return world;
+    }
+    // A bone placed at `world` in the skeleton: its placement in its parent.
+    Mat43 inParent(size_t i, const Mat43& world, const std::vector<Mat43>& worlds) const {
+        return bones[i].parent >= 0 ? then(world, inverseOf(worlds[size_t(bones[i].parent)])) : world;
+    }
+    int indexOf(std::string_view name) const {
+        const std::string wanted = fs::toLower(name);
+        for (size_t i = 0; i < bones.size(); ++i)
+            if (fs::toLower(bones[i].name) == wanted)
+                return int(i);
+        return -1;
+    }
 
     // Where an animation's keys are: the clip, and with `set` another
     // skeleton's; false if it isn't the mesh's.
@@ -1653,7 +1754,7 @@ std::vector<bool> LayeredPoser::part(std::string_view bone, bool rest) const {
 // bones of each layer's part blended towards its animation's. False if an
 // animation isn't the mesh's.
 bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const std::vector<Layer>& layers,
-                                std::vector<std::array<float, 12>>& out) const {
+                                std::vector<std::array<float, 12>>& out, const Adjust* adjust) const {
     const BoneReader r = reader();
     struct Source {
         const AnimationSet* set = nullptr;
@@ -1696,14 +1797,121 @@ bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const
         }
         out[i] = placed;
     }
+    if (adjust && !adjust->empty())
+        adjusted(out, *adjust);
     return true;
 }
 
+// The scripts' turns, then each limb's reach: its upper bone turned so the
+// middle joint is where the two bones' lengths put it on the way to the
+// target (kept in the plane they bend in now), the middle bone turned to
+// point at the target, and the end bone given its axes.
+void LayeredPoser::Impl::adjusted(std::vector<Mat43>& local, const Adjust& adjust) const {
+    for (const Adjust::Turn& t : adjust.turns) {
+        const int i = indexOf(t.bone);
+        if (i < 0 || t.axis < 0 || t.axis > 2)
+            continue;
+        Vec3f axis{};
+        axis[size_t(t.axis)] = 1;
+        local[size_t(i)] = then(turnAbout(axis, t.radians), local[size_t(i)]);
+    }
+    // Turning a bone where it is: its axes turned, its origin kept.
+    auto turnInPlace = [&](size_t i, const Mat43& turn) {
+        const std::vector<Mat43> world = worlds(local);
+        Mat43 w = then(world[i], turn);
+        for (size_t c = 0; c < 3; ++c)
+            w[9 + c] = world[i][9 + c];
+        local[i] = inParent(i, w, world);
+    };
+    for (const Adjust::SpaceTurn& t : adjust.spaceTurns) {
+        const int i = indexOf(t.bone);
+        if (i < 0)
+            continue;
+        Mat43 turn{};
+        for (size_t k = 0; k < 3; ++k)
+            setRow(turn, k, t.turn[k]);
+        turnInPlace(size_t(i), turn);
+    }
+    for (const Adjust::Reach& r : adjust.reaches) {
+        const int end = indexOf(r.bone);
+        const int middle = end >= 0 ? bones[size_t(end)].parent : -1;
+        const int upper = middle >= 0 ? bones[size_t(middle)].parent : -1;
+        if (upper < 0)
+            continue;
+        std::vector<Mat43> world = worlds(local);
+        const Mat43& handNow = world[size_t(end)];
+        const std::array<Vec3f, 3> axesNow{rowOf(handNow, 0), rowOf(handNow, 1), rowOf(handNow, 2)};
+        const bool turning = r.turnWeight > 0;
+        const std::array<Vec3f, 3> axes =
+            turning ? blendAxes(axesNow, r.axes, std::min(1.0f, r.turnWeight)) : axesNow;
+        // Where the end bone's origin should go for its offset to reach.
+        const Vec3f from = rowOf(handNow, 3);
+        Vec3f target = from;
+        if (r.placeWeight > 0) {
+            Vec3f wanted = r.at;
+            for (size_t k = 0; k < 3; ++k)
+                wanted = vsub(wanted, vmul(axes[k], r.offset[k]));
+            target = vadd(from, vmul(vsub(wanted, from), std::min(1.0f, r.placeWeight)));
+        }
+        const Vec3f s = rowOf(world[size_t(upper)], 3), e = rowOf(world[size_t(middle)], 3);
+        const float a = vlen(vsub(e, s)), b = vlen(vsub(from, e));
+        if (r.placeWeight > 0 && a > 1e-4f && b > 1e-4f) {
+            Vec3f toTarget = vsub(target, s);
+            const float d = std::clamp(vlen(toTarget), std::fabs(a - b) + 1e-3f, a + b - 1e-3f);
+            const Vec3f dir = vlen(toTarget) > 1e-6f ? vunit(toTarget) : vunit(vsub(from, s));
+            // Which way the joint bends: as it does now, square to the reach.
+            Vec3f bend = vsub(vsub(e, s), vmul(dir, vdot(vsub(e, s), dir)));
+            if (vlen(bend) < 1e-4f) {
+                bend = vcross(dir, Vec3f{0, 0, 1});
+                if (vlen(bend) < 1e-4f)
+                    bend = vcross(dir, Vec3f{1, 0, 0});
+            }
+            bend = vunit(bend);
+            const float along = (a * a + d * d - b * b) / (2 * d);
+            const float out = std::sqrt(std::max(0.0f, a * a - along * along));
+            const Vec3f joint = vadd(s, vadd(vmul(dir, along), vmul(bend, out)));
+            turnInPlace(size_t(upper), turnFromTo(vsub(e, s), vsub(joint, s)));
+            world = worlds(local);
+            const Vec3f reach = vsub(vadd(s, vmul(dir, d)), joint);
+            if (turning) {
+                // The middle bone as the end bone's axes and the animation's
+                // wrist would have it, swung to point at the target: the
+                // wrist bent as the animation bends it, not twisted (the
+                // skin between them, where a hand's grip points are, keeps
+                // its shape).
+                Mat43 hand{};
+                for (size_t k = 0; k < 3; ++k)
+                    setRow(hand, k, axes[k]);
+                Mat43 wrist = local[size_t(end)];
+                const Vec3f toEnd = rowOf(wrist, 3);
+                wrist[9] = wrist[10] = wrist[11] = 0;
+                Mat43 mid = then(inverseOf(wrist), hand);
+                const Vec3f pointing = vadd(vadd(vmul(rowOf(mid, 0), toEnd[0]), vmul(rowOf(mid, 1), toEnd[1])),
+                                            vmul(rowOf(mid, 2), toEnd[2]));
+                mid = then(mid, turnFromTo(pointing, reach));
+                for (size_t c = 0; c < 3; ++c)
+                    mid[9 + c] = world[size_t(middle)][9 + c];
+                local[size_t(middle)] = inParent(size_t(middle), mid, world);
+            } else {
+                const Vec3f endNow = rowOf(world[size_t(end)], 3);
+                turnInPlace(size_t(middle), turnFromTo(vsub(endNow, joint), reach));
+            }
+            world = worlds(local);
+        }
+        if (turning) {
+            Mat43 w = world[size_t(end)];
+            for (size_t k = 0; k < 3; ++k)
+                setRow(w, k, axes[k]);
+            local[size_t(end)] = inParent(size_t(end), w, world);
+        }
+    }
+}
+
 bool LayeredPoser::pose(std::string_view base, float fraction, const std::vector<Layer>& layers,
-                        std::vector<Vec3f>& out) const {
+                        std::vector<Vec3f>& out, const Adjust* adjust) const {
     const Impl& m = *impl;
     std::vector<Mat43> local;
-    if (!m.locals(base, fraction, layers, local))
+    if (!m.locals(base, fraction, layers, local, adjust))
         return false;
     const auto frame = size_t(m.mesh.frameVerts);
     out.assign(frame, Vec3f{});
@@ -1712,14 +1920,15 @@ bool LayeredPoser::pose(std::string_view base, float fraction, const std::vector
 }
 
 bool LayeredPoser::boneInParent(std::string_view base, float fraction, const std::vector<Layer>& layers,
-                                std::string_view name, Vec3f& origin, std::array<Vec3f, 3>& axes) const {
+                                std::string_view name, Vec3f& origin, std::array<Vec3f, 3>& axes,
+                                const Adjust* adjust) const {
     const Impl& m = *impl;
     const std::string wanted = fs::toLower(name);
     for (size_t i = 0; i < m.bones.size(); ++i) {
         if (fs::toLower(m.bones[i].name) != wanted)
             continue;
         std::vector<Mat43> local;
-        if (!m.locals(base, fraction, layers, local))
+        if (!m.locals(base, fraction, layers, local, adjust))
             return false;
         for (size_t c = 0; c < 3; ++c) {
             origin[c] = local[i][9 + c];
@@ -1747,26 +1956,34 @@ bool LayeredPoser::hasBone(std::string_view name) const {
     return false;
 }
 
-bool LayeredPoser::bone(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
-                        Vec3f& origin, std::array<Vec3f, 3>& axes) const {
+bool LayeredPoser::boneInSkeleton(std::string_view base, float fraction, const std::vector<Layer>& layers,
+                                  std::string_view name, Vec3f& origin, std::array<Vec3f, 3>& axes,
+                                  const Adjust* adjust) const {
     const Impl& m = *impl;
-    const std::string wanted = fs::toLower(name);
-    size_t which = m.bones.size();
-    for (size_t i = 0; i < m.bones.size() && which == m.bones.size(); ++i)
-        if (fs::toLower(m.bones[i].name) == wanted)
-            which = i;
+    const int which = m.indexOf(name);
     std::vector<Mat43> local;
-    if (which == m.bones.size() || !m.locals(base, fraction, layers, local))
+    if (which < 0 || !m.locals(base, fraction, layers, local, adjust))
         return false;
     // Up its parents (each before its children) to the root.
-    Mat43 world = local[which];
-    for (int p = m.bones[which].parent; p >= 0; p = m.bones[size_t(p)].parent)
+    Mat43 world = local[size_t(which)];
+    for (int p = m.bones[size_t(which)].parent; p >= 0; p = m.bones[size_t(p)].parent)
         world = then(world, local[size_t(p)]);
+    origin = rowOf(world, 3);
+    for (size_t row = 0; row < 3; ++row)
+        axes[row] = rowOf(world, row);
+    return true;
+}
+
+bool LayeredPoser::bone(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
+                        Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust) const {
+    if (!boneInSkeleton(base, fraction, layers, name, origin, axes, adjust))
+        return false;
     // Into packed units, as the vertices are (by Scale and Origin).
+    const Mesh& mesh = impl->mesh;
     for (size_t c = 0; c < 3; ++c) {
-        origin[c] = world[9 + c] / m.mesh.scale[c] + m.mesh.origin[c];
+        origin[c] = origin[c] / mesh.scale[c] + mesh.origin[c];
         for (size_t row = 0; row < 3; ++row)
-            axes[row][c] = world[row * 3 + c] / m.mesh.scale[c];
+            axes[row][c] /= mesh.scale[c];
     }
     return true;
 }

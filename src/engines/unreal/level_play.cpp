@@ -167,6 +167,7 @@ bool LevelPlay::look(VmObject* a, Look& out) {
             if (l.weight > 0 && l.sequence)
                 out.layers.push_back({vm.nameText(l.sequence), l.bone ? vm.nameText(l.bone) : std::string(), l.rest,
                                       l.frame, l.weight});
+    out.adjust = level_->boneAdjust(a);
     return true;
 }
 

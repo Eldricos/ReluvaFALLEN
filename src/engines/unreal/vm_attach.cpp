@@ -7,8 +7,10 @@
 // kick starts) and places worked out in advance (a gun's tip in a firing
 // pose), each as the mesh is in its animation now; and what's attached
 // (C3DAttach: a weapon in a hand, a breather on a face), kept there each
-// tick. The mesh is placed as the Maps page draws it (mesh_render.h), so
-// they agree. See docs/engines/unreal_vm.md and mesh.md.
+// tick; and what the scripts do to the bones on top of the animations
+// (C3DApplyRotation: a back bent; the IK chains: hands on a gun). The mesh
+// is placed as the Maps page draws it (mesh_render.h), so they agree. See
+// docs/engines/unreal_vm.md and mesh.md.
 
 #include "engines/unreal/vm_level.h"
 
@@ -61,10 +63,58 @@ const MeshAttachPoint* findPoint(const std::vector<MeshAttachPoint>& points, con
 
 } // namespace
 
+// The limbs the IK chains move: the chains' names (its place, its turn),
+// the end bone and the attachment point on it that's meant to reach (the
+// player's RightHand meets the gun's RightHand, as C3DAttach would put
+// them). Not in the meshes: The Fallen's engine knows them by name.
+struct Limb {
+    const char* placeChain;
+    const char* turnChain;
+    const char* bone;
+    const char* point;
+};
+// The legs' targets are the feet's bones themselves (the scripts work them
+// out from C3DGetJointWorldPos), so they have none.
+constexpr Limb kLimbs[4] = {
+    {"LeftArm", "LeftHand", "Bip01_L_Hand", "LeftHand"},
+    {"RightArm", "RightHand", "Bip01_R_Hand", "RightHand"},
+    {"LeftLeg", "LeftFoot", "Bip01_L_Foot", nullptr},
+    {"RightLeg", "RightFoot", "Bip01_R_Foot", nullptr},
+};
+
+// A bone's axes as The Fallen's scripts take them (its turn from
+// C3DGetJointWorldPos, an IK target's turn), from its axes in the
+// skeleton: X their -Z, Y their -X, Z their Y. Worked out from what the
+// scripts do with them: a head's -Z is where it looks (Pawn's look-at,
+// CTVE_Pawn's sight), its eyes, nose and mouth are along -Z and up its -X
+// (CTV_Player's NosePos, CTV_ColdBreath); a foot's Z is the ground's
+// normal when it stands flat and its X towards its toes (CalcFootZ). Each
+// is so on Kira's skeleton, and none the other way.
+constexpr std::array<std::array<float, 3>, 3> kScriptAxes{{{0, 0, -1}, {-1, 0, 0}, {0, 1, 0}}};
+
+// Axes (rows) in the scripts' order, and a vector in a bone's axes in theirs.
+Axes scriptAxes(const Axes& a) {
+    Axes out{};
+    for (size_t k = 0; k < 3; ++k)
+        for (size_t j = 0; j < 3; ++j)
+            out[k] = add(out[k], mul(a[j], kScriptAxes[k][j]));
+    return out;
+}
+Vec inScriptAxes(const Vec& v) {
+    Vec out{};
+    for (size_t k = 0; k < 3; ++k)
+        for (size_t j = 0; j < 3; ++j)
+            out[k] += kScriptAxes[k][j] * v[j];
+    return out;
+}
+
 struct ScriptLevel::ActorMesh {
     Mesh mesh;
     std::unique_ptr<LayeredPoser> poser; // built on a skeleton
     std::map<std::pair<NameId, bool>, std::vector<bool>> parts;
+    // Where the skeleton's axes go in the actor's own space (the mesh's
+    // turn: placeMeshVertex of the skeleton's units).
+    Axes skeleton{};
 };
 
 ScriptLevel::ActorMesh* ScriptLevel::actorMesh(VmObject* a) {
@@ -81,6 +131,13 @@ ScriptLevel::ActorMesh* ScriptLevel::actorMesh(VmObject* a) {
             if (!animationSets_)
                 animationSets_ = std::make_shared<std::vector<AnimationSet>>(findAnimationSets(vm_.packages()));
             am->poser = LayeredPoser::open(*m->package, m->exportIndex, *animationSets_);
+            const Mesh& mesh = am->mesh;
+            const Vec zero = placeMeshVertex(mesh, mesh.origin);
+            for (size_t k = 0; k < 3; ++k) {
+                Vec3f unitStep = mesh.origin;
+                unitStep[k] += mesh.scale[k] != 0 ? 1 / mesh.scale[k] : 0;
+                am->skeleton[k] = sub(placeMeshVertex(mesh, unitStep), zero);
+            }
         }
         it = actorMeshes_.emplace(m, std::move(am)).first;
     }
@@ -126,7 +183,8 @@ const std::vector<ScriptLevel::Vec>* ScriptLevel::posedVertices(VmObject* a, Act
     if (m.poser && !seq.empty()) {
         std::vector<std::string> names;
         const std::vector<LayeredPoser::Layer> layers = posedLayers(a, m, names);
-        if (m.poser->pose(seq, frame, layers, verts))
+        const LayeredPoser::Adjust adjust = adjustOf(a, m);
+        if (m.poser->pose(seq, frame, layers, verts, &adjust))
             return &verts;
     }
     // Between its frames (its own animations).
@@ -171,10 +229,10 @@ void ScriptLevel::toWorld(VmObject* a, Vec& at, Axes* axes) {
 // its first edge, Z along its normal (Reluva's reading: the data doesn't
 // say), the point's turn and offset in them. On the mesh's origin: its
 // turn and offset from the float copy's space.
-bool ScriptLevel::attachFrame(VmObject* a, ActorMesh& m, const MeshAttachPoint& point, Vec& at, Axes& axes) {
-    const Mesh& mesh = m.mesh;
+namespace {
+
+bool pointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttachPoint& point, Vec& at, Axes& axes) {
     if (point.type == 1) {
-        const std::vector<Vec>* verts = posedVertices(a, m);
         if (!verts || point.triangle < 0 || size_t(point.triangle) >= mesh.tris.size())
             return false;
         const MeshTri& t = mesh.tris[size_t(point.triangle)];
@@ -197,6 +255,12 @@ bool ScriptLevel::attachFrame(VmObject* a, ActorMesh& m, const MeshAttachPoint& 
     for (size_t k = 0; k < 3; ++k)
         axes[k] = unit(placeMeshFloatVector(mesh, point.axes[k]));
     return true;
+}
+
+} // namespace
+
+bool ScriptLevel::attachFrame(VmObject* a, ActorMesh& m, const MeshAttachPoint& point, Vec& at, Axes& axes) {
+    return pointFrame(m.mesh, point.type == 1 ? posedVertices(a, m) : nullptr, point, at, axes);
 }
 
 bool ScriptLevel::attachPointAt(VmObject* a, NameId name, bool precomputed, bool world, Vec& location, Rot& rotation) {
@@ -229,23 +293,28 @@ bool ScriptLevel::boneAt(VmObject* a, NameId bone, BonePlace place, Vec& locatio
     const float frame = frameValue ? frameValue->asFloat() : 0;
     std::vector<std::string> names;
     const std::vector<LayeredPoser::Layer> layers = posedLayers(a, *m, names); // with its layers, as it's drawn
+    const LayeredPoser::Adjust adjust = adjustOf(a, *m);
     const Value* scale = prop(a, "DrawScale");
     const float ds = scale ? scale->asFloat() : 1;
     if (place == BonePlace::InParent) {
         // Its place in its parent bone, in the parent's axes (by DrawScale).
         Vec origin{};
         Axes axes{};
-        if (!m->poser->boneInParent(seq, frame, layers, name, origin, axes))
+        if (!m->poser->boneInParent(seq, frame, layers, name, origin, axes, &adjust))
             return false;
-        location = mul(origin, ds);
-        rotation = rotOf(axes);
+        // In the parent's axes as the scripts order them, and its own so.
+        Axes local{};
+        for (size_t k = 0; k < 3; ++k)
+            local[k] = inScriptAxes(axes[k]);
+        location = mul(inScriptAxes(origin), ds);
+        rotation = rotOf(scriptAxes(local));
         return true;
     }
     // The bone, and for FromParent its parent, where they are.
     auto placed = [&](const std::string& which, Vec& at, Axes& axes, bool world) {
         Vec origin{};
         Axes packed{};
-        if (!m->poser->bone(seq, frame, layers, which, origin, packed))
+        if (!m->poser->bone(seq, frame, layers, which, origin, packed, &adjust))
             return false;
         at = placeMeshVertex(m->mesh, origin);
         for (size_t k = 0; k < 3; ++k)
@@ -269,7 +338,7 @@ bool ScriptLevel::boneAt(VmObject* a, NameId bone, BonePlace place, Vec& locatio
             at = sub(at, parent);
     }
     location = at;
-    rotation = rotOf(axes);
+    rotation = rotOf(scriptAxes(axes));
     return true;
 }
 
@@ -337,6 +406,203 @@ void ScriptLevel::placeAttached() {
             *r = vm_.rotatorValue(rot[0], rot[1], rot[2]);
         }
     }
+}
+
+namespace {
+
+Axes axesOf(const ScriptLevel::Rot& r) {
+    const auto f = rotationAxes({r[0], r[1], r[2]});
+    return {Vec{f[0][0], f[0][1], f[0][2]}, Vec{f[1][0], f[1][1], f[1][2]}, Vec{f[2][0], f[2][1], f[2][2]}};
+}
+float dot(const Vec& a, const Vec& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+// v (whose axes are f's rows) in f's terms.
+Vec within(const Vec& v, const Axes& f) { return {dot(v, f[0]), dot(v, f[1]), dot(v, f[2])}; }
+Vec3f vec3(const Vec& v) { return {v[0], v[1], v[2]}; }
+
+int limbOf(const std::string& chain, bool& place) {
+    const std::string wanted = fs::toLower(chain);
+    for (size_t l = 0; l < 4; ++l) {
+        if (wanted == fs::toLower(kLimbs[l].placeChain) || wanted == fs::toLower(kLimbs[l].turnChain)) {
+            place = wanted == fs::toLower(kLimbs[l].placeChain);
+            return int(l);
+        }
+    }
+    return -1;
+}
+
+} // namespace
+
+void ScriptLevel::turnBone(VmObject* a, NameId bone, int axis, float degrees) {
+    bends_[a].turns[{bone, axis}] = degrees;
+    posed_.erase(a);
+}
+
+void ScriptLevel::turnBoneInActor(VmObject* a, NameId bone, const Rot& rotation) {
+    bends_[a].actorTurns[bone] = rotation;
+    posed_.erase(a);
+}
+
+bool ScriptLevel::setIk(VmObject* a, NameId chain, const Vec* at, const Axes* axes, float weight) {
+    bool place = false;
+    const int l = limbOf(vm_.nameText(chain), place);
+    if (l < 0)
+        return false;
+    Bends::Ik& ik = bends_[a].limbs[size_t(l)];
+    if (at) {
+        ik.place = true;
+        ik.at = *at;
+        ik.placeWeight = weight;
+    }
+    if (axes) {
+        ik.turn = true;
+        ik.axes = *axes;
+        ik.turnWeight = weight;
+    }
+    posed_.erase(a);
+    return true;
+}
+
+void ScriptLevel::clearIk(VmObject* a, NameId chain) {
+    bool place = false;
+    const int l = limbOf(vm_.nameText(chain), place);
+    auto it = bends_.find(a);
+    if (l < 0 || it == bends_.end())
+        return;
+    Bends::Ik& ik = it->second.limbs[size_t(l)];
+    (place ? ik.place : ik.turn) = false;
+    posed_.erase(a);
+}
+
+LayeredPoser::Adjust ScriptLevel::boneAdjust(VmObject* a) {
+    if (!a || bends_.find(a) == bends_.end())
+        return {};
+    ActorMesh* m = actorMesh(a);
+    return m && m->poser ? adjustOf(a, *m) : LayeredPoser::Adjust{};
+}
+
+// The actor's bends in its skeleton's space: places and axes in the world
+// brought back through the actor's placement (toWorld undone) and the
+// mesh's turn; a limb's point and axes on its end bone found once, from
+// the mesh posed without them.
+LayeredPoser::Adjust ScriptLevel::adjustOf(VmObject* a, ActorMesh& m) {
+    LayeredPoser::Adjust out;
+    auto it = bends_.find(a);
+    if (it == bends_.end() || !m.poser)
+        return out;
+    Bends& b = it->second;
+    // The limbs' points, once a tick: from the pose without the reaches,
+    // then again with them (where the skin at the wrist puts them once the
+    // arm's bent), and the reaches worked out again from that.
+    bool measured = false;
+    for (size_t l = 0; l < 4 && !measured; ++l)
+        if ((b.limbs[l].place || b.limbs[l].turn) && b.effectors[l].tick != ticks_ + 1) {
+            if (!measureEffectors(a, m, b, nullptr))
+                return out;
+            measured = true;
+        }
+    if (measured) {
+        const LayeredPoser::Adjust first = adjustOf(a, m);
+        if (!first.reaches.empty())
+            measureEffectors(a, m, b, &first);
+    }
+    for (const auto& [key, degrees] : b.turns)
+        out.turns.push_back({vm_.nameText(key.first), key.second, degrees * 3.14159265f / 180});
+    const Axes& sk = m.skeleton;
+    for (const auto& [bone, rot] : b.actorTurns) {
+        // Where each of the skeleton's axes goes: into the actor's space,
+        // turned there, and back.
+        const Axes turn = axesOf(rot);
+        LayeredPoser::Adjust::SpaceTurn t{vm_.nameText(bone), {}};
+        for (size_t k = 0; k < 3; ++k) {
+            Vec turned{};
+            for (size_t j = 0; j < 3; ++j)
+                turned = add(turned, mul(turn[j], sk[k][j]));
+            t.turn[k] = vec3(within(turned, sk));
+        }
+        out.spaceTurns.push_back(t);
+    }
+    // From the world into the actor's own space (as toWorld, undone).
+    const Value* loc = prop(a, "Location");
+    const Value* pivot = prop(a, "PrePivot");
+    const Value* rotValue = prop(a, "Rotation");
+    const Value* scale = prop(a, "DrawScale");
+    const Axes frame = axesOf(rotValue ? Vm::rotatorOf(*rotValue) : Rot{});
+    const float ds = scale && scale->asFloat() != 0 ? scale->asFloat() : 1;
+    const Vec base = add(loc ? Vm::vectorOf(*loc) : Vec{}, pivot ? Vm::vectorOf(*pivot) : Vec{});
+    for (size_t l = 0; l < 4; ++l) {
+        const Bends::Ik& ik = b.limbs[l];
+        if (!ik.place && !ik.turn)
+            continue;
+        const Bends::Effector& e = b.effectors[l];
+        if (e.tick != ticks_ + 1)
+            continue;
+        LayeredPoser::Adjust::Reach r;
+        r.bone = kLimbs[l].bone;
+        r.offset = vec3(e.offset);
+        if (ik.place) {
+            r.at = vec3(within(mul(within(sub(ik.at, base), frame), 1 / ds), sk));
+            r.placeWeight = ik.placeWeight;
+        }
+        if (ik.turn) {
+            // The point's axes wanted, in the skeleton's space; the bone's
+            // are those with the point's own turn on the bone undone.
+            Axes wanted{};
+            for (size_t k = 0; k < 3; ++k)
+                wanted[k] = within(within(ik.axes[k], frame), sk);
+            for (size_t j = 0; j < 3; ++j) {
+                Vec row{};
+                for (size_t k = 0; k < 3; ++k)
+                    row = add(row, mul(wanted[k], e.axes[k][j]));
+                r.axes[j] = vec3(row);
+            }
+            r.turnWeight = ik.turnWeight;
+        }
+        out.reaches.push_back(r);
+    }
+    return out;
+}
+
+// Each limb's point on its end bone, in the bone's axes: from the mesh
+// posed as its animations have it this tick (the point's at the wrist, on
+// skin the fingers and forearm move too), with `adjust` if given. False if
+// it can't be posed now.
+bool ScriptLevel::measureEffectors(VmObject* a, ActorMesh& m, Bends& b, const LayeredPoser::Adjust* adjust) {
+    const Value* seqValue = prop(a, "AnimSequence");
+    const Value* frameValue = prop(a, "AnimFrame");
+    if (!seqValue || !seqValue->i)
+        return false;
+    const std::string seq = vm_.nameText(seqValue->i);
+    const float frame = frameValue ? frameValue->asFloat() : 0;
+    std::vector<std::string> names;
+    const std::vector<LayeredPoser::Layer> layers = posedLayers(a, m, names);
+    std::vector<Vec> verts;
+    if (!m.poser->pose(seq, frame, layers, verts, adjust))
+        return false;
+    for (size_t l = 0; l < 4; ++l) {
+        Bends::Effector& e = b.effectors[l];
+        e = {};
+        const MeshAttachPoint* point = kLimbs[l].point ? findPoint(m.mesh.attachPoints, kLimbs[l].point) : nullptr;
+        Vec3f origin{};
+        std::array<Vec3f, 3> bone{};
+        Vec at{};
+        Axes axes{};
+        if (!m.poser->boneInSkeleton(seq, frame, layers, kLimbs[l].bone, origin, bone, adjust))
+            continue; // no such limb
+        e.tick = ticks_ + 1;
+        if (!point || !pointFrame(m.mesh, &verts, *point, at, axes)) {
+            // The bone itself reaches, turned as the scripts take its axes.
+            for (size_t k = 0; k < 3; ++k)
+                e.axes[k] = {kScriptAxes[k][0], kScriptAxes[k][1], kScriptAxes[k][2]};
+            continue;
+        }
+        const Axes boneAxes{unit(Vec{bone[0][0], bone[0][1], bone[0][2]}),
+                            unit(Vec{bone[1][0], bone[1][1], bone[1][2]}),
+                            unit(Vec{bone[2][0], bone[2][1], bone[2][2]})};
+        e.offset = within(sub(within(at, m.skeleton), Vec{origin[0], origin[1], origin[2]}), boneAxes);
+        for (size_t k = 0; k < 3; ++k)
+            e.axes[k] = within(within(axes[k], m.skeleton), boneAxes);
+    }
+    return true;
 }
 
 void registerAttachNatives(Vm& vm) {
@@ -410,6 +676,85 @@ void registerAttachNatives(Vm& vm) {
     reg("Actor.C3DDetach", [](NativeCall& c) {
         if (c.vm.level && c.self)
             c.vm.level->detach(c.self, c.o(0));
+    });
+    // C3DApplyRotation(name Bone, name Axis, float Angle): degrees about one
+    // of the bone's axes as the scripts take them (kScriptAxes), turning as
+    // a rotator's Pitch, Yaw or Roll would. In the skeleton's own axes that
+    // comes to Pitch about X, Yaw Y and Roll Z, each the right-handed way:
+    // a positive Pitch bends the back and nods the head forward, as the
+    // scripts mean when the player looks down.
+    reg("Actor.C3DApplyRotation", [](NativeCall& c) {
+        if (!c.vm.level || !c.self)
+            return;
+        const std::string axis = fs::toLower(c.vm.nameText(c.i(1)));
+        const int k = axis == "pitch" ? 0 : axis == "yaw" ? 1 : axis == "roll" ? 2 : -1;
+        if (k >= 0)
+            c.vm.level->turnBone(c.self, c.i(0), k, c.f(2));
+    });
+    // C3DApplyWorldRotation(name Bone, Rotator Rotation): the bone turned
+    // where it is, its children with it. Taken in the actor's axes, not
+    // the world's (the hips' and spine's twist and lean, the head's turn
+    // to look at someone are all made so).
+    reg("Actor.C3DApplyWorldRotation", [](NativeCall& c) {
+        if (c.vm.level && c.self)
+            c.vm.level->turnBoneInActor(c.self, c.i(0), Vm::rotatorOf(c.args[1]));
+    });
+    // The IK chains: C3DSetIkTargetPositionAbs(name IkChain, Vector Location,
+    // float BlendFactor), C3DSetIkTargetOrientationAbs(.., Rotator Rotation, ..)
+    // in the world; C3DSetIkTargetPosition(.., Actor Target, Vector Offset, ..)
+    // and C3DSetIkTargetOrientation(.., Actor Target, Rotator RelRotation, ..)
+    // from an actor (the player's gun).
+    reg("Actor.C3DSetIkTargetPositionAbs", [](NativeCall& c) {
+        if (c.vm.level && c.self) {
+            const ScriptLevel::Vec at = Vm::vectorOf(c.args[1]);
+            c.vm.level->setIk(c.self, c.i(0), &at, nullptr, c.f(2));
+        }
+    });
+    reg("Actor.C3DSetIkTargetOrientationAbs", [](NativeCall& c) {
+        if (c.vm.level && c.self) {
+            const Axes axes = axesOf(Vm::rotatorOf(c.args[1]));
+            c.vm.level->setIk(c.self, c.i(0), nullptr, &axes, c.f(2));
+        }
+    });
+    auto frameOf = [](NativeCall& c, VmObject* target) {
+        const Value* r = target->find(c.vm, "Rotation");
+        return axesOf(r ? Vm::rotatorOf(*r) : ScriptLevel::Rot{});
+    };
+    reg("Actor.C3DSetIkTargetPosition", [=](NativeCall& c) {
+        VmObject* target = c.o(1);
+        if (!c.vm.level || !c.self || !target)
+            return;
+        const Value* l = target->find(c.vm, "Location");
+        const Axes f = frameOf(c, target);
+        const ScriptLevel::Vec offset = Vm::vectorOf(c.args[2]);
+        ScriptLevel::Vec at = l ? Vm::vectorOf(*l) : ScriptLevel::Vec{};
+        for (size_t j = 0; j < 3; ++j)
+            at = add(at, mul(f[j], offset[j]));
+        c.vm.level->setIk(c.self, c.i(0), &at, nullptr, c.f(3));
+    });
+    reg("Actor.C3DSetIkTargetOrientation", [=](NativeCall& c) {
+        VmObject* target = c.o(1);
+        if (!c.vm.level || !c.self || !target)
+            return;
+        const Axes axes = inFrame(axesOf(Vm::rotatorOf(c.args[2])), frameOf(c, target));
+        c.vm.level->setIk(c.self, c.i(0), nullptr, &axes, c.f(3));
+    });
+    // InterpolateRotation(Rotator A, Rotator B, float Alpha): Alpha of the
+    // way from A to B, each of pitch, yaw and roll the shorter way round
+    // (the scripts ease the IK targets' and the head's turns with it).
+    reg("Actor.InterpolateRotation", [](NativeCall& c) {
+        const auto a = Vm::rotatorOf(c.args[0]), b = Vm::rotatorOf(c.args[1]);
+        const float t = c.f(2);
+        ScriptLevel::Rot out{};
+        for (size_t k = 0; k < 3; ++k) {
+            const auto d = int32_t(int16_t(uint16_t(uint32_t(b[k] - a[k]) & 0xffff)));
+            out[k] = a[k] + int32_t(std::lround(float(d) * t));
+        }
+        c.result = c.vm.rotatorValue(out[0], out[1], out[2]);
+    });
+    reg("Actor.C3DClearIkTarget", [](NativeCall& c) {
+        if (c.vm.level && c.self)
+            c.vm.level->clearIk(c.self, c.i(0));
     });
     // Setting up The Fallen's meshes for its renderer: nothing to do here.
     for (const char* none : {"Actor.C3DActorInit", "Actor.C3DInitAltMeshes"})

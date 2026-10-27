@@ -163,22 +163,57 @@ public:
         const std::vector<bool>* part = nullptr;
         float weight = 1;               // how much it shows over what's under it
     };
+    // What's done to the pose on top of its animations (The Fallen's
+    // scripts bend the back, turn the head, reach for a gun), in the
+    // skeleton's space: the bones' own units and axes, as placed vertices
+    // are before the mesh's turn. Done in this order.
+    struct Adjust {
+        // A bone turned about one of its own axes (0 X, 1 Y, 2 Z).
+        struct Turn {
+            std::string bone;
+            int axis = 0;
+            float radians = 0;
+        };
+        // A bone turned about its origin by `turn` (rows: where the
+        // skeleton's X, Y and Z go), its children with it.
+        struct SpaceTurn {
+            std::string bone;
+            std::array<Vec3f, 3> turn{};
+        };
+        // A limb's end bone reaching (the two bones above it bent so that
+        // `offset`, in its own axes, comes to `at`) and turned so its axes
+        // are `axes`; each blended in by its weight (0 none, 1 all).
+        struct Reach {
+            std::string bone;
+            float placeWeight = 0, turnWeight = 0;
+            Vec3f at{}, offset{};
+            std::array<Vec3f, 3> axes{};
+        };
+        std::vector<Turn> turns;
+        std::vector<SpaceTurn> spaceTurns;
+        std::vector<Reach> reaches;
+        bool empty() const { return turns.empty() && spaceTurns.empty() && reaches.empty(); }
+    };
     // One frame of vertices (FrameVerts, in packed units as Mesh::verts):
     // every bone placed as `base` has it `fraction` through, then the
     // bones of each layer's part blended towards where its animation has
-    // them. False if an animation isn't the mesh's.
-    bool pose(std::string_view base, float fraction, const std::vector<Layer>& layers, std::vector<Vec3f>& out) const;
+    // them, then `adjust`. False if an animation isn't the mesh's.
+    bool pose(std::string_view base, float fraction, const std::vector<Layer>& layers, std::vector<Vec3f>& out,
+              const Adjust* adjust = nullptr) const;
     // A bone's place in the same pose: its origin and axes (rows X, Y, Z),
     // in packed units as the vertices. False if there's no such bone or an
     // animation isn't the mesh's.
     bool bone(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
-              Vec3f& origin, std::array<Vec3f, 3>& axes) const;
+              Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust = nullptr) const;
+    // The same in the skeleton's space (as Adjust).
+    bool boneInSkeleton(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
+                        Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust = nullptr) const;
     bool hasBone(std::string_view name) const;
     // Its place in its parent bone in the same pose (the bone's own units,
     // the skeleton's: as placed vertices' before the mesh's turn), and its
     // parent's name (empty for the root).
     bool boneInParent(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
-                      Vec3f& origin, std::array<Vec3f, 3>& axes) const;
+                      Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust = nullptr) const;
     std::string parentOf(std::string_view name) const;
 
     struct Impl;

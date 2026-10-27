@@ -74,6 +74,8 @@ public:
             float frame = 0, weight = 0;
         };
         std::vector<Layer> layers;
+        // What its scripts do to its bones on top (a back bent, a hand on a gun).
+        LayeredPoser::Adjust adjust;
     };
     bool look(VmObject* actor, Look& out);
     // It was drawn this frame (its LastRenderTime: The Fallen's heads and

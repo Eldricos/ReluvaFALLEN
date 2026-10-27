@@ -179,6 +179,20 @@ public:
     // hand); C3DDetach lets it go.
     void attach(VmObject* child, VmObject* parent, NameId parentPoint, NameId childPoint);
     void detach(VmObject* child, VmObject* parent);
+    // What the scripts do to an actor's bones on top of its animations,
+    // kept until changed: C3DApplyRotation turns a bone about one of its
+    // own axes (degrees), C3DApplyWorldRotation by a rotator in the
+    // actor's axes. An IK chain (C3DSetIkTarget...) bends a limb so its
+    // hand or foot reaches a place in the world, or turns it to axes
+    // there, blended in by a weight, until C3DClearIkTarget. False if
+    // there's no such chain.
+    void turnBone(VmObject* actor, NameId bone, int axis, float degrees);
+    void turnBoneInActor(VmObject* actor, NameId bone, const Rot& rotation);
+    bool setIk(VmObject* actor, NameId chain, const Vec* at, const std::array<Vec, 3>* axes, float weight);
+    void clearIk(VmObject* actor, NameId chain);
+    // All of that as the poser takes it, with the actor where it is now
+    // (empty if nothing's done to its bones).
+    LayeredPoser::Adjust boneAdjust(VmObject* actor);
     // Movement so far, for diagnostics.
     struct MovementStats {
         int moves = 0, blockedByWorld = 0, blockedByActors = 0, steps = 0, landings = 0, touches = 0,
@@ -277,6 +291,30 @@ private:
         NameId parentPoint = 0, childPoint = 0;
     };
     std::map<VmObject*, Attachment> attachments_;
+    struct Bends {
+        std::map<std::pair<NameId, int>, float> turns; // by bone and axis: degrees
+        std::map<NameId, Rot> actorTurns;
+        // Each limb's IK (0 left arm, 1 right arm, 2 left leg, 3 right leg).
+        struct Ik {
+            bool place = false, turn = false;
+            Vec at{};
+            std::array<Vec, 3> axes{};
+            float placeWeight = 0, turnWeight = 0;
+        };
+        std::array<Ik, 4> limbs;
+        // Each limb's point in its end bone's axes, and the point's axes in
+        // them (none if the mesh hasn't it: the bone itself), as this tick's
+        // animation has the hand.
+        struct Effector {
+            int tick = 0;
+            Vec offset{};
+            std::array<Vec, 3> axes{Vec{1, 0, 0}, Vec{0, 1, 0}, Vec{0, 0, 1}};
+        };
+        std::array<Effector, 4> effectors;
+    };
+    std::map<VmObject*, Bends> bends_;
+    LayeredPoser::Adjust adjustOf(VmObject* actor, ActorMesh& mesh);
+    bool measureEffectors(VmObject* actor, ActorMesh& mesh, Bends& bends, const LayeredPoser::Adjust* adjust);
     int ticks_ = 0;
     int skinChannels_ = 0;
     std::vector<VmObject*> movers_; // the level's, which traces of the world meet
