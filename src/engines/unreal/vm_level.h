@@ -18,6 +18,7 @@
 #include <array>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -139,8 +140,14 @@ private:
     struct BrushBox {
         std::array<float, 3> min{}, max{}; // in the brush's own coordinates
         std::array<float, 3> prePivot{}, mainScale{1, 1, 1}, postScale{1, 1, 1};
+        std::shared_ptr<Model> model; // its own BSP, if it has one
+        std::shared_ptr<LevelCollision> collision;
     };
     bool brushBox(VmObject* mover, std::array<float, 3>& min, std::array<float, 3>& max);
+    // A box swept by `delta` against a mover where it is now: its brush's
+    // BSP if it has one, else its box.
+    bool moverHit(VmObject* mover, const std::array<float, 3>& start, const std::array<float, 3>& delta,
+                  const std::array<float, 3>& extent, float& time, std::array<float, 3>& normal);
 
     Vm& vm_;
     const Package& map_;
@@ -155,6 +162,7 @@ private:
     std::map<std::pair<const VmClass*, NameId>, int> slots_;
     std::map<VmObject*, std::vector<VmObject*>> touching_;
     std::map<VmObject*, Goal> goals_;
+    std::set<VmObject*> fallers_; // falling since a tick before
     int editorCameras_ = 0;
     std::vector<VmObject*> actors_;
     float time_ = 0;

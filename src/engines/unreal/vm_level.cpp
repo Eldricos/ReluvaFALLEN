@@ -128,6 +128,16 @@ Error ScriptLevel::load() {
         vm_.applyProperties(a, map_, props);
         if (!levelInfo_ && vm_.isA(a, "LevelInfo"))
             levelInfo_ = a;
+        // A mover's brush's own BSP (UnrealEd builds one for each), to
+        // collide with it where it's moved to.
+        if (auto it = brushes_.find(index); it != brushes_.end())
+            if (Value* brush = a->find(vm_, "Brush"); brush && brush->asObject() && brush->o->package) {
+                auto model = std::make_shared<Model>();
+                if (!readModel(*brush->o->package, brush->o->exportIndex, *model, false) && !model->nodes.empty()) {
+                    it->second.collision = std::make_shared<LevelCollision>(*model);
+                    it->second.model = std::move(model);
+                }
+            }
     }
     if (!levelInfo_)
         return Error::fail(map_.name() + ": no LevelInfo among its actors");

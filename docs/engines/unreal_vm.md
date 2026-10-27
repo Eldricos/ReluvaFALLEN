@@ -202,8 +202,11 @@ movement, built from what the scripts set and expect.
 - **A move** (`Move`, and physics) sweeps the actor's box through the
   world, if it has `bCollideWorld`. Then it sweeps against the cylinders
   of actors that block it (`bBlockActors`, `bBlockPlayers` for players,
-  not its owner or what it owns) and movers' boxes (their brush's bounds
-  where they are now). It stops a little before the first hit. After
+  not its owner or what it owns) and movers. A mover is collided with
+  through its brush's own BSP (UnrealEd builds one for each mover), with
+  the move turned into the brush's coordinates where the mover is now. A
+  mover without one is a box. Traces count movers as the world, so a
+  pawn stands on a lift. It stops a little before the first hit. After
   that come zone changes (`ActorLeaving` to the old zone, `ZoneChange`,
   `ActorEntered` to the new), what it now touches (`Touch` and `UnTouch`
   both ways, the `Touching` list), and `Bump` to both if an actor
@@ -221,11 +224,11 @@ Physics each tick, after the actor's scripts:
 | Physics | What it does |
 |---|---|
 | Walking | Acceleration (flattened, at `AccelRate`) against ground friction (the zone's, 8) up to `GroundSpeed`. A smooth move, then down onto the floor if one is within a step, else falling (`Falling`). A floor is a surface facing up at least 0.7 (about 45 degrees). |
-| Falling | Gravity (the zone's, −950) and `AirControl` of the acceleration, up to the zone's terminal velocity. Off a wall or a slope too steep to stand on, `HitWall` and the rest of the fall slides along it. On a floor, `Landed`, then walking (pawns) or none, keeping the speed across. |
+| Falling | Gravity (the zone's, −950) and `AirControl` of the acceleration, up to the zone's terminal velocity. Off a wall or a slope too steep to stand on, `HitWall` and the rest of the fall slides along it. On a floor, `Landed`, then walking (pawns) or none, keeping the speed across. As a fall starts, the actor's `FallHeight` is set where it is: The Fallen's `TakeFallingDamage` kills at a drop of more than 800 from it, and its scripts set it only while rising in a jump. Left at 0, every landing on a map far below the origin was fatal. |
 | Swimming, flying | Acceleration against fluid friction up to `WaterSpeed` or `AirSpeed`, smooth moves. Swimmers sink or float by `Buoyancy` against `Mass` and fall once out of water. |
 | Projectile | Its velocity plus acceleration; `HitWall` on the world. |
 | Rotating | `RotationRate` each second. Any physics also turns toward `DesiredRotation` with `bRotateToDesired` (not a player's pawn: its input turns it). |
-| Moving brush | A mover from its old key toward its next by `PhysAlpha`, eased in and out if it glides by time. It carries the actors based on it and sends `InterpolateEnd` at the end. |
+| Moving brush | While its script has it going (`InterpolateTo` sets `bInterpolating`): a mover from its old key toward its next by `PhysAlpha`, eased in and out if it glides by time. It carries the actors based on it and sends `InterpolateEnd` at the end. |
 
 The Fallen's own physics modes (its effects', past 32) do nothing yet.
 Natives: `Move`, `MoveSmooth`, `SetLocation`, `SetPhysics`, `Trace`

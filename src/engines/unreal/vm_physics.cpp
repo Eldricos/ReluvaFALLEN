@@ -232,6 +232,48 @@ bool ScriptLevel::brushBox(VmObject* m, Vec& min, Vec& max) {
     return true;
 }
 
+bool ScriptLevel::moverHit(VmObject* m, const Vec& start, const Vec& delta, const Vec& e, float& time, Vec& normal) {
+    auto it = m->package == &map_ ? brushes_.find(m->exportIndex) : brushes_.end();
+    if (it == brushes_.end() || !it->second.collision) {
+        Vec bmin, bmax;
+        return brushBox(m, bmin, bmax) && boxHit(start, delta, e, bmin, bmax, time, normal);
+    }
+    // Into the brush's own space: a brush point v is at
+    // location + postScale * (rotation * (mainScale * (v - prePivot))).
+    const BrushBox& b = it->second;
+    const Vec loc = vecOf(prop(m, "Location"));
+    const auto ax = axes(prop(m, "Rotation") ? Vm::rotatorOf(*prop(m, "Rotation")) : std::array<int32_t, 3>{0, 0, 0});
+    auto local = [&](const Vec& w, bool point) {
+        Vec u{};
+        for (size_t k = 0; k < 3; ++k)
+            u[k] = (w[k] - (point ? loc[k] : 0)) / (b.postScale[k] != 0 ? b.postScale[k] : 1);
+        Vec v{dot(u, ax[0]), dot(u, ax[1]), dot(u, ax[2])};
+        for (size_t k = 0; k < 3; ++k)
+            v[k] = v[k] / (b.mainScale[k] != 0 ? b.mainScale[k] : 1) + (point ? b.prePivot[k] : 0);
+        return v;
+    };
+    Vec le{};
+    for (size_t k = 0; k < 3; ++k) {
+        for (size_t j = 0; j < 3; ++j)
+            le[k] += std::fabs(ax[k][j]) * e[j] / std::fabs(b.postScale[j] != 0 ? b.postScale[j] : 1);
+        le[k] /= std::fabs(b.mainScale[k] != 0 ? b.mainScale[k] : 1);
+    }
+    const Vec s0 = local(start, true), s1 = add(s0, local(delta, false));
+    const LevelCollision::Hit h = b.collision->trace(Vec3f{s0[0], s0[1], s0[2]}, Vec3f{s1[0], s1[1], s1[2]},
+                                                     Vec3f{le[0], le[1], le[2]});
+    if (!h.hit() || h.startSolid) // starting in it (it moved into the actor): let it get out
+        return false;
+    time = h.time;
+    // The normal back out to the world.
+    Vec n{};
+    for (size_t k = 0; k < 3; ++k)
+        n = add(n, mul(ax[k], h.normal[k] / (b.mainScale[k] != 0 ? b.mainScale[k] : 1)));
+    for (size_t k = 0; k < 3; ++k)
+        n[k] /= (b.postScale[k] != 0 ? b.postScale[k] : 1);
+    normal = normalOf(n);
+    return true;
+}
+
 // --- Moving ---------------------------------------------------------------------------------
 
 ScriptLevel::MoveHit ScriptLevel::moveActor(VmObject* a, const Vec& delta) {
@@ -291,9 +333,8 @@ ScriptLevel::MoveHit ScriptLevel::moveActor(VmObject* a, const Vec& delta) {
                 continue;
             float t = 1;
             Vec on{};
-            Vec bmin, bmax;
-            const bool hit = vm_.isA(o, "Mover") && brushBox(o, bmin, bmax)
-                                 ? boxHit(start, delta, e, bmin, bmax, t, on)
+            const bool hit = vm_.isA(o, "Mover")
+                                 ? moverHit(o, start, delta, e, t, on)
                                  : cylinderHit(start, delta, e[0], e[2], vecOf(prop(o, "Location")),
                                                floatOf(prop(o, "CollisionRadius")), floatOf(prop(o, "CollisionHeight")), t, on);
             if (hit && t < time) {
@@ -434,19 +475,21 @@ VmObject* ScriptLevel::trace(VmObject* self, const Vec& start, const Vec& end, c
             by = levelInfo_;
         }
     }
-    if (actors) {
+    // Movers count as the world; other actors only if asked.
+    {
         const Vec d = sub(end, start);
         for (VmObject* o : actors_) {
             if (o == self || o->deleted || !boolOf(prop(o, "bCollideActors")))
                 continue;
             if (!boolOf(prop(o, "bBlockActors")) && !boolOf(prop(o, "bProjTarget")) && !boolOf(prop(o, "bBlockPlayers")))
                 continue;
+            const bool mover = vm_.isA(o, "Mover");
+            if (!actors && !mover)
+                continue;
             float t = 1;
             Vec on{};
-            Vec bmin, bmax;
-            const bool hit = vm_.isA(o, "Mover") && brushBox(o, bmin, bmax)
-                                 ? boxHit(start, d, extent, bmin, bmax, t, on)
-                                 : cylinderHit(start, d, extent[0], extent[2], vecOf(prop(o, "Location")),
+            const bool hit = mover ? moverHit(o, start, d, extent, t, on)
+                                   : cylinderHit(start, d, extent[0], extent[2], vecOf(prop(o, "Location")),
                                                floatOf(prop(o, "CollisionRadius")), floatOf(prop(o, "CollisionHeight")), t, on);
             if (hit && t < time) {
                 time = t;
@@ -483,8 +526,11 @@ void ScriptLevel::rotate(VmObject* a, float dt) {
 }
 
 void ScriptLevel::moveBrush(VmObject* m, float dt) {
+    // Only while its script has it going somewhere (InterpolateTo):
+    // otherwise it stays where it is.
     Value* alpha = prop(m, "PhysAlpha");
-    if (!alpha)
+    const Value* going = prop(m, "bInterpolating");
+    if (!alpha || !going || !going->asBool())
         return;
     const float a = std::min(1.0f, alpha->asFloat() + floatOf(prop(m, "PhysRate")) * dt);
     alpha->f = a;
@@ -515,8 +561,6 @@ void ScriptLevel::moveBrush(VmObject* m, float dt) {
             if (Value* base = prop(o, "Base"); base && base->asObject() == m && !o->deleted)
                 moveActor(o, moved);
     if (a >= 1) {
-        if (Value* p = prop(m, "Physics"))
-            p->i = kPhysNone;
         if (Value* v = prop(m, "bInterpolating"))
             v->i = 0;
         vm_.callEvent(m, "InterpolateEnd", {Value::objectValue(nullptr)});
@@ -609,6 +653,8 @@ void ScriptLevel::physics(VmObject* a, float dt) {
         return;
     Value* physicsValue = prop(a, "Physics");
     const int physics = physicsValue ? physicsValue->asInt() : 0;
+    if (physics != kPhysFalling)
+        fallers_.erase(a);
     steer(a, dt);
     if (physics == kPhysNone && !boolOf(prop(a, "bRotateToDesired")))
         return;
@@ -686,6 +732,12 @@ void ScriptLevel::physics(VmObject* a, float dt) {
         break;
     }
     case kPhysFalling: {
+        // Where a fall began: The Fallen's falling damage is by the height
+        // fallen from FallHeight, which its scripts set only while rising
+        // in a jump, so the engine must set it as a fall starts.
+        if (fallers_.insert(a).second)
+            if (Value* from = prop(a, "FallHeight"))
+                *from = Value::floatValue(vecOf(prop(a, "Location"))[2]);
         // Gravity, a little steering in the air, a top speed.
         accel[2] = 0;
         const float airControl = floatOf(prop(a, "AirControl"), 0.05f);
