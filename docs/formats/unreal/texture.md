@@ -38,7 +38,8 @@ A texture with neither (no pixels, no `bHasComp`) is reported as such:
 which of The Fallen's are like that, and why, is still to be checked.
 
 Procedural textures (FireTexture, WaterTexture, WetTexture, WaveTexture,
-IceTexture, ScriptedTexture) are laid out the same. In The Fallen they
+IceTexture, ScriptedTexture, and The Fallen's FliTexture, whose frames
+come from an FLC animation in a `C3DFLIC` object) are laid out the same. In The Fallen they
 store a top mipmap of their size with no pixels: the engine makes them
 while the game runs. Until those effects are worked out (from watching
 the game: the flames' spread, the ripples), Reluva shows a still

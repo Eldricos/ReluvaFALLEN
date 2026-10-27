@@ -26,6 +26,22 @@ Vec3f readVector(Reader& r) {
     return v;
 }
 
+// Exports that aren't actors (the level's own textures, models...).
+bool notAnActor(const Package& package, int32_t classRef) {
+    const std::string c = fs::toLower(package.objectName(classRef));
+    return c == "model" || c == "polys" || c == "level" || c == "palette" || c == "sound" || c == "music" ||
+           isTextureClass(c) || isMeshClass(c);
+}
+
+// A sprite texture only the editor shows: Engine's icons (S_Light,
+// S_Camera...), The Fallen's (EI_Kira02, CTVE_Spark_Icon...), or one named
+// after the actor's class (DS9_SparkNode's).
+bool isEditorIcon(const std::string& texture, const std::string& actorClass) {
+    const std::string t = fs::toLower(texture);
+    return t.rfind("s_", 0) == 0 || t.rfind("ei_", 0) == 0 || t.find("icon") != std::string::npos ||
+           t == fs::toLower(actorClass);
+}
+
 } // namespace
 
 Error readPolys(const Package& package, int index, std::vector<Poly>& out, size_t* trailing) {
@@ -194,10 +210,7 @@ std::vector<MeshActor> findMeshActors(const PackageSet& packages, const Package&
         const int32_t cls = package.exports()[i].classRef;
         if (cls == 0)
             continue;
-        // Objects that aren't actors (the level's own textures, models...).
-        const std::string className = fs::toLower(package.objectName(cls));
-        if (className == "model" || className == "polys" || className == "level" || className == "palette" ||
-            className == "sound" || className == "music" || isTextureClass(className) || isMeshClass(className))
+        if (notAnActor(package, cls))
             continue;
         ActorProperties props;
         if (defaults.actorProperties(package, int(i), props)) {
@@ -228,6 +241,51 @@ std::vector<MeshActor> findMeshActors(const PackageSet& packages, const Package&
         ++st.meshes;
         if (!props.layers.empty() && !props.layers[0].props.find("Mesh"))
             ++st.fromDefaults;
+        out.push_back(std::move(a));
+    }
+    if (stats)
+        *stats = st;
+    return out;
+}
+
+std::vector<SpriteActor> findSpriteActors(const PackageSet& packages, const Package& package, ClassDefaults& defaults,
+                                          SpriteActorStats* stats) {
+    // EDrawType's sprites.
+    constexpr uint8_t kDrawSprite = 1, kDrawVerticalSprite = 5, kDrawSpriteAnimOnce = 7;
+    SpriteActorStats st;
+    std::vector<SpriteActor> out;
+    for (size_t i = 0; i < package.exports().size(); ++i) {
+        const int32_t cls = package.exports()[i].classRef;
+        if (cls == 0 || notAnActor(package, cls))
+            continue;
+        ActorProperties props;
+        if (defaults.actorProperties(package, int(i), props))
+            continue;
+        const uint8_t drawType = props.byte("DrawType", kDrawSprite);
+        if (drawType != kDrawSprite && drawType != kDrawVerticalSprite && drawType != kDrawSpriteAnimOnce)
+            continue;
+        const ObjectRef texture = props.object(packages, "Texture");
+        if (!texture || !isA(packages, package, int(i), "Actor"))
+            continue;
+        SpriteActor a;
+        a.drawScale = props.number("DrawScale", 1);
+        if (props.boolean("bHidden") || a.drawScale <= 0) {
+            ++st.hidden;
+            continue;
+        }
+        if (isEditorIcon(texture.package->objectName(texture.exportIndex + 1), package.objectName(cls))) {
+            ++st.editorOnly;
+            continue;
+        }
+        a.name = package.path(int32_t(i) + 1);
+        a.texture = texture;
+        props.vector("Location", a.location);
+        props.vector("PrePivot", a.prePivot);
+        a.scaleGlow = props.number("ScaleGlow", 1);
+        a.style = props.byte("Style", kStyleNormal);
+        a.vertical = drawType == kDrawVerticalSprite;
+        a.unlit = props.boolean("bUnlit");
+        ++st.sprites;
         out.push_back(std::move(a));
     }
     if (stats)

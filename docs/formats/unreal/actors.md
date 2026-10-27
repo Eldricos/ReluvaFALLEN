@@ -1,4 +1,4 @@
-# Unreal Engine 1: movers and the sky zone
+# Unreal Engine 1: movers, the sky zone and sprites
 
 Status: **implemented** (`src/engines/unreal/actors.cpp`, drawn by the
 Maps page). **Checked on The Fallen** (`reluva-tool ue-check`, October
@@ -6,7 +6,8 @@ Maps page). **Checked on The Fallen** (`reluva-tool ue-check`, October
 Mover128, has a brush whose own BSP doesn't hold together; its Polys are
 fine, so that BSP is skipped); 58 maps have a sky zone. In the Maps page
 the skies look right in every map, and movers sit, turn and move as in
-the original.
+the original. The 18 sprites (below) are drawn; whether they look as in
+the original is still to be checked.
 
 Sources: public community documentation of the UE1 formats and of
 UnrealEd's brush, mover and zone properties (as for
@@ -93,6 +94,36 @@ over it from scratch, its backdrop surfaces writing only depth (so what's
 behind them stays hidden and the sky shows). K turns it off (backdrops
 then drawn a plain colour). With several sky zones the first is used;
 the original picks per zone.
+
+## Sprites
+
+Actors with `DrawType` 1 (sprite), 5 (vertical sprite: turns only about
+the vertical) or 7 (sprite, animated once) show their `Texture` facing
+the camera, centred on `Location - PrePivot`, `DrawScale` world units a
+texel. `Style` (Engine.Actor's `ERenderStyle`) says how it blends:
+1 normal and 2 masked are drawn solid, palette index 0 see-through;
+3 translucent adds to what's behind; 4 modulated multiplies it (doubled,
+so mid grey leaves it as is). Solid sprites are lit by the level's
+lights where they stand (as placed meshes are) unless `bUnlit`; blended
+ones are drawn at full brightness; both times `ScaleGlow`.
+
+Most actors are sprites by default (Engine.Actor's `DrawType`), but
+those only the editor shows are `bHidden`. Where class defaults don't
+read right (CTV_TriggerLight's), that's missed, so actors whose sprite is
+an editor icon are left out as well: textures named `S_...` (Engine's:
+S_Light, S_Camera...), `EI_...` (The Fallen's ops station icons),
+containing "icon" (CTVE_Spark_Icon, DS9_Steam_Icon), or named after the
+actor's class (DS9_SparkNode). That leaves 18 sprites in The Fallen's
+74 maps (`ue-check` lists their textures): the disintegration effects
+(FX.spark03, a fire texture), snow spawners' flake, two targeting dummies,
+a mine's halo (a wet texture) and a blinking smoke marker (a FliTexture,
+below). Procedural textures show their still stand-ins
+([texture.md](texture.md)) until their effects are worked out.
+
+The Fallen's `FliTexture` keeps no pixels: its frames come from an FLC
+animation in a `C3DFLIC` object (its `Flic`), with `FrameTime`, `Rate`
+and `Length`. Until that's read it counts as a procedural texture and
+shows a stand-in through its palette.
 
 ## Class defaults
 

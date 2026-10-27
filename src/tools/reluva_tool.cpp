@@ -4755,6 +4755,7 @@ int cmdUeCheck(int argc, char** argv) {
     int unopened = 0;
     long long lightTotals[4] = {};
     ClassDefaults classDefaults(set);
+    std::map<std::string, int> spriteTextures; // placed sprites by texture
     for (const std::string& name : set.names()) {
         const Package* pkg = set.get(name);
         if (!pkg) {
@@ -4846,6 +4847,11 @@ int cmdUeCheck(int argc, char** argv) {
                     const LevelLights lights = gatherLights(set, *pkg, model);
                     const LightmapAtlas atlas = buildLightmaps(model, lights);
                     const LightmapAtlas::Stats& st = atlas.stats;
+                    size_t animatedTexels = 0;
+                    for (const AnimatedLightmap& m : atlas.animated)
+                        animatedTexels += size_t(m.w) * size_t(m.h);
+                    std::printf("    changing lights: %zu (pulse, flicker...) over %zu lightmaps, %zu texels\n",
+                                lights.animated.size(), atlas.animated.size(), animatedTexels);
                     std::printf("    lighting: %zu zones, %zu lightmaps (%d used, %d lit), %zu light bytes, %zu lights "
                                 "(%d unreadable), %zu leaves, %zu bytes after; grids placed by bounds %d, off fit %d, too "
                                 "large %d; %zu pages\n",
@@ -4925,6 +4931,19 @@ int cmdUeCheck(int argc, char** argv) {
                             meshStats.meshes, meshStats.fromDefaults, meshStats.hidden, meshStats.unreadable, meshless,
                             skeletal);
                 tallies["mesh actors"].ok += meshStats.meshes;
+                // Sprites, by the texture they show.
+                SpriteActorStats spriteStats;
+                for (const SpriteActor& a : findSpriteActors(set, *pkg, classDefaults, &spriteStats)) {
+                    reluva::image::Image img;
+                    const reluva::Error terr = decodeTexture(set, *a.texture.package, a.texture.exportIndex, img);
+                    ++spriteTextures[a.texture.package->path(a.texture.exportIndex + 1) + " (" +
+                                     a.texture.package->className(a.texture.exportIndex + 1) +
+                                     (terr ? ", doesn't decode" : "") + ")"];
+                    record("sprites", terr ? reluva::Error::fail(name + ": " + a.name + ": " + terr.message)
+                                           : reluva::Error::success());
+                }
+                std::printf("    sprites: %d (%d editor icons, %d hidden)\n", spriteStats.sprites,
+                            spriteStats.editorOnly, spriteStats.hidden);
                 for (const std::string& e : moverErrors)
                     record("movers", reluva::Error::fail(name + ": " + e));
             }
@@ -4939,6 +4958,12 @@ int cmdUeCheck(int argc, char** argv) {
                     lightTotals[1], lightTotals[2], lightTotals[3]);
     std::printf("class defaults (for placed actors' classes and their parents): found %d, not found %d\n",
                 classDefaults.found(), classDefaults.missing());
+    if (!spriteTextures.empty()) {
+        std::printf("sprites' textures:");
+        for (const auto& [texture, n] : spriteTextures)
+            std::printf(" %s x%d;", texture.c_str(), n);
+        std::printf("\n");
+    }
     if (!unreadPlaced.empty()) {
         std::vector<std::pair<int, std::string>> byUse;
         for (const auto& [mesh, n] : unreadPlaced)

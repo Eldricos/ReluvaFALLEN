@@ -17,7 +17,8 @@ const char* formatName(uint8_t format) {
 bool isTextureClass(std::string_view className) {
     const std::string c = fs::toLower(className);
     return c == "texture" || c == "firetexture" || c == "watertexture" || c == "wavetexture" ||
-           c == "wettexture" || c == "icetexture" || c == "scriptedtexture";
+           c == "wettexture" || c == "icetexture" || c == "scriptedtexture" ||
+           c == "flitexture"; // The Fallen's: frames from an FLC animation (a C3DFLIC object)
 }
 
 Error readPalette(const Package& package, int index, Palette& out) {

@@ -4,7 +4,8 @@ Status: **implemented** (`src/engines/unreal/lighting.cpp`, drawn by the
 Maps page). **Data checked on The Fallen** (`reluva-tool ue-check`,
 October 2026): every map's lighting reads, with no bytes left over after
 the model's last field; 345952 lightmaps over the 74 maps, every
-light actor's properties read. How lit levels look is still to be
+light actor's properties read; 1377 lights pulse, flicker or blink
+(below). How lit levels look is still to be
 compared with the original running.
 
 Sources: public community documentation of the UE1 formats and of
@@ -70,8 +71,11 @@ For each sample, its position on the surface's plane, then:
   `AmbientSaturation`, as a colour the same way. Surfaces without a
   lightmap get only this; unlit surfaces (poly flag 0x400000) are drawn
   as their texture.
-- Light effects that change over time (flicker, pulse, strobe...) are drawn
-  as their steady light for now.
+- A light's properties are its own over its class's defaults
+  ([actors.md](actors.md#class-defaults)). On The Fallen that changes
+  only the 90 `Spotlight` actors (now cones, `LightEffect` 12 from their
+  class) and the 30 `DS9_LavaZone` zones (now an orange glow of
+  brightness 255).
 - **At most 1** (`kMaxLight`): the texture's own colours. In the
   original, a lamp right against a wall (TrainingRoom, the two over the
   far door) shows its texture's detail, and the wall round it keeps its
@@ -79,6 +83,34 @@ For each sample, its position on the surface's plane, then:
   washed out to white. So the original doesn't brighten surfaces past
   their texture (as UE1's renderers do with 1x blending), and Reluva caps
   it the same.
+
+## Lights whose brightness changes
+
+`LightType` (Engine.Actor's `ELightType`: 0 none, 1 steady, 2 pulse,
+3 blink, 4 flicker, 5 strobe, 6 backdrop, 7 subtle pulse, 8 and 9 the
+texture palette ones) says how a light's brightness changes over time.
+On The Fallen 1377 of the 29202 lights change: 567 pulse, 598 flicker,
+208 subtle pulse, 3 blink, 1 strobe. A cycle is `LightPeriod` 35ths of a
+second (default 32), starting `LightPhase` 256ths of the way in.
+`lightLevel()` gives the share of the brightness at a time, Reluva's own
+curves (to be compared with the original running):
+
+| Type | Brightness through a cycle |
+|---|---|
+| Pulse | 0.6 + 0.39 sin |
+| Subtle pulse | 0.9 + 0.09 sin |
+| Blink | on the first half, off the second |
+| Strobe | on the first tenth |
+| Flicker | random, a new value 20 times a second: 0.4-1, out now and then |
+
+The light a sample gets is linear in each light's brightness, so a
+lightmap reached by changing lights is kept as its light without them
+plus each one's at full brightness (`AnimatedLightmap`), and redrawn as
+`base + sum(level * share)` (capped as above) whenever one of them
+changes by a step of the 255. The Maps page uploads only those
+lightmaps' rectangles (`Renderer3D::updateTextures()`), all in one copy
+each frame. On The Fallen a map has up to 49 such lights over at most
+about 89000 texels. Movers and placed meshes are lit by them steadily.
 
 The 128 brightness unit, the linear falloff and the cone's angle are the
 first things to tune against the original.

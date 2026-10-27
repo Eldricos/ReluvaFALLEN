@@ -155,6 +155,13 @@ struct DrawCall {
     DrawState state;
 };
 
+// A rectangle of new pixels for a texture (RGBA, w * h, rows top to bottom).
+struct TextureRegion {
+    TextureId texture = 0;
+    int x = 0, y = 0, w = 0, h = 0;
+    const uint8_t* rgba = nullptr;
+};
+
 class Renderer3D {
 public:
     virtual ~Renderer3D() = default;
@@ -163,6 +170,9 @@ public:
     virtual Error createTexture(int width, int height, const uint8_t* rgba, const TextureParams& params,
                                 TextureId& out) = 0;
     virtual void destroyTexture(TextureId id) = 0;
+    // Replaces rectangles of textures made without mipmaps (a lightmap as
+    // its lights change), all at once, before the frame's draws use them.
+    virtual Error updateTextures(const std::vector<TextureRegion>& regions) = 0;
     // Indices refer to `vertices`; every three make a triangle.
     virtual Error createMesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
                              MeshId& out) = 0;

@@ -18,6 +18,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace reluva::unreal {
@@ -27,6 +28,11 @@ namespace reluva::unreal {
 constexpr float kBrightnessUnit = 128;
 Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness);
 
+// Engine.Actor's ELightType: how a light's brightness changes over time.
+// The rest (the two texture palette ones) are drawn steady.
+constexpr uint8_t kLightNone = 0, kLightSteady = 1, kLightPulse = 2, kLightBlink = 3, kLightFlicker = 4,
+                  kLightStrobe = 5, kLightBackdrop = 6, kLightSubtlePulse = 7;
+
 struct LightSource {
     Vec3f position{};
     Vec3f color{};    // 1 = the texture as drawn
@@ -35,7 +41,15 @@ struct LightSource {
     Vec3f direction{1, 0, 0};
     float cosCone = 0;
     bool incidence = true; // fades as the surface turns away from the light
+    // How its brightness changes (its LightType: kLightPulse...), with a
+    // cycle of `period` seconds started `phase` (0-1) of the way through.
+    uint8_t type = kLightSteady;
+    float period = 1, phase = 0;
+    int animated = -1; // its index in LevelLights::animated, if its brightness changes
 };
+
+// The share of its brightness (0-1) a light gives `time` seconds in.
+float lightLevel(const LightSource& light, float time);
 
 // World units per step of an actor's LightRadius.
 constexpr float kRadiusUnit = 25;
@@ -51,6 +65,7 @@ struct LevelLights {
     std::vector<LightSource> sources; // one per entry of Model::lights
     std::vector<Vec3f> zoneAmbient;   // one per zone
     std::vector<LightSource> unique;  // each light once (sources repeats them)
+    std::vector<LightSource> animated; // those of them whose brightness changes
     int unreadable = 0;               // light actors whose properties didn't read
 };
 LevelLights gatherLights(const PackageSet& packages, const Package& package, const Model& model);
@@ -68,10 +83,22 @@ struct LightmapPlacement {
     float uOffset = 0, vOffset = 0;
 };
 
+// A lightmap that lights whose brightness changes reach, redrawn as they
+// do: its rectangle in its page (the border included), its light without
+// them, and each one's at full brightness.
+struct AnimatedLightmap {
+    int page = 0, x = 0, y = 0, w = 0, h = 0;
+    std::vector<Vec3f> base; // w * h, rows top to bottom
+    std::vector<std::pair<int, std::vector<Vec3f>>> lights; // LevelLights::animated index, its light
+    // Its texels with each light at levels[its index], as the pages hold them.
+    void draw(const std::vector<float>& levels, std::vector<uint8_t>& rgba) const;
+};
+
 struct LightmapAtlas {
     int pageSize = 0;
     std::vector<image::Image> pages; // RGBA, light / 2 (drawn doubled), at most kMaxLight
     std::vector<LightmapPlacement> surfs; // one per Model::surfs
+    std::vector<AnimatedLightmap> animated; // drawn into the pages at time 0
 
     // How the surfaces' sample grids lined up with them (see lighting.md).
     struct Stats {

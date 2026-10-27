@@ -92,6 +92,35 @@ class ClassDefaults;
 std::vector<MeshActor> findMeshActors(const PackageSet& packages, const Package& package, ClassDefaults& defaults,
                                       MeshActorStats* stats = nullptr);
 
+// Engine.Actor's ERenderStyle: how an actor's sprite or mesh blends.
+constexpr uint8_t kStyleNormal = 1, kStyleMasked = 2, kStyleTranslucent = 3, kStyleModulated = 4;
+
+// An actor drawn as a sprite (DrawType DT_Sprite, DT_VerticalSprite or
+// DT_SpriteAnimOnce): its texture facing the camera, DrawScale world
+// units per texel, centred on where it stands.
+struct SpriteActor {
+    std::string name;
+    ObjectRef texture;
+    Vec3f location{}, prePivot{};
+    float drawScale = 1;
+    float scaleGlow = 1; // its brightness
+    uint8_t style = kStyleNormal;
+    bool vertical = false; // turns about the vertical only (DT_VerticalSprite)
+    bool unlit = false;    // drawn at full brightness, not lit where it stands
+};
+
+struct SpriteActorStats {
+    int sprites = 0;
+    int editorOnly = 0; // icons only the editor shows (S_Light, S_Camera...)
+    int hidden = 0;     // bHidden, or a DrawScale of 0
+};
+
+// The actors drawn as sprites. Those whose sprite is an editor icon are
+// left out: the game hides them (bHidden), but where class defaults don't
+// read the icon gives them away (see actors.md).
+std::vector<SpriteActor> findSpriteActors(const PackageSet& packages, const Package& package, ClassDefaults& defaults,
+                                          SpriteActorStats* stats = nullptr);
+
 // A rotator's axes in Unreal's space: forward, right, up.
 std::array<Vec3f, 3> rotationAxes(const Rotator& r);
 

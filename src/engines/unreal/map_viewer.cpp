@@ -114,6 +114,10 @@ void MapViewer::unload() {
         renderer_->destroyMesh(moverMesh_);
     mesh_ = moverMesh_ = 0;
     movers_.clear();
+    if (spriteQuad_)
+        renderer_->destroyMesh(spriteQuad_);
+    spriteQuad_ = 0;
+    sprites_.clear();
     for (const GpuMesh& g : gpuMeshes_)
         if (g.mesh)
             renderer_->destroyMesh(g.mesh);
@@ -126,6 +130,9 @@ void MapViewer::unload() {
         renderer_->destroyTexture(t);
     textures_.clear();
     batches_.clear();
+    animatedLightmaps_.clear();
+    changingLights_.clear();
+    lightmapPages_.clear();
 }
 
 void MapViewer::activate() {
@@ -176,7 +183,7 @@ void MapViewer::load(int index) {
     const auto tModel = Clock::now();
     const LevelLights lights = gatherLights(ctx_.packages, *pkg, model);
     const auto tLights = Clock::now();
-    const LightmapAtlas atlas = buildLightmaps(model, lights);
+    LightmapAtlas atlas = buildLightmaps(model, lights);
     const auto tLightmaps = Clock::now();
     std::vector<gfx::TextureId> pages;
     for (const image::Image& page : atlas.pages) {
@@ -191,6 +198,13 @@ void MapViewer::load(int index) {
         pages.push_back(id);
     }
     hasLightmaps_ = !atlas.pages.empty();
+    lightmapPages_ = pages;
+    changingLights_ = lights.animated;
+    lightLevels_.clear();
+    for (const LightSource& l : changingLights_)
+        lightLevels_.push_back(lightLevel(l, 0));
+    animatedLightmaps_ = std::move(atlas.animated);
+    lightTime_ = 0;
 
     // Group the polygons by texture, drawing flags and lightmap page.
     const std::vector<Polygon> polys = levelPolygons(model);
@@ -468,6 +482,51 @@ void MapViewer::load(int index) {
         d.startFraction = a.animFrame;
         meshActors_.push_back(std::move(d));
     }
+
+    // Actors drawn as sprites, on one square turned to face the camera.
+    SpriteActorStats spriteStats;
+    for (const SpriteActor& a : findSpriteActors(ctx_.packages, *pkg, defaults, &spriteStats)) {
+        const auto [texture, size] = textureOf(a.texture);
+        if (!texture)
+            continue;
+        SpriteDraw d;
+        d.texture = texture;
+        d.at = toWorld(Vec3f{a.location[0] - a.prePivot[0], a.location[1] - a.prePivot[1], a.location[2] - a.prePivot[2]});
+        d.width = float(size[0]) * a.drawScale;
+        d.height = float(size[1]) * a.drawScale;
+        d.style = a.style;
+        d.vertical = a.vertical;
+        // Lit by the level's lights where it stands, as meshes are, unless
+        // unlit or blended (glowing effects).
+        Vec3f light{1, 1, 1};
+        if (!a.unlit && a.style != kStyleTranslucent && a.style != kStyleModulated) {
+            light = {0.15f, 0.15f, 0.15f};
+            for (const LightSource& l : lights.unique) {
+                const float dist = std::sqrt((l.position[0] - a.location[0]) * (l.position[0] - a.location[0]) +
+                                             (l.position[1] - a.location[1]) * (l.position[1] - a.location[1]) +
+                                             (l.position[2] - a.location[2]) * (l.position[2] - a.location[2]));
+                if (dist < l.radius)
+                    for (size_t k = 0; k < 3; ++k)
+                        light[k] += l.color[k] * (1 - dist / l.radius);
+            }
+            for (float& c : light)
+                c = std::min(c, kMaxLight);
+        }
+        for (size_t k = 0; k < 3; ++k)
+            d.color[k] = light[k] * a.scaleGlow * kExposure;
+        sprites_.push_back(d);
+    }
+    if (!sprites_.empty()) {
+        // A square of side 1 across X (right) and Y (up), its texture upright.
+        std::vector<gfx::Vertex> quad(4);
+        const float corners[4][2] = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+        for (size_t k = 0; k < 4; ++k) {
+            quad[k] = {{corners[k][0], corners[k][1], 0}, {corners[k][0] + 0.5f, 0.5f - corners[k][1]}, {0, 0},
+                       {0, 0, 1}, {255, 255, 255, 255}};
+        }
+        if (Error err = renderer_->createMesh(quad, {0, 1, 2, 0, 2, 3}, spriteQuad_))
+            sprites_.clear();
+    }
     const auto tMesh = Clock::now();
 
     // Start at the first PlayerStart, or above the level's middle.
@@ -505,8 +564,10 @@ void MapViewer::load(int index) {
     } else {
         const LightmapAtlas::Stats& st = atlas.stats;
         std::snprintf(line, sizeof line,
-                      "lightmaps: %d surfaces (%d lit) on %zu pages, %zu lights (%d unreadable), %d grids off fit",
-                      st.lightmaps, st.lit, atlas.pages.size(), model.lights.size(), lights.unreadable, st.badFit);
+                      "lightmaps: %d surfaces (%d lit) on %zu pages, %zu lights (%d unreadable, %zu pulsing or "
+                      "flickering over %zu lightmaps), %d grids off fit",
+                      st.lightmaps, st.lit, atlas.pages.size(), lights.unique.size(), lights.unreadable,
+                      changingLights_.size(), animatedLightmaps_.size(), st.badFit);
         info_.push_back(line);
     }
     std::snprintf(line, sizeof line,
@@ -534,7 +595,10 @@ void MapViewer::load(int index) {
                         " shared animation sets (read in " + std::to_string(animationSetsMs_) + " ms)");
     if (!firstBadMesh.empty())
         info_.push_back("First unreadable mesh: " + firstBadMesh);
-    info_.push_back("Not drawn yet: sprites, lights' effects (flicker, pulse...), movers' own lighting");
+    std::snprintf(line, sizeof line, "%zu sprites (%d editor icons and %d hidden left out)", sprites_.size(),
+                  spriteStats.editorOnly, spriteStats.hidden);
+    info_.push_back(line);
+    info_.push_back("Not drawn yet: lights' effects other than their brightness (flicker, pulse...), movers' own lighting");
 }
 
 void MapViewer::toStart() {
@@ -652,6 +716,8 @@ void MapViewer::update(uint64_t nowMs) {
             }
         }
 
+    updateLightmaps(dt);
+
     // The renderer raises colours to 1 / its gamma.
     renderer_->setGamma(1 / displayGamma_);
     const gfx::Mat4 proj = gfx::perspective(fovY, aspect, 4, 65536);
@@ -696,8 +762,81 @@ void MapViewer::update(uint64_t nowMs) {
         drawMesh(*renderer_, gpuMeshes_[d.mesh], d.placement, poseAt(mesh, anim, animTime_, d.startFraction),
                  textured_ ? d.textures : std::vector<gfx::TextureId>{}, d.light, kExposure);
     }
+    drawSprites(forward, right);
     drawOverlay(nowMs);
     renderer_->endFrame(&overlay_);
+}
+
+// The sprites, facing the camera: those drawn solid first, then the
+// blended ones over them (not hiding what's behind).
+void MapViewer::drawSprites(const gfx::Vec3& forward, const gfx::Vec3& right) {
+    const gfx::Vec3 up{right[1] * forward[2] - right[2] * forward[1], right[2] * forward[0] - right[0] * forward[2],
+                       right[0] * forward[1] - right[1] * forward[0]};
+    for (int blendedPass = 0; blendedPass < 2; ++blendedPass)
+        for (const SpriteDraw& d : sprites_) {
+            const bool blend = d.style == kStyleTranslucent || d.style == kStyleModulated;
+            if (blend != (blendedPass == 1))
+                continue;
+            // Vertical sprites stay upright, turning only about Z.
+            const gfx::Vec3 u = d.vertical ? gfx::Vec3{0, 0, 1} : up;
+            gfx::DrawCall call;
+            call.mesh = spriteQuad_;
+            call.indexCount = 6;
+            call.model = gfx::identity();
+            for (size_t k = 0; k < 3; ++k) {
+                call.model[k] = right[k] * d.width;
+                call.model[4 + k] = u[k] * d.height;
+                call.model[8 + k] = -forward[k];
+                call.model[12 + k] = d.at[k];
+            }
+            call.texture = textured_ ? d.texture : 0;
+            call.color = {d.color[0], d.color[1], d.color[2], 1};
+            call.state.cull = gfx::Cull::None;
+            if (d.style == kStyleTranslucent) {
+                call.state.src = call.state.dst = gfx::Blend::One;
+                call.state.depthWrite = false;
+            } else if (d.style == kStyleModulated) {
+                // The background times the texture, doubled: grey leaves it as is.
+                call.color = {1, 1, 1, 1};
+                call.state.src = gfx::Blend::DstColor;
+                call.state.dst = gfx::Blend::SrcColor;
+                call.state.depthWrite = false;
+            } else {
+                call.state.alphaTest = gfx::AlphaTest::Ge128; // masked: index 0 see-through
+            }
+            renderer_->draw(call);
+        }
+}
+
+// Redraws the lightmaps that pulsing, flickering... lights reach, where
+// those lights' brightness changed.
+void MapViewer::updateLightmaps(float dt) {
+    lightTime_ += dt;
+    std::vector<bool> changed(changingLights_.size(), false);
+    bool any = false;
+    for (size_t i = 0; i < changingLights_.size(); ++i) {
+        const float level = lightLevel(changingLights_[i], lightTime_);
+        if (std::fabs(level - lightLevels_[i]) * 255 >= 1) {
+            lightLevels_[i] = level;
+            changed[i] = any = true;
+        }
+    }
+    if (!any)
+        return;
+    std::vector<std::vector<uint8_t>> pixels;
+    std::vector<gfx::TextureRegion> regions;
+    for (const AnimatedLightmap& m : animatedLightmaps_) {
+        const bool redraw = std::any_of(m.lights.begin(), m.lights.end(),
+                                        [&](const auto& l) { return changed[size_t(l.first)]; });
+        if (!redraw || size_t(m.page) >= lightmapPages_.size() || !lightmapPages_[size_t(m.page)])
+            continue;
+        pixels.emplace_back();
+        m.draw(lightLevels_, pixels.back());
+        regions.push_back({lightmapPages_[size_t(m.page)], m.x, m.y, m.w, m.h, nullptr});
+    }
+    for (size_t i = 0; i < regions.size(); ++i)
+        regions[i].rgba = pixels[i].data();
+    renderer_->updateTextures(regions);
 }
 
 // The idle loop a character placed in pose `anim` plays (see load()).

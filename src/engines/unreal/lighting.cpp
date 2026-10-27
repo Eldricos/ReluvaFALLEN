@@ -3,6 +3,7 @@
 
 #include "engines/unreal/lighting.h"
 
+#include "engines/unreal/class_defaults.h"
 #include "engines/unreal/properties.h"
 #include "engines/unreal/texture.h"
 
@@ -30,30 +31,26 @@ Vec3f cross(const Vec3f& a, const Vec3f& b) {
 }
 float length(const Vec3f& a) { return std::sqrt(dot(a, a)); }
 
-bool readActor(const PackageSet& packages, const Package& package, int32_t ref, PropertyList& props) {
+// A light actor's light, its classes' defaults under its own properties;
+// false if they don't read (it then lights nothing).
+bool readLight(const PackageSet& packages, const Package& package, int32_t ref, ClassDefaults& defaults,
+               LightSource& l) {
     const ObjectRef obj = packages.resolve(package, ref);
-    if (!obj)
+    ActorProperties props;
+    if (!obj || defaults.actorProperties(*obj.package, obj.exportIndex, props) ||
+        !props.vector("Location", l.position))
         return false;
-    std::vector<uint8_t> data;
-    if (obj.package->readExport(obj.exportIndex, data))
-        return false;
-    Reader r(data, size_t(obj.package->exports()[size_t(obj.exportIndex)].serialOffset));
-    return !beginObject(*obj.package, obj.exportIndex, r, props);
-}
-
-// A light actor's light; false if its properties don't read (it then
-// lights nothing).
-bool readLight(const PackageSet& packages, const Package& package, int32_t ref, LightSource& l) {
-    PropertyList props;
-    if (!readActor(packages, package, ref, props) || !props.vector("Location", l.position))
-        return false;
-    // Defaults as Engine.Light's: a steady white light of brightness 64
-    // and radius 64. Lights the level lists are lights, so a missing
-    // LightType counts as steady.
-    if (props.find("LightType") && props.byte("LightType") == 0)
+    // Fallbacks as Engine.Light's defaults: a steady white light of
+    // brightness 64 and radius 64. Lights the level lists are lights, so
+    // a missing LightType counts as steady.
+    l.type = props.byte("LightType", kLightSteady);
+    if (l.type == kLightNone)
         return true;
     l.color = lightColor(props.byte("LightHue"), props.byte("LightSaturation", 255), props.byte("LightBrightness", 64));
     l.radius = kRadiusUnit * (float(props.byte("LightRadius", 64)) + 1);
+    // LightPeriod in 35ths of a second a cycle, LightPhase in 256ths of one.
+    l.period = float(std::max<uint8_t>(props.byte("LightPeriod", 32), 1)) / 35;
+    l.phase = float(props.byte("LightPhase")) / 256;
     const uint8_t effect = props.byte("LightEffect");
     l.incidence = effect != kEffectNonIncidence;
     if (effect == kEffectSpotlight || effect == kEffectStaticSpot) {
@@ -66,6 +63,22 @@ bool readLight(const PackageSet& packages, const Package& package, int32_t ref, 
         l.cosCone = std::cos(float(props.byte("LightCone", 128)) / 256.0f * kPi / 2);
     }
     return true;
+}
+
+bool changes(const LightSource& l) {
+    return l.type == kLightPulse || l.type == kLightBlink || l.type == kLightFlicker || l.type == kLightStrobe ||
+           l.type == kLightSubtlePulse;
+}
+
+// A repeatable random number 0-1 for a light at a step of time.
+float noise(uint32_t seed, uint32_t step) {
+    uint32_t h = seed * 0x9e3779b1u ^ step * 0x85ebca6bu;
+    h ^= h >> 15;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12;
+    h *= 0x297a2d39u;
+    h ^= h >> 15;
+    return float(h & 0xffffff) / float(0xffffff);
 }
 
 // The zone a surface is in: the zone on the front of its first node.
@@ -104,12 +117,33 @@ Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness) {
     return c;
 }
 
+float lightLevel(const LightSource& l, float time) {
+    // How far through its cycle it is, 0-1.
+    const float cycles = time / std::max(l.period, 1e-3f) + l.phase;
+    const float at = cycles - std::floor(cycles);
+    switch (l.type) {
+    case kLightPulse: return 0.6f + 0.39f * std::sin(2 * kPi * at);
+    case kLightSubtlePulse: return 0.9f + 0.09f * std::sin(2 * kPi * at);
+    case kLightBlink: return at < 0.5f ? 1.0f : 0.0f;
+    case kLightStrobe: return at < 0.1f ? 1.0f : 0.0f; // a flash at the start of each cycle
+    case kLightFlicker: {
+        // A new random brightness 20 times a second, now and then out.
+        const float r = noise(uint32_t(l.phase * 256) + uint32_t(int32_t(l.position[0] * 7 + l.position[1] * 13 + l.position[2])),
+                              uint32_t(std::max(0.0f, time) * 20));
+        return r < 0.15f ? 0.0f : 0.4f + 0.6f * r;
+    }
+    default: return 1;
+    }
+}
+
 LevelLights gatherLights(const PackageSet& packages, const Package& package, const Model& model) {
     LevelLights out;
+    ClassDefaults defaults(packages);
     for (const Zone& z : model.zones) {
-        PropertyList props;
+        ActorProperties props;
         Vec3f ambient{};
-        if (z.actor && readActor(packages, package, z.actor, props))
+        const ObjectRef zone = z.actor ? packages.resolve(package, z.actor) : ObjectRef{};
+        if (zone && !defaults.actorProperties(*zone.package, zone.exportIndex, props))
             ambient = lightColor(props.byte("AmbientHue"), props.byte("AmbientSaturation", 255),
                                  props.byte("AmbientBrightness"));
         out.zoneAmbient.push_back(ambient);
@@ -126,8 +160,12 @@ LevelLights gatherLights(const PackageSet& packages, const Package& package, con
         auto it = byRef.find(ref);
         if (it == byRef.end()) {
             LightSource l;
-            if (!readLight(packages, package, ref, l))
+            if (!readLight(packages, package, ref, defaults, l))
                 ++out.unreadable;
+            if (l.radius > 0 && changes(l)) {
+                l.animated = int(out.animated.size());
+                out.animated.push_back(l);
+            }
             it = byRef.emplace(ref, l).first;
             if (l.radius > 0)
                 out.unique.push_back(l);
@@ -135,6 +173,20 @@ LevelLights gatherLights(const PackageSet& packages, const Package& package, con
         out.sources.push_back(it->second);
     }
     return out;
+}
+
+void AnimatedLightmap::draw(const std::vector<float>& levels, std::vector<uint8_t>& rgba) const {
+    rgba.resize(base.size() * 4);
+    for (size_t t = 0; t < base.size(); ++t) {
+        Vec3f light = base[t];
+        for (const auto& [index, share] : lights) {
+            const float level = size_t(index) < levels.size() ? levels[size_t(index)] : 1;
+            light = add(light, scale(share[t], level));
+        }
+        for (size_t k = 0; k < 3; ++k)
+            rgba[t * 4 + k] = uint8_t(std::clamp(light[k], 0.0f, kMaxLight) / 2 * 255 + 0.5f);
+        rgba[t * 4 + 3] = 255;
+    }
 }
 
 std::array<float, 2> LightmapAtlas::uv(int surf, const Vec3f& p) const {
@@ -267,88 +319,114 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
         rowH = std::max(rowH, h);
     }
 
-    // Light each grid's samples, then copy its edges into the border.
+    // Light each grid's samples, then copy its edges into the border. The
+    // lights whose brightness changes are kept apart, each lightmap they
+    // reach redrawn with them as they do (drawn at time 0 here).
+    std::vector<float> startLevels;
+    for (const LightSource& l : lights.animated)
+        startLevels.push_back(lightLevel(l, 0));
+    std::vector<uint8_t> rgba;
     for (size_t gi = 0; gi < grids.size(); ++gi) {
         const Grid& g = grids[gi];
         image::Image& img = atlas.pages[size_t(placed[gi][0])];
         const int x0 = placed[gi][1], y0 = placed[gi][2];
-        auto put = [&](int x, int y, const Vec3f& light) {
-            uint8_t* p = img.pixel(x, y);
-            for (int k = 0; k < 3; ++k)
-                p[k] = uint8_t(std::clamp(light[size_t(k)], 0.0f, kMaxLight) / 2 * 255 + 0.5f);
-            p[3] = 255;
-        };
+        // The samples with their border, (i, j) at (i + 1, j + 1).
+        const int bw = g.w + 2, bh = g.h + 2;
+        auto at = [&](int i, int j) { return size_t(j + 1) * size_t(bw) + size_t(i + 1); };
+        AnimatedLightmap anim;
+        anim.base.assign(size_t(bw) * size_t(bh), Vec3f{});
+        std::map<int, size_t> animIndex; // animated light -> its entry in anim.lights
         if (g.surf < 0) {
             const Vec3f ambient = size_t(g.zone) < lights.zoneAmbient.size() ? lights.zoneAmbient[size_t(g.zone)] : Vec3f{};
-            for (int y = -1; y <= 1; ++y)
-                for (int x = -1; x <= 1; ++x)
-                    put(x0 + x, y0 + y, ambient);
-            continue;
-        }
-        const BspSurf& surf = model.surfs[size_t(g.surf)];
-        const LightMapIndex& m = model.lightMaps[size_t(surf.lightMap)];
-        const Vec3f& n = model.vectors[size_t(surf.normal)];
-        const Vec3f ambient =
-            size_t(zones[size_t(g.surf)]) < lights.zoneAmbient.size() ? lights.zoneAmbient[size_t(zones[size_t(g.surf)])] : Vec3f{};
-        // A sample's position: where the plane meets the grid lines,
-        // solving uAxis.P = i - uOffset, vAxis.P = j - vOffset, n.P = n.base.
-        const Vec3f vn = cross(g.vAxis, n), nu = cross(n, g.uAxis), uv = cross(g.uAxis, g.vAxis);
-        const float det = dot(g.uAxis, vn);
-        const float planeD = dot(n, model.points[size_t(surf.base)]);
-        const int rowBytes = (m.uClamp + 7) / 8;
-        bool anyLit = false;
-        for (int j = 0; j < g.h; ++j)
-            for (int i = 0; i < g.w; ++i) {
-                Vec3f light = ambient;
-                if (std::fabs(det) > 1e-12f) {
-                    const Vec3f p = scale(add(add(scale(vn, float(i) - g.uOffset), scale(nu, float(j) - g.vOffset)),
-                                              scale(uv, planeD)),
-                                          1 / det);
-                    int k = 0;
-                    for (size_t li = size_t(std::max(m.lightActors, 0)); m.lightActors >= 0 && li < model.lights.size() &&
-                                                                       model.lights[li];
-                         ++li, ++k) {
-                        const size_t at = size_t(m.dataOffset) + size_t(k) * size_t(rowBytes) * size_t(m.vClamp) +
-                                          size_t(j) * size_t(rowBytes) + size_t(i / 8);
-                        if (!((model.lightBits[at] >> (i & 7)) & 1))
-                            continue;
-                        const LightSource& src = lights.sources[li];
-                        if (src.radius <= 0)
-                            continue;
-                        const Vec3f d = sub(src.position, p);
-                        const float dist = length(d);
-                        if (dist >= src.radius || dist <= 0)
-                            continue;
-                        float amount = 1 - dist / src.radius;
-                        if (src.incidence) {
-                            const float facing = dot(n, d) / dist;
-                            if (facing <= 0)
+            anim.base.assign(anim.base.size(), ambient);
+        } else {
+            const BspSurf& surf = model.surfs[size_t(g.surf)];
+            const LightMapIndex& m = model.lightMaps[size_t(surf.lightMap)];
+            const Vec3f& n = model.vectors[size_t(surf.normal)];
+            const Vec3f ambient = size_t(zones[size_t(g.surf)]) < lights.zoneAmbient.size()
+                                      ? lights.zoneAmbient[size_t(zones[size_t(g.surf)])]
+                                      : Vec3f{};
+            // A sample's position: where the plane meets the grid lines,
+            // solving uAxis.P = i - uOffset, vAxis.P = j - vOffset, n.P = n.base.
+            const Vec3f vn = cross(g.vAxis, n), nu = cross(n, g.uAxis), uv = cross(g.uAxis, g.vAxis);
+            const float det = dot(g.uAxis, vn);
+            const float planeD = dot(n, model.points[size_t(surf.base)]);
+            const int rowBytes = (m.uClamp + 7) / 8;
+            bool anyLit = false;
+            for (int j = 0; j < g.h; ++j)
+                for (int i = 0; i < g.w; ++i) {
+                    Vec3f light = ambient;
+                    if (std::fabs(det) > 1e-12f) {
+                        const Vec3f p = scale(add(add(scale(vn, float(i) - g.uOffset), scale(nu, float(j) - g.vOffset)),
+                                                  scale(uv, planeD)),
+                                              1 / det);
+                        int k = 0;
+                        for (size_t li = size_t(std::max(m.lightActors, 0));
+                             m.lightActors >= 0 && li < model.lights.size() && model.lights[li]; ++li, ++k) {
+                            const size_t bit = size_t(m.dataOffset) + size_t(k) * size_t(rowBytes) * size_t(m.vClamp) +
+                                               size_t(j) * size_t(rowBytes) + size_t(i / 8);
+                            if (!((model.lightBits[bit] >> (i & 7)) & 1))
                                 continue;
-                            amount *= facing;
-                        }
-                        if (src.spot) {
-                            const float c = -dot(d, src.direction) / dist;
-                            if (c < src.cosCone)
+                            const LightSource& src = lights.sources[li];
+                            if (src.radius <= 0)
                                 continue;
-                            amount *= (c - src.cosCone) / std::max(1e-3f, 1 - src.cosCone);
+                            const Vec3f d = sub(src.position, p);
+                            const float dist = length(d);
+                            if (dist >= src.radius || dist <= 0)
+                                continue;
+                            float amount = 1 - dist / src.radius;
+                            if (src.incidence) {
+                                const float facing = dot(n, d) / dist;
+                                if (facing <= 0)
+                                    continue;
+                                amount *= facing;
+                            }
+                            if (src.spot) {
+                                const float c = -dot(d, src.direction) / dist;
+                                if (c < src.cosCone)
+                                    continue;
+                                amount *= (c - src.cosCone) / std::max(1e-3f, 1 - src.cosCone);
+                            }
+                            anyLit = true;
+                            if (src.animated < 0) {
+                                light = add(light, scale(src.color, amount));
+                                continue;
+                            }
+                            auto it = animIndex.find(src.animated);
+                            if (it == animIndex.end()) {
+                                it = animIndex.emplace(src.animated, anim.lights.size()).first;
+                                anim.lights.push_back({src.animated, std::vector<Vec3f>(anim.base.size(), Vec3f{})});
+                            }
+                            Vec3f& c = anim.lights[it->second].second[at(i, j)];
+                            c = add(c, scale(src.color, amount));
                         }
-                        light = add(light, scale(src.color, amount));
-                        anyLit = true;
                     }
+                    anim.base[at(i, j)] = light;
                 }
-                put(x0 + i, y0 + j, light);
-            }
-        if (anyLit)
-            ++atlas.stats.lit;
-        // The border repeats the edges, so filtering at them doesn't
-        // reach a neighbour's texels.
-        for (int j = -1; j <= g.h; ++j)
-            for (int i = -1; i <= g.w; ++i) {
-                if (i >= 0 && i < g.w && j >= 0 && j < g.h)
-                    continue;
-                const int si = std::clamp(i, 0, g.w - 1), sj = std::clamp(j, 0, g.h - 1);
-                std::copy_n(img.pixel(x0 + si, y0 + sj), 4, img.pixel(x0 + i, y0 + j));
-            }
+            if (anyLit)
+                ++atlas.stats.lit;
+            // The border repeats the edges, so filtering at them doesn't
+            // reach a neighbour's texels.
+            auto border = [&](std::vector<Vec3f>& v) {
+                for (int j = -1; j <= g.h; ++j)
+                    for (int i = -1; i <= g.w; ++i)
+                        if (i < 0 || i >= g.w || j < 0 || j >= g.h)
+                            v[at(i, j)] = v[at(std::clamp(i, 0, g.w - 1), std::clamp(j, 0, g.h - 1))];
+            };
+            border(anim.base);
+            for (auto& l : anim.lights)
+                border(l.second);
+        }
+        anim.page = placed[gi][0];
+        anim.x = x0 - 1;
+        anim.y = y0 - 1;
+        anim.w = bw;
+        anim.h = bh;
+        anim.draw(startLevels, rgba);
+        for (int j = 0; j < bh; ++j)
+            std::copy_n(rgba.data() + size_t(j) * size_t(bw) * 4, size_t(bw) * 4, img.pixel(anim.x, anim.y + j));
+        if (!anim.lights.empty())
+            atlas.animated.push_back(std::move(anim));
     }
 
     for (size_t s = 0; s < model.surfs.size(); ++s) {

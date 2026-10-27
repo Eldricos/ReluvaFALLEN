@@ -485,6 +485,33 @@ static void testModel() {
     const LightmapAtlas capped = buildLightmaps(m, bright);
     if (capped.pages.size() == 1)
         CHECK(capped.pages[0].pixel(1, 1)[0] == 128 && capped.pages[0].pixel(5, 5)[0] == 16);
+    // The same light pulsing: its share kept apart, redrawn by its level.
+    CHECK(lights.animated.empty() && atlas.animated.empty());
+    LevelLights pulsing = lights;
+    pulsing.sources[0].type = kLightPulse;
+    pulsing.sources[0].animated = 0;
+    pulsing.animated = {pulsing.sources[0]};
+    const LightmapAtlas changing = buildLightmaps(m, pulsing);
+    CHECK(changing.animated.size() == 1);
+    if (changing.animated.size() == 1 && atlas.pages.size() == 1) {
+        const AnimatedLightmap& a = changing.animated[0];
+        CHECK(a.page == 0 && a.x == 0 && a.y == 0 && a.w == 7 && a.h == 7 && a.lights.size() == 1);
+        std::vector<uint8_t> full, off;
+        a.draw({1.0f}, full);
+        a.draw({0.0f}, off);
+        CHECK(full.size() == 7 * 7 * 4 && full[(1 * 7 + 1) * 4] == atlas.pages[0].pixel(1, 1)[0]);
+        CHECK(off[(1 * 7 + 1) * 4] == 16); // out: the ambient light alone
+        // Drawn into the page as at time 0: the pulse's 0.6.
+        CHECK(std::abs(int(changing.pages[0].pixel(1, 1)[0]) - int(16 + (111 - 16) * 0.6f)) <= 1);
+    }
+    LightSource l;
+    l.type = kLightPulse;
+    l.period = 2;
+    CHECK(std::abs(lightLevel(l, 0.5f) - 0.99f) < 1e-4f && std::abs(lightLevel(l, 1.5f) - 0.21f) < 1e-4f);
+    l.type = kLightBlink;
+    CHECK(lightLevel(l, 0.5f) == 1 && lightLevel(l, 1.5f) == 0);
+    l.type = kLightSteady;
+    CHECK(lightLevel(l, 1.5f) == 1);
     // A model whose BSP doesn't hold together: refused, or read without it.
     {
         PackageWriter bad = w;

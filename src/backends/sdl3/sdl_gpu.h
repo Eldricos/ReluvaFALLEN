@@ -31,6 +31,7 @@ public:
     Error createTexture(int width, int height, const uint8_t* rgba, const gfx::TextureParams& params,
                         gfx::TextureId& out) override;
     void destroyTexture(gfx::TextureId id) override;
+    Error updateTextures(const std::vector<gfx::TextureRegion>& regions) override;
     Error createMesh(const std::vector<gfx::Vertex>& vertices, const std::vector<uint32_t>& indices,
                      gfx::MeshId& out) override;
     void destroyMesh(gfx::MeshId id) override;

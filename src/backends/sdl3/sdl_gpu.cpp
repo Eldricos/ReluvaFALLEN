@@ -383,6 +383,53 @@ Error SdlGpuRenderer::createTexture(int width, int height, const uint8_t* rgba, 
     return Error::success();
 }
 
+Error SdlGpuRenderer::updateTextures(const std::vector<gfx::TextureRegion>& regions) {
+    // One transfer buffer holding them all, copied in one pass.
+    uint32_t size = 0;
+    for (const gfx::TextureRegion& r : regions)
+        if (r.w > 0 && r.h > 0 && textures_.count(r.texture))
+            size += uint32_t(r.w) * uint32_t(r.h) * 4;
+    if (size == 0)
+        return Error::success();
+    SDL_GPUTransferBufferCreateInfo ti{};
+    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    ti.size = size;
+    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(device_, &ti);
+    auto* mapped = static_cast<uint8_t*>(tb ? SDL_MapGPUTransferBuffer(device_, tb, false) : nullptr);
+    if (!mapped) {
+        if (tb)
+            SDL_ReleaseGPUTransferBuffer(device_, tb);
+        return sdlError("Cannot update a texture");
+    }
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device_);
+    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+    uint32_t offset = 0;
+    for (const gfx::TextureRegion& r : regions) {
+        auto it = textures_.find(r.texture);
+        if (r.w <= 0 || r.h <= 0 || it == textures_.end())
+            continue;
+        const uint32_t bytes = uint32_t(r.w) * uint32_t(r.h) * 4;
+        std::memcpy(mapped + offset, r.rgba, bytes);
+        SDL_GPUTextureTransferInfo src{};
+        src.transfer_buffer = tb;
+        src.offset = offset;
+        SDL_GPUTextureRegion dst{};
+        dst.texture = it->second.texture;
+        dst.x = uint32_t(r.x);
+        dst.y = uint32_t(r.y);
+        dst.w = uint32_t(r.w);
+        dst.h = uint32_t(r.h);
+        dst.d = 1;
+        SDL_UploadToGPUTexture(copy, &src, &dst, false);
+        offset += bytes;
+    }
+    SDL_UnmapGPUTransferBuffer(device_, tb);
+    SDL_EndGPUCopyPass(copy);
+    const bool ok = SDL_SubmitGPUCommandBuffer(cmd);
+    SDL_ReleaseGPUTransferBuffer(device_, tb);
+    return ok ? Error::success() : sdlError("Cannot update a texture");
+}
+
 std::string SdlGpuRenderer::deviceName() const {
     const SDL_PropertiesID props = SDL_GetGPUDeviceProperties(device_);
     std::string name = SDL_GetStringProperty(props, SDL_PROP_GPU_DEVICE_NAME_STRING, "unknown GPU");

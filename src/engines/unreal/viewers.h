@@ -29,6 +29,7 @@
 
 #include "engines/unreal/actors.h"
 #include "engines/unreal/games.h"
+#include "engines/unreal/lighting.h"
 #include "engines/unreal/mesh_render.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package_set.h"
@@ -264,6 +265,18 @@ private:
         float drawScale = 1;
         bool skeletal = false; // its mesh is posed from bones
     };
+    // Actors drawn as sprites.
+    struct SpriteDraw {
+        gfx::TextureId texture = 0;
+        gfx::Vec3 at{};             // its centre, the renderer's axes
+        float width = 0, height = 0; // world units
+        std::array<float, 3> color{1, 1, 1};
+        uint8_t style = kStyleNormal;
+        bool vertical = false;
+    };
+    void drawSprites(const gfx::Vec3& forward, const gfx::Vec3& right);
+    gfx::MeshId spriteQuad_ = 0;
+    std::vector<SpriteDraw> sprites_;
     void jumpToMeshActor(bool skeletalOnly);
     static std::string idleFor(const std::string& anim);
     int animationSetsMs_ = 0; // how long reading the shared animation sets took
@@ -285,6 +298,14 @@ private:
     // screenshots: see lighting.md.
     float displayGamma_ = 1.3f;
     bool hasLightmaps_ = false;
+    // Lights whose brightness changes, and the lightmaps they reach,
+    // redrawn as they do.
+    void updateLightmaps(float dt);
+    std::vector<gfx::TextureId> lightmapPages_;
+    std::vector<LightSource> changingLights_;
+    std::vector<float> lightLevels_; // each one's brightness as last drawn
+    std::vector<AnimatedLightmap> animatedLightmaps_;
+    float lightTime_ = 0;
 
     // Fly camera, in the renderer's world: Unreal's axes with Y negated
     // (so right-handed), Z up; yaw 0 looks along +X.
