@@ -189,8 +189,8 @@ The movement: 187,000 moves, 6,837 landings, 8,341 touches.
 
 What's left before play, by what `ue-run` reports:
 
-- **Natives not written** (33): The Fallen's `ListActors` iterator (an AI's list of known actors, not yet
-  understood), `CheckFOV`, `GetRendererFlags`. The AI's paths
+- **Natives not written** (30): The Fallen's `ListActors` iterator (an AI's list of known actors, not yet
+  understood), `GetRendererFlags`. The AI's paths
   (`FindPathToward`, `RadiusPathNodes` and the other path node
   iterators). Its dialogue (`FindBestDialogLine`, `StartDialog`,
   `DialogTick`) and documents.
@@ -467,8 +467,6 @@ Not done:
 - **Faces:** drawing them. Their sequences are vertex animations
   ([mesh.md](../formats/unreal/mesh.md): `Blink`, `EyeBrows` and `Phonemes` are the clips with
   vertex keys), still to be combined with the bones' pose.
-- **The heads' look-at:** `C3DApplyRotation`, `C3DSetIkTarget...` and
-  the IK.
 - **Layer options:** the layers' `ClearYaw`/`ClearPitch`/`ClearRoll`.
 - **Speed-scaled rates:** a negative rate, which no script uses.
 - **Tweens:** blending from the old pose (drawn at the first frame).
