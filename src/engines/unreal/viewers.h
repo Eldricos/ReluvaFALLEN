@@ -33,6 +33,8 @@
 #include "engines/unreal/mesh_render.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package_set.h"
+#include "engines/unreal/procedural.h"
+#include "engines/unreal/texture.h"
 
 #include "common/audio/mixer.h"
 #include "common/events.h"
@@ -140,11 +142,19 @@ public:
     size_t count() const override { return browser_.packageCount(); }
     void activate() override;
     void handleEvent(const Event& ev) override;
+    void update(uint64_t nowMs) override;
 
 private:
+    void select();
     void draw();
     ObjectBrowser browser_;
     bool started_ = false;
+    image::Image img_;
+    TextureInfo info_;
+    std::string error_;
+    std::unique_ptr<AnimatedTexture> anim_; // the texture's animation, if it has one
+    bool paused_ = false;
+    uint64_t lastMs_ = 0;
 };
 
 class SoundViewer : public Page {
@@ -306,6 +316,9 @@ private:
     std::vector<float> lightLevels_; // each one's brightness as last drawn
     std::vector<AnimatedLightmap> animatedLightmaps_;
     float lightTime_ = 0;
+    // Fire, water, wet and FLC textures, playing.
+    void updateAnimatedTextures(float dt);
+    std::vector<std::pair<gfx::TextureId, std::unique_ptr<AnimatedTexture>>> animatedTextures_;
 
     // Fly camera, in the renderer's world: Unreal's axes with Y negated
     // (so right-handed), Z up; yaw 0 looks along +X.

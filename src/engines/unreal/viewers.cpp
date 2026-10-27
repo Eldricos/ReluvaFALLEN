@@ -9,6 +9,7 @@
 #include "engines/unreal/properties.h"
 #include "engines/unreal/sound.h"
 #include "engines/unreal/texture.h"
+#include "engines/unreal/procedural.h"
 
 #include "common/audio/decode.h"
 #include "common/font.h"
@@ -246,7 +247,7 @@ void TextureViewer::activate() {
         started_ = true;
         browser_.stepPackage(0);
     }
-    draw();
+    select();
 }
 
 void TextureViewer::handleEvent(const Event& ev) {
@@ -256,8 +257,42 @@ void TextureViewer::handleEvent(const Event& ev) {
         browser_.step(ev.key == key::Left ? -1 : 1);
     else if (ev.key == key::PageUp || ev.key == key::PageDown)
         browser_.stepPackage(ev.key == key::PageUp ? -1 : 1);
+    else if (ev.key == key::Space && anim_)
+        paused_ = !paused_;
     else
         return;
+    select();
+}
+
+// Fire, water, wet and FLC textures play.
+void TextureViewer::update(uint64_t nowMs) {
+    const float dt = lastMs_ ? std::min(0.1f, float(nowMs - lastMs_) / 1000.0f) : 0.0f;
+    lastMs_ = nowMs;
+    if (anim_ && !paused_ && anim_->advance(dt)) {
+        img_ = anim_->image();
+        draw();
+    }
+}
+
+// Reads the texture the browser is on, and its animation if it has one.
+void TextureViewer::select() {
+    anim_.reset();
+    img_ = {};
+    info_ = {};
+    error_.clear();
+    if (const Package* pkg = browser_.package()) {
+        const int index = browser_.exportIndex();
+        if (Error err = decodeTexture(ctx_.packages, *pkg, index, img_, &info_)) {
+            error_ = err.message;
+        } else if (isAnimatedTextureClass(pkg->className(index + 1))) {
+            std::string why;
+            anim_ = openAnimatedTexture(ctx_.packages, *pkg, index, &why);
+            if (anim_)
+                img_ = anim_->image();
+            else
+                info_.standIn += " (doesn't play: " + why + ")";
+        }
+    }
     draw();
 }
 
@@ -283,12 +318,12 @@ void TextureViewer::draw() {
     setTitle(name + " (" + browser_.where() + ")");
     text(4, 4, pkg->className(index + 1) + " " + name + "  " + browser_.where());
 
-    image::Image img;
-    TextureInfo info;
-    if (Error err = decodeTexture(ctx_.packages, *pkg, index, img, &info)) {
-        text(4, 4 + lh, err.message, {255, 120, 120});
+    if (!error_.empty()) {
+        text(4, 4 + lh, error_, {255, 120, 120});
         return;
     }
+    const image::Image& img = img_;
+    const TextureInfo& info = info_;
     // Whole multiples up to 4x when small, nearest-neighbour shrinking when large.
     const int areaW = s.w, areaH = s.h - 3 * lh;
     float scale = std::min(float(areaW) / float(img.w), float(areaH) / float(img.h));
@@ -309,7 +344,12 @@ void TextureViewer::draw() {
                   info.mipCount, info.masked ? ", masked" : "", info.paletteName.empty() ? "" : ", palette ",
                   info.paletteName.c_str());
     text(4, 4 + lh, line, {150, 200, 255});
-    if (!info.standIn.empty())
+    if (anim_)
+        text(4, 4 + 2 * lh,
+             std::string("Stored without pixels: playing its ") + anim_->kind() + (paused_ ? " (paused" : " (") +
+                 ", Space pauses)",
+             {255, 200, 120});
+    else if (!info.standIn.empty())
         text(4, 4 + 2 * lh, "Stored without pixels: " + info.standIn, {255, 200, 120});
 }
 

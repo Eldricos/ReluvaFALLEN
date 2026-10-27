@@ -117,13 +117,7 @@ actor's class (DS9_SparkNode). That leaves 18 sprites in The Fallen's
 74 maps (`ue-check` lists their textures): the disintegration effects
 (FX.spark03, a fire texture), snow spawners' flake, two targeting dummies,
 a mine's halo (a wet texture) and a blinking smoke marker (a FliTexture,
-below). Procedural textures show their still stand-ins
-([texture.md](texture.md)) until their effects are worked out.
-
-The Fallen's `FliTexture` keeps no pixels: its frames come from an FLC
-animation in a `C3DFLIC` object (its `Flic`), with `FrameTime`, `Rate`
-and `Length`. Until that's read it counts as a procedural texture and
-shows a stand-in through its palette.
+below). Their fire, wet and FLC textures play ([texture.md](texture.md#animated-textures)).
 
 ## Class defaults
 

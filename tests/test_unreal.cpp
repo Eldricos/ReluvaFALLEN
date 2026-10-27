@@ -12,6 +12,7 @@
 #include "engines/unreal/games.h"
 #include "engines/unreal/mesh.h"
 #include "engines/unreal/lighting.h"
+#include "engines/unreal/procedural.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package.h"
 #include "engines/unreal/package_set.h"
@@ -702,6 +703,112 @@ static void testProceduralTextures() {
     CHECK(err && err.message.find("no stand-in") != std::string::npos);
 }
 
+static void testAnimatedTextures() {
+    // A FliTexture of two 4x2 frames and the ring frame back to the
+    // first, a FireTexture with one spark, and a WaterTexture with a drop,
+    // all through texturePackage()'s palette (red = the index).
+    PackageWriter w;
+    const int32_t walls = w.addImport("Core", "Package", 0, "Walls");
+    const int32_t pal = w.addImport("Engine", "Palette", walls, "BrickPal");
+    const int32_t fli = w.addImport("DS9", "Class", 0, "FliTexture");
+    const int32_t fire = w.addImport("Fire", "Class", 0, "FireTexture");
+    const int32_t water = w.addImport("Fire", "Class", 0, "WaterTexture");
+    auto start = [&](Bytes& o) {
+        tag(o, w, "Palette", PropertyType::Object, 1);
+        o.index(pal);
+    };
+    auto mips = [](Bytes& o, int width, int height) {
+        o.index(1);
+        o.i32(0), o.index(0), o.i32(width), o.i32(height), o.u8(0), o.u8(0);
+    };
+    auto frame = [](Bytes& out, const std::vector<std::pair<int, std::vector<uint8_t>>>& chunks) {
+        Bytes f;
+        for (const auto& [type, data] : chunks) {
+            f.u32(uint32_t(data.size() + 6));
+            f.u16(type);
+            for (uint8_t b : data)
+                f.u8(b);
+        }
+        out.u32(uint32_t(f.b.size() + 16 + 2)); // padded by 2, as some of The Fallen's are
+        out.u16(0xf1fa);
+        out.u16(int(chunks.size()));
+        for (int i = 0; i < 8; ++i)
+            out.u8(0);
+        out.b.insert(out.b.end(), f.b.begin(), f.b.end());
+        out.u16(0);
+    };
+    Bytes flc;
+    frame(flc, {{16, {0, 1, 2, 3, 4, 5, 6, 7}}});     // the picture as is
+    frame(flc, {{7, {1, 0, 1, 0, 1, 1, 9, 9}}});     // line 0: skip 1, a word of 9s
+    frame(flc, {{7, {1, 0, 1, 0, 1, 1, 1, 2}}});     // and back
+    Bytes f;
+    start(f);
+    endProps(f, w);
+    mips(f, 4, 2);
+    f.f32(2.0f / 30), f.f32(1), f.u16(2), f.u16(4), f.u16(2), f.u16(0), f.u32(uint32_t(flc.b.size()));
+    f.b.insert(f.b.end(), flc.b.begin(), flc.b.end());
+    w.addExport(fli, 0, "Blink", f.b);
+    Bytes fb;
+    start(fb);
+    endProps(fb, w);
+    mips(fb, 8, 8);
+    fb.index(1);
+    for (int b : {99, 200, 3, 4, 0, 0, 0, 0}) // a spark type that just heats its spot
+        fb.u8(b);
+    w.addExport(fire, 0, "Flame", fb.b);
+    Bytes wb;
+    start(wb);
+    tag(wb, w, "NumDrops", PropertyType::Int, 4);
+    wb.i32(1);
+    tag(wb, w, "Drops", PropertyType::Struct, 8, 0, "ADrop");
+    for (int b : {1, 200, 2, 2, 0, 0, 0, 16}) // a spot rising and falling
+        wb.u8(b);
+    endProps(wb, w);
+    mips(wb, 8, 8);
+    w.addExport(water, 0, "Pool", wb.b);
+    PackageSet set;
+    set.addMemory("Walls", ".utx", texturePackage());
+    set.addMemory("Fx", ".utx", w.build());
+    const Package* p = set.get("Fx");
+    CHECK(p != nullptr);
+    if (!p)
+        return;
+    std::string err;
+    auto blink = openAnimatedTexture(set, *p, 0, &err);
+    CHECK(blink && err.empty());
+    if (blink) {
+        CHECK(std::string(blink->kind()) == "FLC" && blink->image().w == 4 && blink->image().h == 2);
+        CHECK(blink->image().pixel(1, 0)[0] == 1 && blink->image().pixel(3, 1)[0] == 7);
+        CHECK(!blink->advance(0.01f));                           // a frame lasts 1/30 s
+        CHECK(blink->advance(0.03f) && blink->image().pixel(1, 0)[0] == 9 && blink->image().pixel(2, 0)[0] == 9);
+        CHECK(blink->image().pixel(3, 0)[0] == 3);
+        CHECK(blink->advance(1.0f / 30) && blink->image().pixel(1, 0)[0] == 1); // the ring frame: the first again
+        CHECK(blink->advance(1.0f / 30) && blink->image().pixel(1, 0)[0] == 9);
+    }
+    auto flame = openAnimatedTexture(set, *p, 1, &err);
+    CHECK(flame != nullptr);
+    if (flame) {
+        CHECK(std::string(flame->kind()) == "fire");
+        CHECK(flame->image().pixel(3, 4)[0] == 200);  // the spark's spot
+        CHECK(flame->image().pixel(4, 4)[0] > 0 && flame->image().pixel(4, 4)[0] < 200); // spreading, cooling
+        CHECK(flame->image().pixel(0, 0)[0] == 0);
+    }
+    auto pool = openAnimatedTexture(set, *p, 2, &err);
+    CHECK(pool != nullptr);
+    if (pool) {
+        CHECK(std::string(pool->kind()) == "water" && pool->image().w == 8);
+        std::vector<uint8_t> before = pool->image().rgba;
+        CHECK(pool->advance(0.1f) && pool->image().rgba != before);
+    }
+    // A plain texture isn't one.
+    CHECK(!isAnimatedTextureClass("Texture") && isAnimatedTextureClass("WetTexture"));
+    // As a still picture, the FLC's first frame.
+    image::Image img;
+    TextureInfo info;
+    CHECK(!decodeTexture(set, *p, 0, img, &info));
+    CHECK(img.w == 4 && img.pixel(1, 0)[0] == 1 && info.standIn.find("FLC") != std::string::npos);
+}
+
 static void testMapExtension() {
     const auto tmp = std::filesystem::temp_directory_path() / "reluva_unreal_maps";
     std::filesystem::remove_all(tmp);
@@ -1175,6 +1282,7 @@ int main() {
     testCompressedTexture();
     testSoundErrors();
     testProceduralTextures();
+    testAnimatedTextures();
     testStreamedSounds();
     testActors();
     testMeshes();

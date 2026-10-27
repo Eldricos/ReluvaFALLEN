@@ -3,6 +3,8 @@
 
 #include "engines/unreal/texture.h"
 
+#include "engines/unreal/procedural.h"
+
 #include "common/fs.h"
 
 #include <algorithm>
@@ -172,6 +174,17 @@ static Error decodeAt(const PackageSet& packages, const Package& package, int in
             return Error::fail(described + ": no pixels stored" +
                                (props.find("bHasComp") ? "" : ", and no bHasComp"));
         std::string standIn;
+        // Fire, water and FLC textures: their animation's first picture.
+        // (Wet ones show their source texture, unrippled, as before.)
+        if (fs::toLower(cls) != "wettexture" && isAnimatedTextureClass(cls)) {
+            std::string why;
+            if (auto anim = openAnimatedTexture(packages, package, index, &why)) {
+                out = anim->image();
+                if (info)
+                    info->standIn = cls + " (animated), shown still: its " + anim->kind() + " as it starts";
+                return Error::success();
+            }
+        }
         if (Error err = proceduralStandIn(packages, package, props, ti.width, ti.height, depth, out, standIn))
             return Error::fail(described + ": no pixels stored, and no stand-in: " + err.message);
         if (info)

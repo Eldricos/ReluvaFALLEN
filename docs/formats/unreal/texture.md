@@ -38,13 +38,98 @@ A texture with neither (no pixels, no `bHasComp`) is reported as such:
 which of The Fallen's are like that, and why, is still to be checked.
 
 Procedural textures (FireTexture, WaterTexture, WetTexture, WaveTexture,
-IceTexture, ScriptedTexture, and The Fallen's FliTexture, whose frames
-come from an FLC animation in a `C3DFLIC` object) are laid out the same. In The Fallen they
-store a top mipmap of their size with no pixels: the engine makes them
-while the game runs. Until those effects are worked out (from watching
-the game: the flames' spread, the ripples), Reluva shows a still
-stand-in of the right size, so surfaces' texture coordinates come out
-right: for Wet and Ice textures the texture they distort (their
+IceTexture, ScriptedTexture, and The Fallen's FliTexture) are laid out
+the same. In The Fallen they store a top mipmap of their size with no
+pixels: the engine makes them while the game runs. Fire, water, wave,
+wet and FLC textures play (below, `procedural.cpp`), in the Maps page
+and the Textures page (Space pauses); as a still picture (the meshes
+page, `decodeTexture()`) they show their first picture. Wet textures
+still show their source texture unrippled, and Ice and Scripted ones a
+still stand-in of the right size, so surfaces' texture coordinates come
+out right: for Ice textures the texture they distort (their
 `SourceTexture` or `GlassTexture` property), scaled to their size; for
-the others a gradient through their palette, colour 0 at the top to 255
-at the bottom. The Textures page says which it is.
+the others a gradient through their palette. The Textures page says
+which it is. `ue-check` runs each animated texture for ten seconds:
+on The Fallen all 519 play (337 FLC, 108 fire, 70 wet, 4 wave).
+
+## Animated textures
+
+The class names and their settings' names come from Fire.u (the enums
+`ESpark` and `WDrop`, the structs `Spark` and `ADrop`). What each
+setting does is Reluva's own reading of those names and of the values
+in The Fallen's textures, to be compared with the original running. The
+fire and water simulations step 30 times a second.
+
+### FLC (FliTexture)
+
+The Fallen's own class. After the mipmaps: float length, float rate,
+u16 frame count, u16 width, u16 height, a u16 not understood (2 to 173),
+u32 bytes of frames, then the frames of an FLC animation (Autodesk
+Animator's format, without its 128-byte file header). Each frame is a
+u32 size, 0xF1FA, a u16 chunk count, 8 reserved bytes, then its chunks
+(u32 size, u16 type); 14 of the 337 textures pad a frame by 2 bytes past
+its chunks, so frames are stepped by their size. Chunk types seen: 4
+(palette, 8-bit), 7 (changed lines in 16-bit words), 12 (changed lines
+in bytes), 15 (whole picture, run-length coded), 16 (whole picture as
+is), 18 (a thumbnail, skipped); 11 (6-bit palette) and 13 (black) are
+read too. Every texture has one frame more than its count: the "ring"
+frame, which turns the last frame back into the first, so after it play
+carries on from the second. Its `Flic` (a C3DFLIC object) is empty.
+
+Timing: length / frames is 1/30 s in every texture, so a frame shows
+for that divided by the rate (`Rate`, 0.014 to 1): the red blinker
+`FlcAnim.Redblink01` (rate 0.1) a third of a second a frame. That the
+rate divides is a guess from its saved `FrameTime` (0.058, more than
+1/30). Pixels go through the FLC's own palette chunks, starting from
+the texture's palette; masked textures see through colour 0.
+
+### Fire (FireTexture)
+
+A heat value (0-255) per pixel, shown through the palette. After the
+mipmaps: a compact count, then 8 bytes a spark: type (`ESpark`), heat,
+X, Y (pixels) and four bytes A-D whose use depends on the type. Each
+step the heat spreads and cools, then the sparks add theirs (a spark
+sets its pixel to at least its heat):
+
+- Spreading: with `bRising` each pixel takes the heat of the three below
+  it (the middle twice), so flames climb; without, it blends with its
+  four neighbours. Either way times `RenderHeat` / 256, so a low
+  `RenderHeat` leaves only the sparks' own pixels and a high one long
+  trails. Rows below the bottom are cold; the sides wrap.
+- Sparks: Burn a random heat at its spot; Sparkle flashes near it (A
+  how often, B how far); Pulse and Signal rise and fall or switch on and
+  off (D the speed, A the phase); Blaze, Cone, OzHasSpoken,
+  BlazeLeft/Right, Emit, Fountain and Sprinkler send out moving sparks
+  that cool as they go (Emit and Fountain along A, B as signed speeds in
+  32nds of a pixel a step, Fountain falling back); Cylinder, Lissajous,
+  Jugglers and Wheel move round paths (B the size, C the speed); the
+  organic ones (Flocks, Eels, Organic, WanderOrganic, Gametes) wander;
+  the clouds and Stars dot heat at random near the spot; the lightnings
+  draw jagged lines (Line and Ramp to the point A, B; Sphere outwards).
+  At most `SparksLimit` moving sparks at once.
+- Not yet: `DrawMode`'s lathes (2 textures) are drawn as normal.
+
+The 108 fire textures hold 26,859 sparks; Sparkle (9,403), Jugglers,
+Burn, Emit, Signal and Blaze are most of them. Many textures are
+pictures painted in sparks (a force field's 1,024 Sparkles).
+
+### Water, wave and wet (WaterTexture and its subclasses)
+
+A height field at half the texture's size (the drops' X and Y are in
+its cells: a 64x64 texture's run to about 32), rippling: each step a
+cell becomes half its four neighbours' sum less its value the step
+before, damped by 0.96; the edges wrap. The drops are the `Drops`
+properties (`ADrop`: type, depth, X, Y, A-D), the first `NumDrops` of
+them (the rest are left over from editing). Each step a drop sets its
+cell: FixedDepth to its depth; PhaseSpot rising and falling by its depth
+(D the speed: the texture's `FX_Frequency` when it was placed);
+ShallowSpot by half; HalfAmpl between 0 and its depth; RandomMover and
+the whirlies moving (round a circle of C / 16 cells, B a signed speed,
+A the phase); the lines a row of cells of C / 2 rising and falling; the
+oscillators a spot swinging along a line; RainDrops at random cells;
+AreaClamp holding cells flat; the taps now and then.
+
+A wet texture shows its `SourceTexture` with each pixel moved by the
+slope there (times `WaveAmp` / 128, up to 16 pixels); water and wave
+textures show the slope through their palette (128 flat). WaveTexture's
+bump-map lighting isn't done yet.

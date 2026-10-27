@@ -109,7 +109,7 @@ Linux (with each distro's packages) and Windows with Visual Studio 2022.
   **Tab** switches between maps, meshes, textures, sounds and packages. In a map, **Left/Right**
   picks one, drag to look, **W/A/S/D** move, **Space/C** (or **E/Q**) go up and down,
   **Shift** goes faster, **R** returns to the PlayerStart, **T** turns textures off,
-  **L** the lightmaps (pulsing and flickering lights animate), **[**/**]** dim or brighten them, **-**/**=** change the display's
+  **L** the lightmaps (pulsing and flickering lights animate, as do fire, water and FLC textures), **[**/**]** dim or brighten them, **-**/**=** change the display's
   gamma, **O** moves the doors and lifts to their next position, **K** turns the sky off,
   **N** plays the placed meshes' animations, **M** changes how imported meshes are turned
   (the opposite of their float copies, as the game does; as stored; or as the float copies), **Y** turns
@@ -118,7 +118,7 @@ Linux (with each distro's packages) and Windows with Visual Studio 2022.
   (it needs 3D, as Elite Force's). For meshes, **Left/Right** step, **PageUp/PageDown**
   pick the package, drag to turn, the wheel zooms, **A** plays or stops the animation,
   **[**/**]** pick it (for characters, the shared animations too) and **M**/**Y** turn it as in maps. For textures and sounds,
-  **Left/Right** step and **PageUp/PageDown** pick the package; **Space** plays a sound.
+  **Left/Right** step and **PageUp/PageDown** pick the package; **Space** pauses an animated texture or plays a sound.
   The packages page lists each package's exports: **Left/Right** picks the package,
   **Up/Down** (**PageUp/PageDown**, **Home/End**) the export, **Enter** shows its properties.
 

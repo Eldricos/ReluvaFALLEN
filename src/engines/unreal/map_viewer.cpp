@@ -11,6 +11,7 @@
 #include "engines/unreal/actors.h"
 #include "engines/unreal/class_defaults.h"
 #include "engines/unreal/lighting.h"
+#include "engines/unreal/procedural.h"
 #include "engines/unreal/properties.h"
 #include "engines/unreal/texture.h"
 
@@ -131,6 +132,7 @@ void MapViewer::unload() {
     textures_.clear();
     batches_.clear();
     animatedLightmaps_.clear();
+    animatedTextures_.clear();
     changingLights_.clear();
     lightmapPages_.clear();
 }
@@ -235,12 +237,25 @@ void MapViewer::load(int index) {
                 if (firstMissing.empty())
                     firstMissing = tex.package->path(tex.exportIndex + 1);
             } else {
+                // Fire, water, wet and FLC textures play, redrawn as they
+                // change (so without mipmaps, which updates don't redo).
+                std::unique_ptr<AnimatedTexture> anim;
+                if (isAnimatedTextureClass(tex.package->className(tex.exportIndex + 1)))
+                    anim = openAnimatedTexture(ctx_.packages, *tex.package, tex.exportIndex);
+                if (anim && anim->image().w == img.w && anim->image().h == img.h)
+                    img = anim->image();
+                else
+                    anim.reset();
                 gfx::TextureParams params;
                 params.nearest = (ti.polyFlags & polyflag::NoSmooth) != 0;
-                if (!renderer_->createTexture(img.w, img.h, img.rgba.data(), params, id))
+                params.mipmaps = !anim;
+                if (!renderer_->createTexture(img.w, img.h, img.rgba.data(), params, id)) {
                     textures_.push_back(id);
-                else
+                    if (anim)
+                        animatedTextures_.push_back({id, std::move(anim)});
+                } else {
                     id = 0;
+                }
             }
             it = loaded.emplace(std::make_pair(tex.package, tex.exportIndex),
                                 std::make_pair(id, std::array<int, 2>{std::max(1, img.w), std::max(1, img.h)}))
@@ -595,8 +610,8 @@ void MapViewer::load(int index) {
                         " shared animation sets (read in " + std::to_string(animationSetsMs_) + " ms)");
     if (!firstBadMesh.empty())
         info_.push_back("First unreadable mesh: " + firstBadMesh);
-    std::snprintf(line, sizeof line, "%zu sprites (%d editor icons and %d hidden left out)", sprites_.size(),
-                  spriteStats.editorOnly, spriteStats.hidden);
+    std::snprintf(line, sizeof line, "%zu sprites (%d editor icons and %d hidden left out); %zu animated textures",
+                  sprites_.size(), spriteStats.editorOnly, spriteStats.hidden, animatedTextures_.size());
     info_.push_back(line);
     info_.push_back("Not drawn yet: lights' effects other than their brightness (flicker, pulse...), movers' own lighting");
 }
@@ -717,6 +732,7 @@ void MapViewer::update(uint64_t nowMs) {
         }
 
     updateLightmaps(dt);
+    updateAnimatedTextures(dt);
 
     // The renderer raises colours to 1 / its gamma.
     renderer_->setGamma(1 / displayGamma_);
@@ -806,6 +822,17 @@ void MapViewer::drawSprites(const gfx::Vec3& forward, const gfx::Vec3& right) {
             }
             renderer_->draw(call);
         }
+}
+
+// Moves the fire, water, wet and FLC textures on, uploading those that
+// changed.
+void MapViewer::updateAnimatedTextures(float dt) {
+    std::vector<gfx::TextureRegion> regions;
+    for (const auto& [id, anim] : animatedTextures_)
+        if (anim->advance(dt))
+            regions.push_back({id, 0, 0, anim->image().w, anim->image().h, anim->image().rgba.data()});
+    if (!regions.empty())
+        renderer_->updateTextures(regions);
 }
 
 // Redraws the lightmaps that pulsing, flickering... lights reach, where

@@ -139,6 +139,7 @@
 #include "engines/unreal/mesh.h"
 #include "engines/unreal/games.h"
 #include "engines/unreal/lighting.h"
+#include "engines/unreal/procedural.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package_set.h"
 #include "engines/unreal/properties.h"
@@ -4774,6 +4775,20 @@ int cmdUeCheck(int argc, char** argv) {
                     ++tallies["textures (procedural, stand-in shown)"].ok;
                 else
                     record("textures", err);
+                // Fire, water, wet and FLC textures: whether they play
+                // (procedural.h), ten seconds of each (some FLCs show a frame for seconds).
+                if (isAnimatedTextureClass(cls)) {
+                    std::string why;
+                    auto anim = openAnimatedTexture(set, *pkg, int(i), &why);
+                    int changes = 0;
+                    for (int k = 0; anim && k < 60; ++k)
+                        changes += anim->advance(1.0f / 6);
+                    const std::string kind = anim ? anim->kind() : cls;
+                    record("animated textures (" + kind + ")",
+                           !anim ? reluva::Error::fail(why)
+                           : changes == 0 ? reluva::Error::fail(pkg->path(int32_t(i) + 1) + ": doesn't change")
+                                          : reluva::Error::success());
+                }
             } else if (cls == "sound") {
                 reluva::audio::Sound s;
                 std::string from;
