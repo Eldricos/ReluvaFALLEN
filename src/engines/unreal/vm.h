@@ -243,6 +243,7 @@ public:
     VmObject* findObject(std::string_view path);
     // An object's name or a class's, as scripts see it.
     std::string objectName(const VmObject* o) const;
+    std::string pathName(const VmObject* o); // string() of it: "Package.Name"
 
     // Converts a value to a property's type (assignment).
     Value convert(const Value& v, const VmProperty& to) const;

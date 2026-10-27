@@ -1405,7 +1405,9 @@ bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4
 // the info, drawOverlay).
 void MapViewer::drawPlayHud() {
     char line[200];
-    std::snprintf(line, sizeof line, "%s  health %d  %s  %.0f s played%s%s", play_->player()->cls->name.c_str(),
+    const std::string title = play_->title();
+    std::snprintf(line, sizeof line, "%s%s%s  health %d  %s  %.0f s played%s%s", title.c_str(), title.empty() ? "" : "  ",
+                  play_->player()->cls->name.c_str(),
                   play_->health(), play_->playerState().c_str(), double(play_->time()),
                   view_.letterbox ? "  (cut scene)" : "",
                   play_->behind() > 1 ? ("  " + std::to_string(int(play_->behind())) + " s behind real time").c_str() : "");
@@ -1417,7 +1419,26 @@ void MapViewer::drawPlayHud() {
             p[x * 4 + 3] = std::max<uint8_t>(p[x * 4 + 3], 150);
     }
     font::drawText(overlay_, 4, y, line, Color{230, 230, 230});
-    drawSubtitles(y - 8);
+    // The objectives active now, above it.
+    int above = y - 2;
+    const std::vector<std::string> objectives = play_->activeObjectives();
+    if (!objectives.empty()) {
+        std::string list = "Objectives:";
+        for (const std::string& o : objectives)
+            list += (list.size() > 11 ? "; " : " ") + o;
+        const size_t columns = size_t(kFrameW - 8) / size_t(font::kAdvance);
+        if (list.size() > columns)
+            list = list.substr(0, columns - 3) + "...";
+        above -= font::kLineHeight + 2;
+        const int w = std::min(kFrameW, int(font::length(list)) * font::kAdvance + 8);
+        for (int yy = above - 1; yy < above + font::kLineHeight; ++yy) {
+            uint8_t* p = overlay_.row(yy);
+            for (int x = 0; x < w; ++x)
+                p[x * 4 + 3] = std::max<uint8_t>(p[x * 4 + 3], 150);
+        }
+        font::drawText(overlay_, 4, above, list.c_str(), Color{160, 200, 255});
+    }
+    drawSubtitles(above - 6);
 }
 
 // The lines being said, above the status line: who says it (the main

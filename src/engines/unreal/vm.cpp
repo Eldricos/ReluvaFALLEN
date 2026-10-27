@@ -215,6 +215,28 @@ VmObject* Vm::findObject(std::string_view path) {
     return nullptr;
 }
 
+// As UnrealScript's string() of an object gives it: its path, from its
+// package down ("M01_KiraL1A.LevelInfo0", "Engine.Actor", "DS9_Objectives.M01_KL1_LibKey"):
+// a package's object by its place in it, a class by its package, anything
+// else by its Outer's path. A level's actors take the level's package for
+// their outer, as the game's scripts read it (GetMissionLevel takes the
+// mission's number from string(Level)).
+std::string Vm::pathName(const VmObject* o) {
+    if (!o)
+        return "None";
+    if (o->asClass)
+        return o->asClass->package ? o->asClass->package->name() + "." + o->asClass->name : o->asClass->name;
+    if (o->package && o->exportIndex >= 0)
+        return o->package->name() + "." + o->package->path(o->exportIndex + 1);
+    const Value* outerValue = const_cast<VmObject*>(o)->find(*this, "Outer");
+    const VmObject* outer = outerValue ? outerValue->asObject() : nullptr;
+    if (!outer || outer == o)
+        return nameText(o->name);
+    if (outer->package && outer->exportIndex >= 0 && outer->cls && lower(outer->cls->name) == "level")
+        return outer->package->name() + "." + nameText(o->name);
+    return pathName(outer) + "." + nameText(o->name);
+}
+
 std::string Vm::objectName(const VmObject* o) const {
     if (!o)
         return "None";
@@ -654,7 +676,7 @@ std::string Vm::toString(const Value& v) const {
         return buf;
     case VType::Name: return nameText(v.i);
     case VType::String: return v.s;
-    case VType::Object: return objectName(v.asObject());
+    case VType::Object: return const_cast<Vm*>(this)->pathName(v.asObject());
     case VType::Struct:
         if (v.fields.size() == 3 && v.fields[0].type == VType::Float) {
             std::snprintf(buf, sizeof buf, "%.2f,%.2f,%.2f", double(v.fields[0].f), double(v.fields[1].f),

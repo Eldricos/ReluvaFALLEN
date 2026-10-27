@@ -191,6 +191,26 @@ int LevelPlay::health() {
     return v ? v->asInt() : 0;
 }
 
+std::string LevelPlay::title() {
+    const Value* v = level_->levelInfo() ? level_->levelInfo()->find(*vm_, "Title") : nullptr;
+    return v ? v->s : std::string();
+}
+
+std::vector<std::string> LevelPlay::activeObjectives() {
+    std::vector<std::string> out;
+    VmObject* info = level_->levelInfo();
+    const VmProperty* titles = info ? info->cls->findProperty(vm_->name("Objective_Title")) : nullptr;
+    const VmProperty* states = info ? info->cls->findProperty(vm_->name("Objective_State")) : nullptr;
+    if (!titles || !states)
+        return out;
+    for (int k = 0; k < titles->arrayDim && k < states->arrayDim; ++k) {
+        const Value& t = info->values[size_t(titles->slot + k)];
+        if (!t.s.empty() && info->values[size_t(states->slot + k)].asInt() == 0)
+            out.push_back(t.s);
+    }
+    return out;
+}
+
 std::string LevelPlay::playerState() {
     return player_ && player_->state ? player_->state->name : std::string("none");
 }

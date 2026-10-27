@@ -18,6 +18,7 @@
 #include "engines/unreal/vm.h"
 
 #include <array>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <set>
@@ -162,6 +163,12 @@ public:
         std::string speaker, text, type;
     };
     std::vector<Subtitle> subtitles() const;
+    // The game's text files (vm_documents.cpp): the int folder, and a
+    // section of one of its .int files, its keys and values in order
+    // (none if there's no such file or section).
+    std::filesystem::path intFolder() const;
+    const std::vector<std::pair<std::string, std::string>>* intSection(const std::string& file,
+                                                                       const std::string& section);
     struct DialogStats {
         int started = 0, lines = 0, notFound = 0, unknownConditions = 0;
     } dialog;
@@ -379,6 +386,8 @@ private:
     };
     std::map<VmObject*, Bends> bends_;
     void loadPaths();
+    using IntFile = std::map<std::string, std::vector<std::pair<std::string, std::string>>>; // by section, lower case
+    std::map<std::string, IntFile> intFiles_; // by file name, lower case
     struct DialogThread {
         int id = 0, line = 0;
         VmObject* self = nullptr; // who started it
@@ -459,6 +468,8 @@ void registerAttachNatives(Vm& vm);
 void registerPathNatives(Vm& vm);
 // The Fallen's dialogue (vm_dialog.cpp).
 void registerDialogNatives(Vm& vm);
+// The Fallen's documents and objectives (vm_documents.cpp).
+void registerDocumentNatives(Vm& vm);
 // A map's reach list as stored (object references, not yet actors).
 struct RawReachSpec {
     int distance = 0, start = 0, end = 0, radius = 0, height = 0, flags = 0;

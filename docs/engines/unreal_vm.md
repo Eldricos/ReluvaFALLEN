@@ -45,6 +45,18 @@ bools 1 byte); every one of The Fallen's reads to its end. Objects' own
 built-in properties (`Outer`, `Name`, `Class`) are set when they're made:
 scripts read them (CTVE_DllObject checks its `Outer` is an actor).
 
+An object as a string (`string(Level)`, `$`) is its path, as UnrealScript
+gives it:
+- an object from a package is `Package.Group.Name`;
+- a class is `Package.Class`;
+- a level's actor is the map's name and its own (`M01_KiraL1A.LevelInfo0`);
+- anything else is its `Outer`'s path and its name.
+
+The scripts depend on this: The Fallen's `GetMissionLevel` takes the
+mission number from `string(Level)`, `GetItemName` strips the package off
+a class's, and the mutator list compares against `Package.Class`. While
+it gave the name alone, every level counted as mission 100.
+
 ## The interpreter
 
 Statements run from a function's or state's code (`Interpreter::run`),
@@ -191,9 +203,9 @@ The movement: 187,000 moves, 6,837 landings, 8,341 touches.
 
 What's left before play, by what `ue-run` reports:
 
-- **Natives not written** (23): The Fallen's `ListActors` iterator (an AI's list of known actors, not yet
-  understood), `GetRendererFlags`, the documents (`FindDocument`,
-  `LocalizeDocument`).
+- **Natives not written** (20): The Fallen's `ListActors` iterator (an AI's list of known actors, not yet
+  understood), `GetRendererFlags`, and The Fallen's per-tick hooks and
+  effects (`ScriptTick`, `ChainSparkTick`, `UpdateBeamSections`...).
 - **Speed**: values are copied freely and calls looked up by name; the
   biggest maps tick at half real time.
 - **The game's own mistakes**: `DS9_GrigariSentryDrone` (and its kin)
@@ -378,6 +390,47 @@ the natives.
 Not done: the voices aren't played (nothing makes a sound yet);
 RETURNLINE (the communicator's menus) and the CAMERA column; the AI's
 own lines.
+
+### Documents and objectives
+
+`vm_documents.cpp` reads The Fallen's other text files in `int`
+([int.md](../formats/unreal/int.md)) for `CTVE_Document`, which the HUD
+spawns. At the start of a level (its `Timer`), the document actor does
+three things:
+- **Lists the documents** the player has, by asking `FindDocument` for
+  `Document_0` to `Document_29`. A section of `Document.int` with that
+  name is there: `FoundDocument`. That reads its settings and lists the
+  document if its `MissionLevel` is at most the player's mission
+  (`GetMissionLevel`). Mission 1 has none, mission 5 ten, mission 11 all
+  eleven.
+- **Reads the objectives:** each `Objective_N` of the map's own `.int`
+  (`GetMapTitle()` + `.int`). Its title and whether it's critical and
+  active go into LevelInfo's `Objective_Title`, `Objective_bCritical`
+  and `Objective_State` (0 active, −1 not yet). M01_KiraL1A starts with
+  7, three of them active.
+- **Reads the level's title** from `SaveGameString` into LevelInfo's
+  `Title`: M01_KiraL1A is "Bajor - Monastery".
+
+The natives:
+- `GetMapTitle()`: the map's name (`M01_KiraL1A`). Its callers make a
+  file name of it, or show it in capitals.
+- `FindDocument(Section)`: sends `FoundDocument(Section)` if
+  `Document.int` has that section.
+- `LocalizeDocument(Name, File)`: the section's settings become the
+  actor's properties of the same names (`Title`, `MissionLevel`,
+  `bOnlyThisMission`, `bCritical`, `bActive`), each converted to its
+  type. As localised properties are, by name.
+- `LoadDocument(Name, File)`: the section's lines, in order, each to the
+  actor's event that draws it: `Color` (`SetColor`), `Text`
+  (`LoadText`, a line), `IMAGE` (`DefineImage`), `Title` (`SetTitle`).
+  An image's `Justify=` becomes the HUD's justification: it takes 2 as
+  right and 3 as centred, anything else as left. Those events draw
+  through the HUD onto its canvas, which isn't drawn yet. They're called
+  (the Grigari report: 12 lines and an image), and they stop at the
+  HUD's missing canvas.
+
+The Maps page shows the level's title and its active objectives while
+playing.
 
 ### The player's input
 

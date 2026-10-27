@@ -92,6 +92,10 @@ public:
     float time() const { return time_; }       // seconds played
     float behind() const { return behind_; }   // real seconds not yet played (it's slower than real time)
     int health();
+    // The level's title (from its .int, as CTVE_Document sets it) and its
+    // objectives that are active now (LevelInfo's Objective_State 0).
+    std::string title();
+    std::vector<std::string> activeObjectives();
     std::string playerState();
 
 private:

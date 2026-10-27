@@ -41,7 +41,7 @@ uint32_t le32(const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 | 
 
 } // namespace
 
-// The tables from the game's int folder (beside System), and which lines
+// The tables from the game's int folder (intFolder), and which lines
 // are this level's: those of its own table (LevelInfo's DialogFile) and the
 // general one, or of every table if it names none; and of those, the ones
 // for whoever the player plays. A line's mission is a letter and a number:
@@ -54,10 +54,8 @@ void ScriptLevel::loadDialog() {
     if (dialogLoaded_)
         return;
     dialogLoaded_ = true;
-    const std::filesystem::path system = vm_.packages().iniFile().parent_path();
-    for (const std::filesystem::path& folder : {system.parent_path() / "int", system.parent_path() / "Int", system})
-        if (!readDialogTables(folder, dialogLines_))
-            break;
+    if (readDialogTables(intFolder(), dialogLines_))
+        dialogLines_.clear();
     dialogPlays_.assign(dialogLines_.size(), 0);
     // Lines only ever reached from another (the middle of a conversation)
     // aren't picked to start one.
