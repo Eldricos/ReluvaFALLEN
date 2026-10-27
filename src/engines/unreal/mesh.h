@@ -174,6 +174,12 @@ public:
     bool bone(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
               Vec3f& origin, std::array<Vec3f, 3>& axes) const;
     bool hasBone(std::string_view name) const;
+    // Its place in its parent bone in the same pose (the bone's own units,
+    // the skeleton's: as placed vertices' before the mesh's turn), and its
+    // parent's name (empty for the root).
+    bool boneInParent(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
+                      Vec3f& origin, std::array<Vec3f, 3>& axes) const;
+    std::string parentOf(std::string_view name) const;
 
     struct Impl;
     std::unique_ptr<Impl> impl;

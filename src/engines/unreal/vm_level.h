@@ -163,11 +163,14 @@ public:
     // animation at this tick: one of its bones (C3DGetJointWorldPos), one
     // of its attachment points (C3DGetAttachPtCoords) or places worked out
     // in advance (C3DGetAttachPtCoordsPrecomputed); in the world, or (not
-    // `world`) from the actor's own location, unturned. False if its mesh
-    // has no such part.
+    // `world`) from the actor's own location, unturned. Its layered
+    // animations count. False if its mesh has no such part.
     using Vec = std::array<float, 3>;
     using Rot = std::array<int32_t, 3>;
-    bool boneAt(VmObject* actor, NameId bone, bool world, Vec& location, Rot& rotation);
+    // A bone: in the world, from the actor (unturned), from its parent
+    // bone in the world's axes, or its place in its parent bone.
+    enum class BonePlace { World, Local, FromParent, InParent };
+    bool boneAt(VmObject* actor, NameId bone, BonePlace place, Vec& location, Rot& rotation);
     bool attachPointAt(VmObject* actor, NameId point, bool precomputed, bool world, Vec& location, Rot& rotation);
     bool hasBone(VmObject* actor, NameId bone);
     int attachPointCount(VmObject* actor);
@@ -262,6 +265,7 @@ private:
     struct ActorMesh;
     ActorMesh* actorMesh(VmObject* actor);
     const std::vector<Vec>* posedVertices(VmObject* actor, ActorMesh& mesh); // packed, as this tick has them
+    std::vector<LayeredPoser::Layer> posedLayers(VmObject* actor, ActorMesh& mesh, std::vector<std::string>& names);
     bool attachFrame(VmObject* actor, ActorMesh& mesh, const MeshAttachPoint& point, Vec& at, std::array<Vec, 3>& axes);
     void toWorld(VmObject* actor, Vec& at, std::array<Vec, 3>* axes);
     void placeAttached();
@@ -284,6 +288,9 @@ private:
 // A setting from a game's .ini ("Engine.Engine", "DefaultGame"); empty if
 // it isn't there.
 std::string iniSetting(const PackageSet& packages, std::string_view section, std::string_view key);
+// The same from another .ini in the game's System folder ("User.ini").
+std::string iniSetting(const PackageSet& packages, std::string_view file, std::string_view section,
+                       std::string_view key);
 // The game type a game's levels run with: its .ini's [Engine.Engine]
 // DefaultGame ("DS9.DS9_GameInfo"), else Engine's GameInfo.
 std::string defaultGameType(const PackageSet& packages);

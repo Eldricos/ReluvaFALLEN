@@ -1711,6 +1711,34 @@ bool LayeredPoser::pose(std::string_view base, float fraction, const std::vector
     return true;
 }
 
+bool LayeredPoser::boneInParent(std::string_view base, float fraction, const std::vector<Layer>& layers,
+                                std::string_view name, Vec3f& origin, std::array<Vec3f, 3>& axes) const {
+    const Impl& m = *impl;
+    const std::string wanted = fs::toLower(name);
+    for (size_t i = 0; i < m.bones.size(); ++i) {
+        if (fs::toLower(m.bones[i].name) != wanted)
+            continue;
+        std::vector<Mat43> local;
+        if (!m.locals(base, fraction, layers, local))
+            return false;
+        for (size_t c = 0; c < 3; ++c) {
+            origin[c] = local[i][9 + c];
+            for (size_t row = 0; row < 3; ++row)
+                axes[row][c] = local[i][row * 3 + c];
+        }
+        return true;
+    }
+    return false;
+}
+
+std::string LayeredPoser::parentOf(std::string_view name) const {
+    const std::string wanted = fs::toLower(name);
+    for (const BoneRecord& b : impl->bones)
+        if (fs::toLower(b.name) == wanted)
+            return b.parent >= 0 ? impl->bones[size_t(b.parent)].name : std::string();
+    return {};
+}
+
 bool LayeredPoser::hasBone(std::string_view name) const {
     const std::string wanted = fs::toLower(name);
     for (const BoneRecord& b : impl->bones)

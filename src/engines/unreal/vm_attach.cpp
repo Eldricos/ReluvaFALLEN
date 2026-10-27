@@ -87,6 +87,29 @@ ScriptLevel::ActorMesh* ScriptLevel::actorMesh(VmObject* a) {
     return it->second.get();
 }
 
+// The actor's layered animations showing (C3DPlayAnim), as the poser takes
+// them; `names` keeps their animations' names while they're used.
+std::vector<LayeredPoser::Layer> ScriptLevel::posedLayers(VmObject* a, ActorMesh& m, std::vector<std::string>& names) {
+    std::vector<LayeredPoser::Layer> layers;
+    const auto* ls = layersOf(a);
+    if (!ls || !m.poser)
+        return layers;
+    names.clear();
+    names.reserve(ls->size()); // (the layers point into it)
+    for (const auto& [group, l] : *ls) {
+        if (l.weight <= 0 || !l.sequence)
+            continue;
+        auto part = m.parts.find({l.bone, l.rest});
+        if (part == m.parts.end())
+            part = m.parts.emplace(std::make_pair(l.bone, l.rest), m.poser->part(vm_.nameText(l.bone), l.rest)).first;
+        if (part->second.empty())
+            continue;
+        names.push_back(vm_.nameText(l.sequence));
+        layers.push_back({names.back(), l.frame, &part->second, l.weight});
+    }
+    return layers;
+}
+
 // The mesh's vertices as its animation has them this tick (packed units),
 // worked out once a tick: posed from its bones with its layers, else
 // between its frames.
@@ -101,22 +124,8 @@ const std::vector<ScriptLevel::Vec>* ScriptLevel::posedVertices(VmObject* a, Act
     const Value* frameValue = prop(a, "AnimFrame");
     const float frame = frameValue ? frameValue->asFloat() : 0;
     if (m.poser && !seq.empty()) {
-        std::vector<LayeredPoser::Layer> layers;
-        std::vector<std::string> names; // the layers' animations' names, kept while posing
-        if (const auto* ls = layersOf(a)) {
-            names.reserve(ls->size());
-            for (const auto& [group, l] : *ls) {
-                if (l.weight <= 0 || !l.sequence)
-                    continue;
-                auto part = m.parts.find({l.bone, l.rest});
-                if (part == m.parts.end())
-                    part = m.parts.emplace(std::make_pair(l.bone, l.rest), m.poser->part(vm_.nameText(l.bone), l.rest)).first;
-                if (part->second.empty())
-                    continue;
-                names.push_back(vm_.nameText(l.sequence));
-                layers.push_back({names.back(), l.frame, &part->second, l.weight});
-            }
-        }
+        std::vector<std::string> names;
+        const std::vector<LayeredPoser::Layer> layers = posedLayers(a, m, names);
         if (m.poser->pose(seq, frame, layers, verts))
             return &verts;
     }
@@ -208,28 +217,56 @@ bool ScriptLevel::attachPointAt(VmObject* a, NameId name, bool precomputed, bool
     return true;
 }
 
-bool ScriptLevel::boneAt(VmObject* a, NameId bone, bool world, Vec& location, Rot& rotation) {
+bool ScriptLevel::boneAt(VmObject* a, NameId bone, BonePlace place, Vec& location, Rot& rotation) {
     ActorMesh* m = a ? actorMesh(a) : nullptr;
     if (!m || !m->poser)
         return false;
     const Value* seqValue = prop(a, "AnimSequence");
     const Value* frameValue = prop(a, "AnimFrame");
-    Vec origin{};
-    Axes packed{};
-    // (Its layers aren't taken into account: a bone's place under the
-    // actor's own animation.)
-    if (!seqValue || !seqValue->i ||
-        !m->poser->bone(vm_.nameText(seqValue->i), frameValue ? frameValue->asFloat() : 0, {}, vm_.nameText(bone),
-                        origin, packed))
+    if (!seqValue || !seqValue->i)
         return false;
-    Vec at = placeMeshVertex(m->mesh, origin);
+    const std::string seq = vm_.nameText(seqValue->i), name = vm_.nameText(bone);
+    const float frame = frameValue ? frameValue->asFloat() : 0;
+    std::vector<std::string> names;
+    const std::vector<LayeredPoser::Layer> layers = posedLayers(a, *m, names); // with its layers, as it's drawn
+    const Value* scale = prop(a, "DrawScale");
+    const float ds = scale ? scale->asFloat() : 1;
+    if (place == BonePlace::InParent) {
+        // Its place in its parent bone, in the parent's axes (by DrawScale).
+        Vec origin{};
+        Axes axes{};
+        if (!m->poser->boneInParent(seq, frame, layers, name, origin, axes))
+            return false;
+        location = mul(origin, ds);
+        rotation = rotOf(axes);
+        return true;
+    }
+    // The bone, and for FromParent its parent, where they are.
+    auto placed = [&](const std::string& which, Vec& at, Axes& axes, bool world) {
+        Vec origin{};
+        Axes packed{};
+        if (!m->poser->bone(seq, frame, layers, which, origin, packed))
+            return false;
+        at = placeMeshVertex(m->mesh, origin);
+        for (size_t k = 0; k < 3; ++k)
+            axes[k] = unit(sub(placeMeshVertex(m->mesh, add(origin, packed[k])), at));
+        if (world)
+            toWorld(a, at, &axes);
+        else
+            at = mul(at, ds);
+        return true;
+    };
+    Vec at{};
     Axes axes{};
-    for (size_t k = 0; k < 3; ++k)
-        axes[k] = unit(sub(placeMeshVertex(m->mesh, add(origin, packed[k])), at));
-    if (world) {
-        toWorld(a, at, &axes);
-    } else if (const Value* scale = prop(a, "DrawScale")) {
-        at = mul(at, scale->asFloat());
+    if (!placed(name, at, axes, place != BonePlace::Local))
+        return false;
+    if (place == BonePlace::FromParent) {
+        // From its parent, in the world's axes.
+        Vec parent{};
+        Axes parentAxes{};
+        const std::string up = m->poser->parentOf(name);
+        if (!up.empty() && placed(up, parent, parentAxes, true))
+            at = sub(at, parent);
     }
     location = at;
     rotation = rotOf(axes);
@@ -318,15 +355,22 @@ void registerAttachNatives(Vm& vm) {
         c.args[loc] = c.vm.vectorValue(at[0], at[1], at[2]);
         c.args[rot] = c.vm.rotatorValue(r[0], r[1], r[2]);
     };
-    // C3DGetJointWorldPos(name Bone, out Vector Location, out Rotator Rotation), and the
-    // local ones (from the actor, unturned); the Rel ones taken as the same.
-    for (const char* joint : {"Actor.C3DGetJointWorldPos", "Actor.C3DGetJointLocalPos", "Actor.C3DGetJointWorldPosRel",
-                              "Actor.C3DGetJointLocalPosRel"}) {
-        const bool world = std::string_view(joint).find("World") != std::string_view::npos;
+    // C3DGetJointWorldPos(name Bone, out Vector Location, out Rotator Rotation): in the world;
+    // LocalPos from the actor, unturned; WorldPosRel from its parent bone, in the world's axes;
+    // LocalPosRel its place in its parent bone (none of the last three called by The Fallen's
+    // scripts: Reluva's reading of their names).
+    const std::pair<const char*, ScriptLevel::BonePlace> joints[] = {
+        {"Actor.C3DGetJointWorldPos", ScriptLevel::BonePlace::World},
+        {"Actor.C3DGetJointLocalPos", ScriptLevel::BonePlace::Local},
+        {"Actor.C3DGetJointWorldPosRel", ScriptLevel::BonePlace::FromParent},
+        {"Actor.C3DGetJointLocalPosRel", ScriptLevel::BonePlace::InParent},
+    };
+    for (const auto& [joint, place] : joints) {
+        const bool world = place == ScriptLevel::BonePlace::World;
         reg(joint, [=](NativeCall& c) {
             ScriptLevel::Vec at{};
             ScriptLevel::Rot r{};
-            const bool found = c.vm.level && c.self && c.vm.level->boneAt(c.self, c.i(0), world, at, r);
+            const bool found = c.vm.level && c.self && c.vm.level->boneAt(c.self, c.i(0), place, at, r);
             answer(c, found, at, r, 1, 2, world);
         });
     }

@@ -37,6 +37,10 @@ public:
     ScriptLevel::Controls& controls() { return level_->controls; }
     // A key bound to an exec function pressed: the player's Jump, Fire...
     void press(const char* exec);
+    // A key pressed ("2"), as the player's .ini binds it ([Engine.Input]
+    // in User.ini, else DefUser.ini: "2=Rifle"): the exec functions it
+    // names. False if it's bound to none.
+    bool pressKey(const std::string& key);
 
     // Where the camera is, as the game puts it each frame
     // (PlayerCalcView): behind the player, or a cut scene's camera.
@@ -75,6 +79,9 @@ public:
     // It was drawn this frame (its LastRenderTime: The Fallen's heads and
     // faces only move on pawns drawn in the last few seconds).
     void drawn(VmObject* actor);
+    // It's about to be drawn: C3DPreRender, as The Fallen's engine sends
+    // (the player's weapon works out its tip and the crosshair).
+    void preRender(VmObject* actor);
 
     Vm& vm() { return *vm_; }
     ScriptLevel& level() { return *level_; }

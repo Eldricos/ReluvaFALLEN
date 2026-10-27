@@ -679,6 +679,8 @@ void MapViewer::handleEvent(const Event& ev) {
                 play_->press("Jump");
             else if (ev.key == key::LCtrl || ev.key == key::RCtrl || ev.key == 'f')
                 play_->press("Fire");
+            else if (ev.key >= '0' && ev.key <= '9') // the weapons, as the game binds them
+                play_->pressKey(std::string(1, char(ev.key)));
         }
         if (hold(ev.key, true) || ev.repeat)
             return;
@@ -1088,7 +1090,7 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
     lines.push_back(!play_     ? "Enter plays the level"
                     : freeCam_ ? "Playing, the camera loose (V back to the game's): W/S/A/D, Space/C and drag fly it"
                                : "Playing (Enter stops): W/S move, A/D step aside, arrows turn and look, drag to look, Space "
-                                 "jumps, Ctrl or F fires, V lets the camera loose");
+                                 "jumps, Ctrl or F fires, 0-9 pick weapons, V lets the camera loose");
     char where[200];
     // Shown in Unreal's own coordinates.
     std::snprintf(where, sizeof where, "at %.0f %.0f %.0f, %.0f fps; lightmaps %s, brightness x%.2f, display gamma %.2f",
@@ -1304,6 +1306,12 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
         if (!play_->look(a, look) || look.hidden)
             continue;
         if (look.drawType == kDrawMesh && look.mesh) {
+            // About to be drawn: its scripts get their say first, and it's
+            // drawn as they leave it.
+            play_->preRender(a);
+            look = {};
+            if (!play_->look(a, look) || look.hidden || look.drawType != kDrawMesh || !look.mesh)
+                continue;
             const int at = liveMesh(look.mesh, look.animSequence);
             if (at < 0)
                 continue;

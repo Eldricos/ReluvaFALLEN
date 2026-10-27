@@ -50,6 +50,30 @@ void LevelPlay::press(const char* exec) {
         vm_->invoke(f, player_, {Value::floatValue(0)});
 }
 
+bool LevelPlay::pressKey(const std::string& key) {
+    std::string binding = iniSetting(packages_, "User.ini", "Engine.Input", key);
+    if (binding.empty())
+        binding = iniSetting(packages_, "DefUser.ini", "Engine.Input", key);
+    // "Jump | Axis aUp Speed=+300": the commands between the bars; those
+    // with arguments (and the axes and buttons, which are held) are left out.
+    bool any = false;
+    size_t at = 0;
+    while (at <= binding.size()) {
+        size_t end = binding.find('|', at);
+        if (end == std::string::npos)
+            end = binding.size();
+        std::string command = binding.substr(at, end - at);
+        at = end + 1;
+        command.erase(0, command.find_first_not_of(' '));
+        command.erase(command.find_last_not_of(' ') + 1);
+        if (command.empty() || command.find(' ') != std::string::npos)
+            continue;
+        press(command.c_str());
+        any = true;
+    }
+    return any;
+}
+
 LevelPlay::View LevelPlay::view() {
     View v;
     if (!player_ || player_->deleted)
@@ -154,6 +178,11 @@ void LevelPlay::drawn(VmObject* a) {
     if (k >= 0 && size_t(k) < a->values.size())
         if (const Value* now = level_->levelInfo()->find(*vm_, "TimeSeconds"))
             a->values[size_t(k)] = Value::floatValue(now->asFloat());
+}
+
+void LevelPlay::preRender(VmObject* a) {
+    if (a && !a->deleted)
+        vm_->callEvent(a, "C3DPreRender");
 }
 
 int LevelPlay::health() {

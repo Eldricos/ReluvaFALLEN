@@ -312,7 +312,7 @@ void ScriptLevel::tick(float seconds) {
         v->f = seconds;
     // Actors spawned during the tick wait for the next. The player's
     // pawn first gets PlayerTick (its input and view); then each actor's
-    // scripts, then its physics.
+    // scripts, then its physics (and the player's UpdateEyeHeight).
     const std::vector<VmObject*> now = actors_;
     for (VmObject* a : now) {
         if (a->deleted)
@@ -342,6 +342,10 @@ void ScriptLevel::tick(float seconds) {
         vm_.tick(a, seconds);
         if (!a->deleted)
             physics(a, seconds);
+        // Once the player has moved, UpdateEyeHeight: the view's height,
+        // and in The Fallen the arms' IK, which puts the weapon in hand.
+        if (a == player_ && !a->deleted)
+            vm_.callEvent(a, "UpdateEyeHeight", {Value::floatValue(seconds)});
         if (!a->deleted)
             animate(a, seconds);
         // A life span running out: Expired, then gone.
@@ -405,8 +409,10 @@ void ScriptLevel::destroy(VmObject* a) {
     a->deleted = true;
 }
 
-std::string iniSetting(const PackageSet& packages, std::string_view section, std::string_view key) {
-    std::ifstream in(packages.iniFile(), std::ios::binary);
+namespace {
+
+std::string iniSettingIn(const std::filesystem::path& file, std::string_view section, std::string_view key) {
+    std::ifstream in(file, std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     const std::string wantSection = "[" + lowerText(std::string(section)) + "]";
     const std::string wantKey = lowerText(std::string(key)) + "=";
@@ -428,6 +434,17 @@ std::string iniSetting(const PackageSet& packages, std::string_view section, std
             return line.substr(wantKey.size());
     }
     return "";
+}
+
+} // namespace
+
+std::string iniSetting(const PackageSet& packages, std::string_view section, std::string_view key) {
+    return iniSettingIn(packages.iniFile(), section, key);
+}
+
+std::string iniSetting(const PackageSet& packages, std::string_view file, std::string_view section,
+                       std::string_view key) {
+    return iniSettingIn(packages.iniFile().parent_path() / std::string(file), section, key);
 }
 
 std::string defaultGameType(const PackageSet& packages) {
