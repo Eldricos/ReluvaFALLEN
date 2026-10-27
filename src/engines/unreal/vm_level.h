@@ -191,6 +191,7 @@ private:
     // tick: where its head looks, and its face (blinks, expressions).
     void updateHead(VmObject* actor);
     std::map<const VmClass*, bool> pawnClasses_;
+    std::map<const VmObject*, bool> c3dMeshes_; // mesh objects in The Fallen's layout
     void endLayerWait(VmObject* actor, NameId group);
     std::array<float, 3> extentOf(VmObject* a);
     struct BrushBox {

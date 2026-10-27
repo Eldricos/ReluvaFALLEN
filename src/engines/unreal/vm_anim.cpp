@@ -167,9 +167,23 @@ void ScriptLevel::updateHead(VmObject* a) {
         return;
     // (The event itself returns at once for a pawn not drawn in the last
     // four seconds, by its LastRenderTime, which drawing sets: LevelPlay.)
-    const MeshInfo* info = meshInfoOf(vm_, a);
-    if (info && info->c3d)
-        vm_.callEvent(a, "UpdateHeadAnimation");
+    // Whether its mesh is one of The Fallen's, by the mesh object: this
+    // runs for every pawn every tick.
+    const Value* mesh = prop(a, "Mesh");
+    VmObject* m = mesh ? mesh->asObject() : nullptr;
+    if (!m)
+        return;
+    auto c3d = c3dMeshes_.find(m);
+    if (c3d == c3dMeshes_.end()) {
+        const MeshInfo* info = meshInfoOf(vm_, a);
+        c3d = c3dMeshes_.emplace(m, info && info->c3d).first;
+    }
+    if (!c3d->second)
+        return;
+    if (const Value* drawn = prop(a, "LastRenderTime"); drawn && levelInfo_)
+        if (const Value* now = prop(levelInfo_, "TimeSeconds"); now && drawn->asFloat() < now->asFloat() - 4)
+            return; // what the event would do first: not drawn lately
+    vm_.callEvent(a, "UpdateHeadAnimation");
 }
 
 void ScriptLevel::animate(VmObject* a, float dt) {
