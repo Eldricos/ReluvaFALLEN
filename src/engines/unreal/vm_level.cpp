@@ -342,6 +342,8 @@ void ScriptLevel::tick(float seconds) {
         vm_.tick(a, seconds);
         if (!a->deleted)
             physics(a, seconds);
+        if (!a->deleted)
+            animate(a, seconds);
     }
     actors_.erase(std::remove_if(actors_.begin(), actors_.end(), [](VmObject* a) { return a->deleted; }),
                   actors_.end());
@@ -517,27 +519,6 @@ std::vector<Value> actorsOf(Vm& vm, const Value& classArg) {
     return out;
 }
 
-std::string lower(const std::string& s) { return fs::toLower(s); }
-
-// An actor's mesh's animations (read once per mesh), for the animation
-// natives that ask about them.
-const std::vector<MeshAnimSeq>* meshAnims(Vm& vm, VmObject* a) {
-    static std::map<std::pair<const Package*, int>, std::vector<MeshAnimSeq>> cache;
-    Value* m = a ? a->find(vm, "Mesh") : nullptr;
-    VmObject* mesh = m ? m->asObject() : nullptr;
-    if (!mesh || !mesh->package)
-        return nullptr;
-    const auto key = std::make_pair(mesh->package, mesh->exportIndex);
-    auto it = cache.find(key);
-    if (it == cache.end()) {
-        Mesh read;
-        if (readMesh(*mesh->package, mesh->exportIndex, read))
-            read.anims.clear();
-        it = cache.emplace(key, std::move(read.anims)).first;
-    }
-    return &it->second;
-}
-
 } // namespace
 
 void registerEngineNatives(Vm& vm) {
@@ -545,6 +526,7 @@ void registerEngineNatives(Vm& vm) {
         return;
     registerMovementNatives(vm);
     registerSplineNatives(vm);
+    registerAnimationNatives(vm);
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     auto B = [](bool v) { return Value::boolValue(v); };
 
@@ -583,7 +565,7 @@ void registerEngineNatives(Vm& vm) {
     reg("Actor.Sleep", [](NativeCall& c) { c.latentSeconds = std::max(0.0f, c.f(0)); });
     // Latent functions that wait for animation or movement: done at once
     // until those are simulated.
-    for (const char* done : {"Actor.FinishAnim", "Actor.FinishInterpolation", "Actor.C3DFinishAnim"})
+    for (const char* done : {"Actor.FinishInterpolation", "Actor.C3DFinishAnim"})
         reg(done, [](NativeCall& c) { c.latentSeconds = 0; });
     reg("Actor.SetRotation", [=](NativeCall& c) {
         if (Value* v = c.self ? c.self->find(c.vm, "Rotation") : nullptr)
@@ -615,28 +597,6 @@ void registerEngineNatives(Vm& vm) {
     reg("Actor.SetBase", [](NativeCall& c) {
         if (Value* v = c.self ? c.self->find(c.vm, "Base") : nullptr)
             v->o = c.o(0);
-    });
-    // Animation: the sequence remembered; it doesn't play yet.
-    for (const char* play : {"Actor.PlayAnim", "Actor.LoopAnim", "Actor.TweenAnim"})
-        reg(play, [](NativeCall& c) {
-            if (Value* v = c.self ? c.self->find(c.vm, "AnimSequence") : nullptr)
-                v->i = c.i(0);
-        });
-    reg("Actor.IsAnimating", [=](NativeCall& c) { c.result = B(false); });
-    reg("Actor.HasAnim", [=](NativeCall& c) {
-        const std::vector<MeshAnimSeq>* anims = meshAnims(c.vm, c.self);
-        const std::string want = lower(c.vm.nameText(c.i(0)));
-        c.result = B(anims && std::any_of(anims->begin(), anims->end(),
-                                          [&](const MeshAnimSeq& s) { return lower(s.name) == want; }));
-    });
-    reg("Actor.GetAnimGroup", [](NativeCall& c) {
-        c.result = Value::nameValue(0);
-        if (const std::vector<MeshAnimSeq>* anims = meshAnims(c.vm, c.self)) {
-            const std::string want = lower(c.vm.nameText(c.i(0)));
-            for (const MeshAnimSeq& s : *anims)
-                if (lower(s.name) == want)
-                    c.result = Value::nameValue(c.vm.name(s.group.empty() ? "None" : s.group));
-        }
     });
     // Sound: not played by scripts yet.
     for (const char* quiet : {"Actor.PlaySound", "Actor.PlayOwnedSound", "Actor.DemoPlaySound", "Actor.MakeNoise",

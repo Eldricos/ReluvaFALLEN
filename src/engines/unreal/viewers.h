@@ -326,7 +326,6 @@ private:
     std::string playError_;
     std::vector<VmObject*> moverActors_; // each of movers_'s live actor
     std::map<std::pair<const Package*, int>, int> liveMeshes_;
-    std::map<VmObject*, std::pair<std::string, float>> liveAnims_; // each actor's sequence, since when
     float playClock_ = 0, fov_ = 90;
     LevelPlay::View view_;
     float mouseDx_ = 0, mouseDy_ = 0;

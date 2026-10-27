@@ -11,6 +11,7 @@
 #include "engines/unreal/class_defaults.h"
 #include "engines/unreal/games.h"
 #include "engines/unreal/mesh.h"
+#include "engines/unreal/mesh_render.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/procedural.h"
 #include "engines/unreal/script.h"
@@ -1533,6 +1534,24 @@ static void testCollision() {
     CHECK(!c.trace(h.location, along, box).hit() && !c.solid(along, box));
 }
 
+static void testAnimationPose() {
+    // A sequence of 4 frames starting at frame 2, posed by how far through it.
+    Mesh mesh;
+    mesh.animFrames = 10;
+    MeshAnimSeq seq;
+    seq.startFrame = 2;
+    seq.numFrames = 4;
+    seq.rate = 10;
+    MeshPose p = poseAtFraction(mesh, &seq, 0.6f, false); // 2.4 frames in
+    CHECK(p.frame == 4 && p.next == 5 && std::abs(p.lerp - 0.4f) < 1e-4f);
+    p = poseAtFraction(mesh, &seq, 0.9f, true); // the last frame, on round to the first
+    CHECK(p.frame == 5 && p.next == 2 && std::abs(p.lerp - 0.6f) < 1e-4f);
+    p = poseAtFraction(mesh, &seq, 0.9f, false); // played once: held there
+    CHECK(p.frame == 5 && p.next == 5 && p.lerp == 0);
+    p = poseAtFraction(mesh, &seq, -0.1f, false); // tweening in: the first frame
+    CHECK(p.frame == 2 && p.next == 3 && p.lerp == 0);
+}
+
 int main() {
     testCompactIndex();
     testPackageTables();
@@ -1554,6 +1573,7 @@ int main() {
     testScript();
     testVm();
     testCollision();
+    testAnimationPose();
     testMapExtension();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

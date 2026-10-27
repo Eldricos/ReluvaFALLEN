@@ -23,6 +23,13 @@ struct MeshAnimSeq {
     std::string name, group;
     int32_t startFrame = 0, numFrames = 0;
     float rate = 0; // frames per second
+    // Functions called on the actor as the animation passes their time
+    // (0-1 through it).
+    struct Notify {
+        float time = 0;
+        std::string function;
+    };
+    std::vector<Notify> notifies;
 };
 
 // A triangle: three of a frame's vertices, each corner's texture

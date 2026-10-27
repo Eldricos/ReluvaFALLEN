@@ -198,6 +198,19 @@ MeshPose poseAt(const Mesh& mesh, const MeshAnimSeq* anim, float time, float sta
     return p;
 }
 
+MeshPose poseAtFraction(const Mesh& mesh, const MeshAnimSeq* anim, float fraction, bool loop) {
+    MeshPose p;
+    if (!anim || anim->numFrames <= 0 || mesh.animFrames <= 0)
+        return p;
+    const float t = std::max(0.0f, fraction) * float(anim->numFrames);
+    const float whole = std::floor(t);
+    const int32_t f = std::min(int32_t(whole), anim->numFrames - 1);
+    p.frame = anim->startFrame + f;
+    p.next = f + 1 < anim->numFrames ? p.frame + 1 : loop ? anim->startFrame : p.frame;
+    p.lerp = p.next == p.frame ? 0 : t - whole;
+    return p;
+}
+
 void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& placement, const MeshPose& pose,
               const std::vector<gfx::TextureId>& textures, const MeshLight& light, float exposure, uint8_t style) {
     for (const GpuMesh::Batch& batch : mesh.batches) {

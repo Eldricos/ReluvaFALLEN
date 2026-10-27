@@ -13,7 +13,7 @@ LevelPlay::LevelPlay(const PackageSet& packages, const Package& map)
       level_(std::make_unique<ScriptLevel>(*vm_, map)) {
     const char* names[FieldCount] = {"Location", "PrePivot", "Rotation", "DrawScale", "DrawType",
                                      "bHidden",  "Mesh",     "Skin",     "Texture",   "MultiSkins",
-                                     "AnimSequence", "AnimFrame", "AnimRate", "Style", "ScaleGlow"};
+                                     "AnimSequence", "AnimFrame", "AnimRate", "bAnimLoop", "Style", "ScaleGlow"};
     for (size_t k = 0; k < FieldCount; ++k)
         names_[k] = vm_->name(names[k]);
 }
@@ -130,6 +130,8 @@ bool LevelPlay::look(VmObject* a, Look& out) {
         out.animFrame = v->asFloat();
     if (const Value* v = at(AnimRate))
         out.animRate = v->asFloat();
+    if (const Value* v = at(AnimLoop))
+        out.animLoop = v->asBool();
     if (const Value* v = at(Style))
         out.style = uint8_t(v->asInt());
     if (const Value* v = at(ScaleGlow))

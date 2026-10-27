@@ -3,8 +3,7 @@
 Status: **runs The Fallen's levels with the player in them**: the
 Maps page plays a level (Enter), its scripts live, the player moved by
 the keyboard and mouse, seen from the game's own camera. It isn't the
-game yet: AI has no paths, animations don't keep the scripts' time,
-nothing makes a sound, and the HUD and menus aren't drawn. Every class of the game loads (`vm.cpp`), every default
+game yet: AI has no paths, nothing makes a sound, and the HUD and menus aren't drawn. Every class of the game loads (`vm.cpp`), every default
 property converts to its type, and all 74 maps start: their actors made,
 the game type spawned, the start-up events sent, the player logged in as
 the level's character, then twenty seconds of ticks, with no crash. The
@@ -73,8 +72,9 @@ What it does:
   default; `Auto` finds the class's auto state). A state inherits a
   parent class's same-named state's functions and code.
 - State code runs each tick until it waits in a latent function
-  (`Sleep`, and those not written yet, which wait a tick so loops round
-  them don't spin) or stops. Each object's timer (`SetTimer`) and `Tick`
+  (`Sleep`, `FinishAnim`, pawns' `MoveTo` and kin, and those not
+  written yet, which wait a tick so loops round them don't spin) or
+  stops. Each object's timer (`SetTimer`) and `Tick`
   run each tick; `Disable('Tick')` and the like stop the engine calling
   them.
 - Guards: calls nested past 250, a function past 2,000,000 statements or
@@ -322,6 +322,60 @@ as saved). On M01_KiraL1A: 64 lights changed (37 triggered lights off),
 10 Bajoran fanatics hidden until their ambush, 9 exploding walls' icons
 gone.
 
+## Animation
+
+`vm_anim.cpp` plays actors' animations as the scripts ask, each tick
+after physics. It's Reluva's reading of the public UnrealScript
+documentation of these natives and of what The Fallen's scripts expect.
+An actor's animation is its own properties:
+- `AnimSequence`.
+- `AnimFrame`: 0 to 1 through it; below 0 while tweening into it.
+- `AnimRate`: how much of it a second.
+- `bAnimLoop`, `bAnimFinished`, `AnimLast` (where its last frame
+  starts), `TweenRate`.
+
+The sequences are the actor's mesh's: its own, and those it names
+whose frames are in the shared sets (`Mesh::otherAnims`), each with a
+frame count and frames a second.
+
+- `PlayAnim(Sequence, Rate, TweenTime)` plays it once: `AnimRate` is
+  `Rate` times the sequence's frames a second over its frame count.
+  With a tween, it first tweens into the first frame over `TweenTime`.
+- `LoopAnim` does the same, looping. If it's looping that sequence
+  already, only its rate changes (scripts call it every tick).
+- `TweenAnim(Sequence, Time)` goes to its first frame over `Time` and
+  stays.
+- A sequence its mesh doesn't have (or an actor without a mesh) is
+  finished at once, so nothing waits on it.
+- Each tick moves `AnimFrame` on.
+  - Passing a notification's time calls the function it names on the
+    actor. These are the mesh's own, kept with each sequence (78 of
+    The Fallen's meshes have them, 3,190 in all): footsteps, AI firing
+    their weapons (`FireWeapon`), the jump's push (`ApplyJumpVelocity`),
+    and more. No script sets `bAnimNotify`, so they're called whenever
+    a sequence has them.
+  - At the end, `AnimEnd` is sent. A loop goes on round (and sends
+    `AnimEnd` each time). One played once stops at its last frame,
+    finished.
+- `FinishAnim` (latent: The Fallen's scripts call it 638 times) waits
+  until then: the end of the animation, or of this round of a loop. It
+  returns at once if nothing's playing. `IsAnimating` says whether one
+  is playing or tweening. `HasAnim` and `GetAnimGroup` read the
+  sequences, borrowed ones included (`runf` is Kira's, not only her
+  mesh's own).
+
+On M01_KiraL2:
+- Kira's idle loops.
+- Running plays `runf`, round every two-thirds of a second.
+- Stopping plays an idle look-around.
+- Jumping plays `Jump` (0.4 s), whose notification pushes her up about
+  77 units. Its `AnimEnd` then starts the in-air loop, `LeapIdleU`.
+
+Not done: The Fallen's own layered skeletal animation (`C3DPlayAnim`,
+`C3DTweenSkinAnim`... 26 calls in its scripts) and `C3DFinishAnim`
+(returns at once); rates scaled by speed (a negative rate, which no
+script uses); and blending from the old pose while tweening.
+
 ## Playing a level
 
 `LevelPlay` (`level_play.cpp`) is a level being played. It starts the
@@ -351,11 +405,11 @@ falling further behind. The Maps page plays one with Enter:
   read each frame (`LevelPlay::look`, through each class's property
   slots, found once):
   - Meshes where they stand, turned, scaled, in their render style
-    (modulated: the player's floor shadow, a `CTV_Shadow` quad). Their
-    current `AnimSequence` loops from when it changed: the VM doesn't
-    move animations on yet. A character's animation from the shared
-    sets is borrowed the first time it plays one its mesh lacks (the
-    run, `runf`).
+    (modulated: the player's floor shadow, a `CTV_Shadow` quad), posed
+    where their animation is (`AnimFrame`, below). A character's
+    animation from the shared sets is borrowed the first time it plays
+    one its mesh lacks (the run, `runf`). While tweening into an
+    animation, it's drawn at the animation's first frame.
   - Sprites.
   - Movers where their scripts have moved them.
 

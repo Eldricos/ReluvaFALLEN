@@ -59,6 +59,7 @@ public:
         std::array<ObjectRef, 8> multiSkins{};
         std::string animSequence;
         float animFrame = 0, animRate = 0;
+        bool animLoop = false;
         uint8_t style = 1;
         float scaleGlow = 1;
     };
@@ -79,7 +80,7 @@ private:
     // once per class (looking properties up by name for every actor every
     // frame took as long as the scripts' ticks).
     enum Field { Location, PrePivot, Rotation, DrawScale, DrawType, Hidden, MeshField, Skin, Texture, MultiSkins,
-                 AnimSequence, AnimFrame, AnimRate, Style, ScaleGlow, FieldCount };
+                 AnimSequence, AnimFrame, AnimRate, AnimLoop, Style, ScaleGlow, FieldCount };
     std::map<const VmClass*, std::array<int, FieldCount>> slots_;
     std::array<NameId, FieldCount> names_{};
 

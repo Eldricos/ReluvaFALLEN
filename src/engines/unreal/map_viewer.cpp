@@ -1182,7 +1182,6 @@ void MapViewer::startPlay() {
 void MapViewer::stopPlay() {
     play_.reset();
     moverActors_.clear();
-    liveAnims_.clear();
     // The live actors' meshes stay uploaded (in meshes_), for playing again.
 }
 
@@ -1243,9 +1242,8 @@ int MapViewer::liveMesh(const ObjectRef& ref, const std::string& anim) {
     return at;
 }
 
-// The level's actors as they are now: meshes posed in the animation they
-// play (from when it started: the VM doesn't move animations on yet), and
-// sprites.
+// The level's actors as they are now: meshes posed where their animation
+// is (AnimFrame), and sprites.
 void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right) {
     constexpr int kDrawSprite = 1, kDrawMesh = 2, kDrawVerticalSprite = 5, kDrawSpriteAnimOnce = 7;
     std::vector<SpriteDraw> sprites;
@@ -1259,11 +1257,6 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
             if (at < 0)
                 continue;
             const Mesh& mesh = meshes_[size_t(at)];
-            auto& [seq, since] = liveAnims_[a];
-            if (seq != look.animSequence) {
-                seq = look.animSequence;
-                since = playClock_;
-            }
             const MeshAnimSeq* anim = mesh.findAnim(look.animSequence);
             std::vector<gfx::TextureId> skins;
             for (size_t k = 0; k < std::max<size_t>(mesh.textures.size(), 8); ++k) {
@@ -1275,7 +1268,7 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
                 skins.push_back(textured_ ? textureOf(tex).first : 0);
             }
             drawMesh(*renderer_, gpuMeshes_[size_t(at)], meshPlacement(look.location, look.rotation, look.drawScale, look.prePivot),
-                     poseAt(mesh, anim, playClock_ - since, look.animFrame), skins, meshLightAt(look.location), kExposure,
+                     poseAtFraction(mesh, anim, look.animFrame, look.animLoop), skins, meshLightAt(look.location), kExposure,
                      look.style);
         } else if ((look.drawType == kDrawSprite || look.drawType == kDrawVerticalSprite ||
                     look.drawType == kDrawSpriteAnimOnce) && look.texture) {

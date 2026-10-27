@@ -59,6 +59,10 @@ struct MeshPose {
 // An animation `time` seconds in (looping at its rate); a still frame
 // when the rate is 0. Without the animation, frame 0.
 MeshPose poseAt(const Mesh& mesh, const MeshAnimSeq* anim, float time, float startFraction = 0);
+// An animation at `fraction` through it (an actor's AnimFrame: below 0
+// while tweening into it, drawn at its first frame); a loop goes on from
+// its last frame back to its first.
+MeshPose poseAtFraction(const Mesh& mesh, const MeshAnimSeq* anim, float fraction, bool loop);
 
 struct MeshLight {
     gfx::Vec3 ambient{1, 1, 1}, directed{}, direction{0, 0, 1}; // direction in the renderer's axes

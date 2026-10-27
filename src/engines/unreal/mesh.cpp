@@ -1008,8 +1008,10 @@ Error readMesh(const Package& package, int index, Mesh& out) {
         if (!count(r, 5, notifies))
             return fail("animation notifications run past the end");
         for (size_t k = 0; k < notifies; ++k) {
-            r.f32();
-            r.index();
+            MeshAnimSeq::Notify note;
+            note.time = r.f32();
+            note.function = package.name(r.index());
+            a.notifies.push_back(std::move(note));
         }
         a.rate = r.f32();
     }

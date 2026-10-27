@@ -117,6 +117,15 @@ public:
         int stateSerial = 0;
     };
     void setGoal(VmObject* pawn, const Goal& goal);
+
+    // Animation (vm_anim.cpp): PlayAnim and LoopAnim's start (`rate` times
+    // the sequence's own speed, after a tween of `tween` seconds),
+    // TweenAnim's, whether one's playing or tweening, and a latent
+    // FinishAnim's wait for its end.
+    void startAnim(VmObject* actor, NameId sequence, float rate, float tween, bool loop);
+    void tweenAnim(VmObject* actor, NameId sequence, float seconds);
+    bool animating(VmObject* actor);
+    void waitForAnim(VmObject* actor);
     // Movement so far, for diagnostics.
     struct MovementStats {
         int moves = 0, blockedByWorld = 0, blockedByActors = 0, steps = 0, landings = 0, touches = 0,
@@ -145,6 +154,8 @@ private:
     void steer(VmObject* pawn, float seconds);
     void rotate(VmObject* a, float seconds);
     void moveBrush(VmObject* mover, float seconds);
+    void animate(VmObject* actor, float seconds); // its animation on by a tick
+    void endAnimWait(VmObject* actor, bool ended);
     std::array<float, 3> extentOf(VmObject* a);
     struct BrushBox {
         std::array<float, 3> min{}, max{}; // in the brush's own coordinates
@@ -175,6 +186,7 @@ private:
     std::map<VmObject*, std::vector<VmObject*>> touching_;
     std::map<VmObject*, Goal> goals_;
     std::set<VmObject*> fallers_; // falling since a tick before
+    std::map<VmObject*, int> animWaits_; // actors in a latent FinishAnim, by their state serial then
     std::vector<VmObject*> movers_; // the level's, which traces of the world meet
     int editorCameras_ = 0;
     std::vector<VmObject*> actors_;
@@ -212,5 +224,7 @@ void registerEngineNatives(Vm& vm);
 void registerMovementNatives(Vm& vm);
 // The Fallen's splines (vm_splines.cpp).
 void registerSplineNatives(Vm& vm);
+// The animation natives (vm_anim.cpp).
+void registerAnimationNatives(Vm& vm);
 
 } // namespace reluva::unreal
