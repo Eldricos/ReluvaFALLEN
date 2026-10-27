@@ -168,8 +168,10 @@ player logs in on every map, as twelve characters (DS9_Sisko and DS9_Worf
 on 15 maps each, DS9_Kira, their EVA, ES, Beaten and Kira's Cardassian
 disguise on the rest), all with their HUD but on Entry (the menu's level,
 whose start isn't The Fallen's). 20 seconds in:
-- 62 are walking.
-- 7 are still frozen in their map's opening cut scene.
+- 65 are walking.
+- 4 are still frozen in their map's opening cut scene. Before animations
+  kept time, 7 were: cut scenes waiting on `FinishAnim` now end when
+  their animations do.
 - 4 started in water and swim.
 - On CM_Endcredits, the credits, the player falls: there's nothing under
   its start.
@@ -360,7 +362,8 @@ frame count and frames a second.
 - `FinishAnim` (latent: The Fallen's scripts call it 638 times) waits
   until then: the end of the animation, or of this round of a loop. It
   returns at once if nothing's playing. `IsAnimating` says whether one
-  is playing or tweening. `HasAnim` and `GetAnimGroup` read the
+  is playing or tweening. `GetAnimDuration` gives a sequence's length
+in seconds at a rate. `HasAnim` and `GetAnimGroup` read the
   sequences, borrowed ones included (`runf` is Kira's, not only her
   mesh's own).
 

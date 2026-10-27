@@ -256,6 +256,13 @@ void registerAnimationNatives(Vm& vm) {
         c.vm.level->waitForAnim(c.self);
         c.latentSeconds = 1e9f;
     });
+    // GetAnimDuration(name Sequence, optional float Rate): its length in
+    // seconds played at `Rate` times its speed (0 for one it hasn't).
+    reg("Actor.GetAnimDuration", [](NativeCall& c) {
+        const MeshAnimSeq* s = findAnim(c.vm, c.self, c.i(0));
+        const float rate = c.given.size() > 1 && c.given[1] ? c.f(1) : 1;
+        c.result = Value::floatValue(s && s->rate > 0 && rate > 0 ? float(s->numFrames) / (s->rate * rate) : 0);
+    });
     reg("Actor.HasAnim", [](NativeCall& c) { c.result = Value::boolValue(findAnim(c.vm, c.self, c.i(0)) != nullptr); });
     reg("Actor.GetAnimGroup", [](NativeCall& c) {
         const MeshAnimSeq* s = findAnim(c.vm, c.self, c.i(0));
