@@ -56,6 +56,28 @@ ScriptLevel::~ScriptLevel() {
 
 Error ScriptLevel::load() {
     hasModel_ = findLevelModel(map_, &model_) >= 0 && !model_.nodes.empty();
+    if (hasModel_)
+        collision_ = std::make_unique<LevelCollision>(model_);
+    // Movers' brushes' boxes, for colliding with them where they've moved.
+    for (const Mover& m : findMovers(vm_.packages(), map_, nullptr)) {
+        BrushBox b;
+        b.min = {1e30f, 1e30f, 1e30f};
+        b.max = {-1e30f, -1e30f, -1e30f};
+        for (const Poly& p : m.polys)
+            for (const Vec3f& v : p.vertices)
+                for (size_t k = 0; k < 3; ++k) {
+                    b.min[k] = std::min(b.min[k], v[k]);
+                    b.max[k] = std::max(b.max[k], v[k]);
+                }
+        b.prePivot = m.prePivot;
+        b.mainScale = m.mainScale;
+        b.postScale = m.postScale;
+        for (size_t i = 0; i < map_.exports().size(); ++i)
+            if (map_.path(int32_t(i) + 1) == m.name) {
+                brushes_[int(i)] = b;
+                break;
+            }
+    }
     std::vector<int32_t> refs;
     if (Error err = readLevelActors(map_, refs))
         return err;
@@ -127,6 +149,10 @@ void ScriptLevel::init(VmObject* a) {
 }
 
 void ScriptLevel::beginPlay(const std::string& defaultGame) {
+    // While the level starts, bStartup; once it has, bBegunPlay (which
+    // scripts check before acting on ticks: CTVE_Spline's).
+    if (Value* v = levelInfo_->find(vm_, "bStartup"))
+        *v = Value::boolValue(true);
     // The game type: the level's own, else the default.
     VmClass* gameClass = nullptr;
     if (Value* v = levelInfo_->find(vm_, "DefaultGameType"); v && v->asObject() && v->o->asClass)
@@ -159,6 +185,10 @@ void ScriptLevel::beginPlay(const std::string& defaultGame) {
     for (VmObject* a : start)
         if (a != game_)
             vm_.callEvent(a, "SetInitialState");
+    if (Value* v = levelInfo_->find(vm_, "bStartup"))
+        *v = Value::boolValue(false);
+    if (Value* v = levelInfo_->find(vm_, "bBegunPlay"))
+        *v = Value::boolValue(true);
 }
 
 VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& playerName, std::string& error) {
@@ -268,11 +298,33 @@ void ScriptLevel::tick(float seconds) {
         v->f += seconds;
     if (Value* v = levelInfo_->find(vm_, "DeltaTime"))
         v->f = seconds;
-    // Actors spawned during the tick wait for the next.
+    // Actors spawned during the tick wait for the next. The player's
+    // pawn first gets PlayerTick (its input and view); then each actor's
+    // scripts, then its physics.
     const std::vector<VmObject*> now = actors_;
-    for (VmObject* a : now)
+    for (VmObject* a : now) {
+        if (a->deleted)
+            continue;
+        if (a == player_) {
+            // The input axes, as the engine sets them each frame: those
+            // the keys are bound to (DefUser.ini's MoveForward is "Axis
+            // aBaseY Speed=+300", TurnRight "Axis aBaseX Speed=+150"...),
+            // the rest 0; PlayerInput works out the others from them.
+            const std::pair<const char*, float> axes[] = {
+                {"aBaseY", controls.forward * 300}, {"aStrafe", controls.strafe * 300},
+                {"aBaseX", controls.turn * 150},    {"aLookUp", controls.lookUp * 300},
+                {"aForward", 0}, {"aTurn", 0}, {"aBaseZ", 0}, {"aMouseX", 0}, {"aMouseY", 0}, {"aUp", 0},
+            };
+            for (const auto& [axis, value] : axes)
+                if (Value* v = a->find(vm_, axis))
+                    v->f = value;
+            vm_.callEvent(a, "PlayerInput", {Value::floatValue(seconds)});
+            vm_.callEvent(a, "PlayerTick", {Value::floatValue(seconds)});
+        }
+        vm_.tick(a, seconds);
         if (!a->deleted)
-            vm_.tick(a, seconds);
+            physics(a, seconds);
+    }
     actors_.erase(std::remove_if(actors_.begin(), actors_.end(), [](VmObject* a) { return a->deleted; }),
                   actors_.end());
 }
@@ -294,9 +346,8 @@ VmObject* ScriptLevel::spawn(VmClass* cls, VmObject* owner, NameId tag, const Va
         v->o = owner;
     if (Value* v = a->find(vm_, "Tag"))
         v->i = tag ? tag : cls->nameId;
-    if (location)
-        if (Value* v = a->find(vm_, "Location"))
-            vm_.assign(*v, *location);
+    if (location) // where it fits, if it collides with the world
+        place(a, Vm::vectorOf(*location));
     if (rotation)
         if (Value* v = a->find(vm_, "Rotation"))
             vm_.assign(*v, *rotation);
@@ -474,6 +525,8 @@ const std::vector<MeshAnimSeq>* meshAnims(Vm& vm, VmObject* a) {
 void registerEngineNatives(Vm& vm) {
     if (vm.hasNative("Actor.Spawn"))
         return;
+    registerMovementNatives(vm);
+    registerSplineNatives(vm);
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     auto B = [](bool v) { return Value::boolValue(v); };
 
@@ -514,34 +567,9 @@ void registerEngineNatives(Vm& vm) {
     // until those are simulated.
     for (const char* done : {"Actor.FinishAnim", "Actor.FinishInterpolation", "Actor.C3DFinishAnim"})
         reg(done, [](NativeCall& c) { c.latentSeconds = 0; });
-    reg("Actor.SetLocation", [=](NativeCall& c) {
-        if (Value* v = c.self ? c.self->find(c.vm, "Location") : nullptr)
-            c.vm.assign(*v, c.args[0]);
-        if (c.vm.level)
-            c.vm.level->updateRegion(c.self);
-        c.result = B(true);
-    });
     reg("Actor.SetRotation", [=](NativeCall& c) {
         if (Value* v = c.self ? c.self->find(c.vm, "Rotation") : nullptr)
             c.vm.assign(*v, c.args[0]);
-        c.result = B(true);
-    });
-    reg("Actor.Move", [=](NativeCall& c) {
-        if (Value* v = c.self ? c.self->find(c.vm, "Location") : nullptr) {
-            const Vec a = Vm::vectorOf(*v), d = Vm::vectorOf(c.args[0]);
-            *v = c.vm.vectorValue(a[0] + d[0], a[1] + d[1], a[2] + d[2]);
-        }
-        if (c.vm.level)
-            c.vm.level->updateRegion(c.self);
-        c.result = B(true);
-    });
-    reg("Actor.MoveSmooth", [=](NativeCall& c) {
-        if (Value* v = c.self ? c.self->find(c.vm, "Location") : nullptr) {
-            const Vec a = Vm::vectorOf(*v), d = Vm::vectorOf(c.args[0]);
-            *v = c.vm.vectorValue(a[0] + d[0], a[1] + d[1], a[2] + d[2]);
-        }
-        if (c.vm.level)
-            c.vm.level->updateRegion(c.self);
         c.result = B(true);
     });
     reg("Actor.SetCollision", [](NativeCall& c) {
@@ -561,10 +589,6 @@ void registerEngineNatives(Vm& vm) {
                 v->f = c.f(1);
         }
         c.result = B(true);
-    });
-    reg("Actor.SetPhysics", [](NativeCall& c) {
-        if (Value* v = c.self ? c.self->find(c.vm, "Physics") : nullptr)
-            v->i = c.i(0) & 0xff;
     });
     reg("Actor.SetOwner", [](NativeCall& c) {
         if (Value* v = c.self ? c.self->find(c.vm, "Owner") : nullptr)

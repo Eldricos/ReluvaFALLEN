@@ -82,6 +82,7 @@ struct Model {
     std::vector<uint8_t> lightBits;
     std::vector<Leaf> leaves;
     std::vector<int32_t> lights; // object references: light actors, lists ending in 0
+    bool rootOutside = true;     // whether what's beyond the BSP's root is open space
     size_t trailingBytes = 0;    // left over after the last field read
     std::string lightingError;
     bool hasLighting() const { return lightingError.empty(); }

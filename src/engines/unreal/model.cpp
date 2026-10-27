@@ -94,7 +94,7 @@ void readLighting(Reader& r, Model& out) {
     out.lights.resize(n);
     for (int32_t& l : out.lights)
         l = r.index();
-    r.i32(); // root outside
+    out.rootOutside = r.i32() != 0;
     r.i32(); // linked
     if (!r.ok())
         return fail("lights run past the end");

@@ -4536,6 +4536,7 @@ int cmdUeRun(int argc, char** argv) {
     int ran = 0, failed = 0;
     uint64_t calls = 0, statements = 0;
     int accessedNone = 0;
+    ScriptLevel::MovementStats moved;
     for (const std::string& name : maps) {
         const Package* map = set.get(name);
         if (!map) {
@@ -4586,6 +4587,24 @@ int cmdUeRun(int argc, char** argv) {
                     std::chrono::duration<double, std::milli>(t1 - t0).count(), double(seconds),
                     std::chrono::duration<double, std::milli>(t2 - t1).count(), (unsigned long long)vm.stats.calls,
                     vm.stats.accessedNone, vm.stats.errors.size(), vm.stats.missingNatives.size());
+        // Movement against the level: how actors moved, and where the player is.
+        const auto& m = level.movement;
+        std::string where;
+        if (player)
+            if (const Value* phys = player->find(vm, "Physics"))
+                where = ", the player's physics " + std::to_string(phys->asInt());
+        std::printf("%-20s movement: %d moves, blocked %d by the world and %d by actors, %d steps, %d landings, "
+                    "%d touches, %d zone changes, %d stuck%s\n",
+                    "", m.moves, m.blockedByWorld, m.blockedByActors, m.steps, m.landings, m.touches, m.zoneChanges,
+                    m.stuck, where.c_str());
+        moved.moves += m.moves;
+        moved.blockedByWorld += m.blockedByWorld;
+        moved.blockedByActors += m.blockedByActors;
+        moved.steps += m.steps;
+        moved.landings += m.landings;
+        moved.touches += m.touches;
+        moved.zoneChanges += m.zoneChanges;
+        moved.stuck += m.stuck;
         calls += vm.stats.calls;
         statements += vm.stats.statements;
         accessedNone += vm.stats.accessedNone;
@@ -4621,6 +4640,10 @@ int cmdUeRun(int argc, char** argv) {
     };
     std::printf("\n%d maps ran, %d didn't load; %llu calls, %llu statements, None accessed %d times\n", ran, failed,
                 (unsigned long long)calls, (unsigned long long)statements, accessedNone);
+    std::printf("movement: %d moves, blocked %d by the world and %d by actors, %d steps, %d landings, %d touches, "
+                "%d zone changes, %d stuck\n",
+                moved.moves, moved.blockedByWorld, moved.blockedByActors, moved.steps, moved.landings, moved.touches,
+                moved.zoneChanges, moved.stuck);
     std::printf("natives not written yet (%zu, by calls):\n", missing.size());
     for (const auto& [n, k] : top(missing, all ? 60 : 40))
         std::printf("  %7d %s\n", n, k.c_str());

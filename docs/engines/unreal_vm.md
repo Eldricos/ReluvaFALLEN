@@ -100,7 +100,9 @@ their `Level`, `XLevel` and `Outer` set. Then `beginPlay`:
    `InitGame` sent.
 2. Every actor: `PreBeginPlay`, `BeginPlay`; then every actor
    `PostBeginPlay`; then every actor `SetInitialState` (which puts it in
-   its initial or auto state).
+   its initial or auto state). The LevelInfo's `bStartup` is true
+   meanwhile, and `bBegunPlay` true after: The Fallen's splines do nothing
+   on a tick before it is, so without it no opening sequence ever ends.
 3. Spawned actors get `Spawned`, `PreBeginPlay`, `BeginPlay`,
    `PostBeginPlay`, `SetInitialState` as they're made; destroyed ones
    `Destroyed` (and their owner `LostChild`); `bStatic` and `bNoDelete`
@@ -190,6 +192,105 @@ What's left before play, by what `ue-run` reports:
   divide by an elevator's move time or a light's change time, 0 in some
   (floats divide to infinity, as they do: the light's fade then ends at
   once; reported).
+
+## Movement
+
+Actors move through the level's BSP ([collision.md](../formats/unreal/collision.md))
+and each other (`vm_physics.cpp`). This is Reluva's own model of UE1's
+movement, built from what the scripts set and expect.
+
+- **A move** (`Move`, and physics) sweeps the actor's box through the
+  world, if it has `bCollideWorld`. Then it sweeps against the cylinders
+  of actors that block it (`bBlockActors`, `bBlockPlayers` for players,
+  not its owner or what it owns) and movers' boxes (their brush's bounds
+  where they are now). It stops a little before the first hit. After
+  that come zone changes (`ActorLeaving` to the old zone, `ZoneChange`,
+  `ActorEntered` to the new), what it now touches (`Touch` and `UnTouch`
+  both ways, the `Touching` list), and `Bump` to both if an actor
+  stopped it.
+- **Smooth moves** (`MoveSmooth`, walking, swimming, flying): a wall
+  that stops a walker is first tried as a step (up `MaxStepHeight`,
+  across, down onto a floor). Otherwise it gets `HitWall` and the rest of
+  the move slides along the wall, twice at most. Walkers don't climb
+  walls by sliding.
+- **Placing** (`SetLocation`, spawning): if the spot is solid, the
+  actor is nudged up or sideways to the nearest open one.
+
+Physics each tick, after the actor's scripts:
+
+| Physics | What it does |
+|---|---|
+| Walking | Acceleration (flattened, at `AccelRate`) against ground friction (the zone's, 8) up to `GroundSpeed`. A smooth move, then down onto the floor if one is within a step, else falling (`Falling`). A floor is a surface facing up at least 0.7 (about 45 degrees). |
+| Falling | Gravity (the zone's, −950) and `AirControl` of the acceleration, up to the zone's terminal velocity. Off a wall or a slope too steep to stand on, `HitWall` and the rest of the fall slides along it. On a floor, `Landed`, then walking (pawns) or none, keeping the speed across. |
+| Swimming, flying | Acceleration against fluid friction up to `WaterSpeed` or `AirSpeed`, smooth moves. Swimmers sink or float by `Buoyancy` against `Mass` and fall once out of water. |
+| Projectile | Its velocity plus acceleration; `HitWall` on the world. |
+| Rotating | `RotationRate` each second. Any physics also turns toward `DesiredRotation` with `bRotateToDesired` (not a player's pawn: its input turns it). |
+| Moving brush | A mover from its old key toward its next by `PhysAlpha`, eased in and out if it glides by time. It carries the actors based on it and sends `InterpolateEnd` at the end. |
+
+The Fallen's own physics modes (its effects', past 32) do nothing yet.
+Natives: `Move`, `MoveSmooth`, `SetLocation`, `SetPhysics`, `Trace`
+(the world and actors' cylinders), `FastTrace`, `PointCheck`, `Pawn`'s
+latent `MoveTo`, `MoveToward`, `TurnTo`, `TurnToward`, `WaitForLanding`
+and `FinishRotation` (each moves the pawn by its acceleration until it
+gets there or gives up, then its state code carries on), and
+`pointReachable` / `actorReachable` (a box swept there).
+
+### The player's input
+
+`ScriptLevel::controls` (forward, strafe, turn, look up, each −1 to 1)
+is what the keys would say. Each tick it sets the input axes the way the
+engine does from DefUser.ini's bindings: `aBaseY` ±300 for
+`MoveForward`, `aStrafe` ±300, `aBaseX` ±150 for `TurnLeft`/`TurnRight`,
+`aLookUp`, and the rest 0. Then come `PlayerInput` and `PlayerTick`. The
+Fallen's scripts work out the rest:
+- `CTVE_PlayerPawn.PlayerInput` turns `aBaseY` into `aForward` and
+  `aBaseX` into `aTurn`. It zeroes them all while the HUD's letterbox is
+  up, in a cut scene.
+- `PlayerWalking.PlayerMove` takes 0.4 of them for the acceleration (a
+  walk: 96 units a second).
+- `UpdateRotation` turns her.
+
+`reluva-tool ue-run` reports what moved on each map. A test harness
+walking a player forward, turning, forward again, then strafing, on
+TrainingRoom, M01_KiraL2, M03_WorfL1, M04_SiskoL1 and M01_KiraL1A after
+its opening: she walks, turns, stops at walls and in corners, slides
+along them, steps down off slopes, and doesn't leave the level.
+
+### Splines
+
+The Fallen moves its cameras and its actors in cut scenes along splines.
+These are chains of `CTVE_Spline` nodes; `CTVE_Director` is a camera's,
+`CTVE_SplineAnim` an actor's. Their scripts ask the native
+`GetSplineData` each tick where along the chain they are at a time
+(`vm_splines.cpp`). UnrealEd saves all it needs with each node:
+- `TimeLine`: when the chain reaches it.
+- `Duration` and `Length` of the segment after it.
+- `Tangent`: on The Fallen's, the head's is exactly half the way to the
+  next node, Catmull-Rom's.
+- `AveSpeed`: the mean of this node's and the next's `Speed`.
+
+So Reluva's reading is:
+- **Timing.** Each node waits out any time the segment's `Duration`
+  leaves over, then travels it, its speed changing evenly from its own
+  `Speed` to the next's.
+- **The path.** The segment is a cubic through the two nodes, leaving
+  and arriving along their tangents (a straight line with
+  `Interpolation` linear). It's followed by length, measured in 16 pieces.
+- **Facing**, by the node's `Focus`:
+  - Direction (the default): turning from each node's own facing (the
+    arrow UnrealEd draws on it) to the next's.
+  - Spline and orient: along the curve.
+  - Actor and actor follow: at the actor tagged `FocusActorTag` (found
+    once, kept in `FocalActor`), offset by `FocusOffset` turned with it.
+  - World: at `FocusOffset`.
+  - Then `LocalRotation` is added, and `RollDegrees` turns it, changing
+    evenly to the next node's.
+- `TimeAlpha`, how far along the segment, is what directors take the
+  field of view between their nodes by.
+
+On M01_KiraL1A this plays the opening as written: cameras glide through
+the monastery while Kira and the monks walk their paths. After about 80
+seconds the letterbox goes and she can be moved.
 
 ## In the Maps page
 

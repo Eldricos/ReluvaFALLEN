@@ -7,13 +7,17 @@
 // its class's defaults and its own saved properties), the game type
 // spawned, the start-up events sent in order, and the world ticked. The
 // engine side scripts call into (spawning, destroying, iterating over the
-// actors, timers) is vm_natives_engine.cpp. See docs/engines/unreal_vm.md.
+// actors, timers) is in vm_level.cpp, movement in vm_physics.cpp, The
+// Fallen's splines in vm_splines.cpp. See docs/engines/unreal_vm.md.
 
 #include "engines/unreal/actors.h"
+#include "engines/unreal/collision.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/vm.h"
 
 #include <array>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -54,8 +58,62 @@ public:
     void updateRegion(VmObject* actor);
     int editorCameras() const { return editorCameras_; } // UnrealEd's cameras, left out
 
-    // Moves the world on: each actor's timer, Tick and state code.
+    // The player's controls this tick, as the engine's input sets them
+    // from the keys held (-1 to 1 each: back/forward, left/right, turning
+    // left/right, looking down/up); at full, the .ini's aliases give 300
+    // (150 turning).
+    struct Controls {
+        float forward = 0, strafe = 0, turn = 0, lookUp = 0;
+    } controls;
+
+    // Moves the world on: the player's input (PlayerInput) and PlayerTick,
+    // each actor's timer, Tick and state code, then its physics
+    // (vm_physics.cpp).
     void tick(float seconds);
+
+    // Movement against the level (vm_physics.cpp). An actor's collision is
+    // a cylinder (CollisionRadius, CollisionHeight), a box of those half
+    // sizes against the world.
+    struct MoveHit {
+        float time = 1;          // 0-1 of the move made
+        std::array<float, 3> normal{};
+        VmObject* actor = nullptr; // what stopped it: an actor, or the LevelInfo for the world
+        bool hit() const { return time < 1; }
+    };
+    // Moves an actor by `delta` until something blocks it (the world if it
+    // collides with it, actors and movers that block it), then updates its
+    // region (ZoneChange) and what it touches (Touch, UnTouch).
+    MoveHit moveActor(VmObject* actor, const std::array<float, 3>& delta);
+    // As moveActor, stepping up ledges and sliding along walls.
+    MoveHit moveSmooth(VmObject* actor, const std::array<float, 3>& delta);
+    // Runs an actor's physics (its Physics) for a time.
+    void physics(VmObject* actor, float seconds);
+    // A line or box traced through the level (and, if asked, its actors):
+    // what it hit (the LevelInfo for the world), where and facing which way.
+    VmObject* trace(VmObject* self, const std::array<float, 3>& start, const std::array<float, 3>& end,
+                    const std::array<float, 3>& extent, bool actors, std::array<float, 3>& hitLocation,
+                    std::array<float, 3>& hitNormal);
+    // Whether a box at a point is clear of the world.
+    bool clear(const std::array<float, 3>& point, const std::array<float, 3>& extent) const;
+    // Puts an actor somewhere it fits, near `point` if it doesn't there;
+    // false if there's nowhere near.
+    bool place(VmObject* actor, const std::array<float, 3>& point);
+    // A pawn moving or turning towards something until there (latent
+    // MoveTo, MoveToward, TurnTo, TurnToward, WaitForLanding,
+    // FinishRotation): what it's after.
+    struct Goal {
+        enum class Kind { Move, Turn, Land, Rotation } kind = Kind::Move;
+        std::array<float, 3> point{};
+        VmObject* target = nullptr;
+        float speed = 1, timeLeft = 10;
+        int stateSerial = 0;
+    };
+    void setGoal(VmObject* pawn, const Goal& goal);
+    // Movement so far, for diagnostics.
+    struct MovementStats {
+        int moves = 0, blockedByWorld = 0, blockedByActors = 0, steps = 0, landings = 0, touches = 0,
+            zoneChanges = 0, stuck = 0;
+    } movement;
 
     Vm& vm() { return vm_; }
     const Package& map() const { return map_; }
@@ -72,6 +130,17 @@ public:
 
 private:
     void init(VmObject* actor); // the engine's own properties of a new actor
+    Value* prop(VmObject* a, const char* name);
+    void updateTouching(VmObject* a);
+    void steer(VmObject* pawn, float seconds);
+    void rotate(VmObject* a, float seconds);
+    void moveBrush(VmObject* mover, float seconds);
+    std::array<float, 3> extentOf(VmObject* a);
+    struct BrushBox {
+        std::array<float, 3> min{}, max{}; // in the brush's own coordinates
+        std::array<float, 3> prePivot{}, mainScale{1, 1, 1}, postScale{1, 1, 1};
+    };
+    bool brushBox(VmObject* mover, std::array<float, 3>& min, std::array<float, 3>& max);
 
     Vm& vm_;
     const Package& map_;
@@ -81,6 +150,11 @@ private:
     VmObject* player_ = nullptr;
     Model model_;
     bool hasModel_ = false;
+    std::unique_ptr<LevelCollision> collision_;
+    std::map<int, BrushBox> brushes_; // movers' boxes, by export index
+    std::map<std::pair<const VmClass*, NameId>, int> slots_;
+    std::map<VmObject*, std::vector<VmObject*>> touching_;
+    std::map<VmObject*, Goal> goals_;
     int editorCameras_ = 0;
     std::vector<VmObject*> actors_;
     float time_ = 0;
@@ -112,5 +186,10 @@ Error runLevelStart(const PackageSet& packages, const Package& map, const std::s
 // The natives of Engine's Actor and its subclasses that a level needs
 // (registered once per VM; they work on vm.level).
 void registerEngineNatives(Vm& vm);
+// The movement natives (Move, MoveSmooth, SetLocation, Trace, PointCheck,
+// SetPhysics, Pawn's MoveTo and kin): vm_physics.cpp.
+void registerMovementNatives(Vm& vm);
+// The Fallen's splines (vm_splines.cpp).
+void registerSplineNatives(Vm& vm);
 
 } // namespace reluva::unreal

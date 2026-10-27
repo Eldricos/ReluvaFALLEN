@@ -16,6 +16,7 @@
 #include "engines/unreal/script.h"
 #include "engines/unreal/script_text.h"
 #include "engines/unreal/vm.h"
+#include "engines/unreal/collision.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package.h"
 #include "engines/unreal/package_set.h"
@@ -1488,6 +1489,50 @@ static void testVm() {
     (void)setCount;
 }
 
+static void testCollision() {
+    // One plane, z = 0, facing up: open above, solid below.
+    Model m;
+    BspNode floor;
+    floor.plane = {0, 0, 1, 0};
+    floor.front = floor.back = -1;
+    m.nodes.push_back(floor);
+    m.rootOutside = false;
+    LevelCollision c(m);
+    CHECK(c.solid(Vec3f{0, 0, -1}) && !c.solid(Vec3f{5, 5, 1}));
+    CHECK(c.solid(Vec3f{0, 0, 5}, Vec3f{4, 4, 10}) && !c.solid(Vec3f{0, 0, 11}, Vec3f{4, 4, 10}));
+    // A line down from 100 to -100 stops at the floor (a little short).
+    LevelCollision::Hit h = c.trace({0, 0, 100}, {0, 0, -100});
+    CHECK(h.hit() && std::abs(h.time - 0.5f) < 0.01f && h.normal[2] == 1 && h.location[2] > 0 && h.location[2] < 0.5f);
+    // A box 10 high stops its half height above it.
+    h = c.trace({0, 0, 100}, {0, 0, -100}, {4, 4, 10});
+    CHECK(h.hit() && std::abs(h.location[2] - 10) < 0.5f);
+    // Along it, nothing; from inside it, stuck at once.
+    CHECK(!c.trace({0, 0, 20}, {100, 0, 20}, {4, 4, 10}).hit());
+    CHECK(c.trace({0, 0, -5}, {0, 0, 50}).startSolid);
+    // A non-solid brush's plane (0x01) divides nothing: both sides are
+    // what the root is.
+    m.nodes[0].flags = 0x01;
+    CHECK(c.solid(Vec3f{0, 0, 1}) && c.solid(Vec3f{0, 0, -1}));
+    m.rootOutside = true;
+    CHECK(!c.solid(Vec3f{0, 0, -1}) && !c.trace({0, 0, 100}, {0, 0, -100}).hit());
+
+    // A diagonal wall (x + y = 141.4 or so, open on the origin's side): a
+    // box stopped by it is left clear of it, even coming in at a grazing
+    // angle, and can then slide along it.
+    const float s = std::sqrt(0.5f);
+    m.nodes[0].plane = {-s, -s, 0, -100};
+    m.nodes[0].flags = 0;
+    m.rootOutside = false;
+    const Vec3f box{17, 17, 47};
+    for (const Vec3f& to : {Vec3f{200, 0, 0}, Vec3f{400, -280, 0}}) {
+        h = c.trace({0, 0, 0}, to, box);
+        CHECK(h.hit() && !h.startSolid && std::abs(h.normal[0] + s) < 1e-3f && !c.solid(h.location, box));
+    }
+    h = c.trace({0, 0, 0}, {200, 0, 0}, box);
+    const Vec3f along{h.location[0] + 50, h.location[1] - 50, h.location[2]};
+    CHECK(!c.trace(h.location, along, box).hit() && !c.solid(along, box));
+}
+
 int main() {
     testCompactIndex();
     testPackageTables();
@@ -1508,6 +1553,7 @@ int main() {
     testClassDefaultsAndMeshActors();
     testScript();
     testVm();
+    testCollision();
     testMapExtension();
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
