@@ -70,7 +70,7 @@ void registerCoreNatives(Vm& vm) {
     reg("Multiply_IntInt", [=](NativeCall& c) { c.result = I(c.i(0) * c.i(1)); });
     reg("Divide_IntInt", [=](NativeCall& c) {
         if (c.i(1) == 0)
-            c.vm.reportError("an integer divided by zero");
+            c.vm.reportError("an integer divided by zero" + c.vm.where());
         c.result = I(c.i(1) ? c.i(0) / c.i(1) : 0);
     });
     reg("Add_IntInt", [=](NativeCall& c) { c.result = I(c.i(0) + c.i(1)); });
@@ -145,8 +145,8 @@ void registerCoreNatives(Vm& vm) {
     reg("Multiply_FloatFloat", [=](NativeCall& c) { c.result = F(c.f(0) * c.f(1)); });
     reg("Divide_FloatFloat", [=](NativeCall& c) {
         if (c.f(1) == 0)
-            c.vm.reportError("a float divided by zero");
-        c.result = F(c.f(1) != 0 ? c.f(0) / c.f(1) : 0);
+            c.vm.reportError("a float divided by zero" + c.vm.where());
+        c.result = F(c.f(0) / c.f(1)); // infinite, as floats are (CTV_ElevatorMover.InitRamp's with a move time of 0)
     });
     reg("Percent_FloatFloat", [=](NativeCall& c) { c.result = F(c.f(1) != 0 ? std::fmod(c.f(0), c.f(1)) : 0); });
     reg("Add_FloatFloat", [=](NativeCall& c) { c.result = F(c.f(0) + c.f(1)); });

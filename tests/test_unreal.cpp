@@ -1477,6 +1477,13 @@ static void testVm() {
     vm.tick(o, 0.6f);
     CHECK(o->find(vm, "Count")->asInt() == 2 && o->codeAt == -1);
     CHECK(vm.stats.errors.empty() && vm.stats.missingNatives.empty());
+    // A class with no script (as Viewport is), made up under Counter:
+    // found by name, a kind of Counter, its objects with Counter's values
+    // and their built-in name.
+    VmClass* made = vm.defineIntrinsic("Tally", c);
+    CHECK(made && made->isA(c) && vm.intrinsic("tally") == made && made->object && made->object->asClass == made);
+    VmObject* t = vm.create(made);
+    CHECK(t->find(vm, "Total") && t->find(vm, "Total")->asInt() == 10 && vm.nameText(t->name) == "Tally0");
     (void)total;
     (void)setCount;
 }

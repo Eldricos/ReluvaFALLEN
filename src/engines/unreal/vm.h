@@ -223,6 +223,12 @@ public:
     // (unless disabled) its Tick event.
     void tick(VmObject* self, float seconds);
 
+    // A class the engine defines in C++ only, with no script (Viewport):
+    // made up under its parent so scripts can cast to it and objects of it
+    // can be made. Found by name when a reference to it doesn't resolve.
+    VmClass* defineIntrinsic(std::string_view name, VmClass* parent);
+    VmClass* intrinsic(std::string_view name);
+
     void registerNative(std::string_view qualifiedName, NativeFn fn);
     bool hasNative(std::string_view qualifiedName) const { return natives_.count(std::string(qualifiedName)) > 0; }
 
@@ -258,6 +264,8 @@ public:
     // The level running, for the natives that need the world.
     ScriptLevel* level = nullptr;
     void reportError(const std::string& what);
+    // Where scripts are running: " in Class.Function", for natives' errors.
+    std::string where() const;
 
 private:
     friend class Interpreter;
@@ -273,10 +281,12 @@ private:
     Value readStruct(const VmStruct& st, const Package& package, Reader& r);
     Value readValue(const VmProperty& p, const Package& package, Reader& r);
     float pendingLatent_ = -1;
+    std::vector<const VmStruct*> running_; // the code running, innermost last
     std::map<int, VmFunction*> nativeFunctions_;
     bool nativesScanned_ = false;
     std::map<NameId, const VmStruct*> coreStructs_;
     std::map<const VmClass*, int> nameCounts_;
+    std::map<NameId, std::unique_ptr<VmClass>> intrinsics_;
 
     const PackageSet& packages_;
     std::vector<std::string> names_;

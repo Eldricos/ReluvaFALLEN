@@ -4554,7 +4554,9 @@ int cmdUeRun(int argc, char** argv) {
             continue;
         }
         const size_t before = level.actors().size();
-        level.beginPlay("DS9.DS9_GameInfo");
+        level.beginPlay(defaultGameType(set));
+        std::string loginError;
+        VmObject* player = level.login(iniSetting(set, "URL", "Class"), iniSetting(set, "URL", "Name"), loginError);
         const auto t1 = std::chrono::steady_clock::now();
         for (int i = 0; i < int(seconds * 30); ++i)
             level.tick(1.0f / 30);
@@ -4569,9 +4571,17 @@ int cmdUeRun(int argc, char** argv) {
                 if (Value* v = a->find(vm, "LightBrightness"); v && v->i == 0)
                     ++dark;
         }
-        std::printf("%-20s %5zu actors (%zu after %.0f s), game %s; %d drawn as nothing, %d lights at brightness 0; "
+        // The player as it is after the run: its state and HUD.
+        std::string who = "none: " + loginError;
+        if (player) {
+            const Value* hud = player->find(vm, "myHUD");
+            who = player->cls->name + " (state " + (player->state ? player->state->name : std::string("none")) +
+                  ", HUD " + (hud && hud->asObject() ? hud->o->cls->name : std::string("none")) + ")";
+        }
+        std::printf("%-20s player %s; ", name.c_str(), who.c_str());
+        std::printf("%5zu actors (%zu after %.0f s), game %s; %d drawn as nothing, %d lights at brightness 0; "
                     "start %.0f ms, %.0f s run %.0f ms; %llu calls, %d None accessed, %zu errors, %zu natives missing\n",
-                    name.c_str(), before, level.actors().size(), double(seconds),
+                    before, level.actors().size(), double(seconds),
                     level.game() ? level.game()->cls->name.c_str() : "none", hidden, dark,
                     std::chrono::duration<double, std::milli>(t1 - t0).count(), double(seconds),
                     std::chrono::duration<double, std::milli>(t2 - t1).count(), (unsigned long long)vm.stats.calls,

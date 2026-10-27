@@ -782,6 +782,44 @@ std::array<int32_t, 3> Vm::rotatorOf(const Value& v) {
     return {v.fields[0].asInt(), v.fields[1].asInt(), v.fields[2].asInt()};
 }
 
+std::string Vm::where() const {
+    if (running_.empty())
+        return "";
+    const VmStruct* s = running_.back();
+    if (s->kind == VmStruct::Kind::Function)
+        return " in " + static_cast<const VmFunction*>(s)->qualified;
+    if (s->kind == VmStruct::Kind::State)
+        return " in " + static_cast<const VmState*>(s)->owner->name + "." + s->name + " (state code)";
+    return " in " + s->name;
+}
+
+VmClass* Vm::defineIntrinsic(std::string_view className, VmClass* parent) {
+    const NameId n = name(className);
+    if (auto it = intrinsics_.find(n); it != intrinsics_.end())
+        return it->second.get();
+    auto c = std::make_unique<VmClass>();
+    c->kind = VmStruct::Kind::Class;
+    c->name = std::string(className);
+    c->nameId = n;
+    c->owner = c.get();
+    c->super = parent;
+    if (parent) {
+        c->package = parent->package;
+        c->properties = parent->properties;
+        c->slots = parent->slots;
+        c->defaults = parent->defaults;
+    }
+    VmClass* out = c.get();
+    intrinsics_.emplace(n, std::move(c));
+    classObject(out);
+    return out;
+}
+
+VmClass* Vm::intrinsic(std::string_view className) {
+    auto it = intrinsics_.find(name(className));
+    return it == intrinsics_.end() ? nullptr : it->second.get();
+}
+
 void Vm::registerNative(std::string_view qualifiedName, NativeFn fn) {
     natives_[lower(qualifiedName)] = std::move(fn);
 }
@@ -812,6 +850,13 @@ public:
 
     // Runs statements from `pc`; on Wait, `pc` is the statement to resume at.
     Flow run(Frame& f, int& pc) {
+        vm_.running_.push_back(f.owner);
+        const Flow flow = runStatements(f, pc);
+        vm_.running_.pop_back();
+        return flow;
+    }
+
+    Flow runStatements(Frame& f, int& pc) {
         const Code& code = f.owner->code;
         const int stateSerial = f.self ? f.self->stateSerial : 0;
         const bool stateCode = f.owner->kind == VmStruct::Kind::State || f.owner->kind == VmStruct::Kind::Class;
@@ -1366,7 +1411,7 @@ private:
         const void*& cached = f.owner->resolved[size_t(i)];
         if (!cached) {
             const ObjectRef r = vm_.packages().resolve(*f.owner->package, ref);
-            cached = r ? vm_.classAt(*r.package, r.exportIndex) : nullptr;
+            cached = r ? vm_.classAt(*r.package, r.exportIndex) : vm_.intrinsic(f.owner->package->objectName(ref));
         }
         return static_cast<VmClass*>(const_cast<void*>(cached));
     }

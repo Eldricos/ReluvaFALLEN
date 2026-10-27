@@ -10,8 +10,10 @@
 // actors, timers) is vm_natives_engine.cpp. See docs/engines/unreal_vm.md.
 
 #include "engines/unreal/actors.h"
+#include "engines/unreal/model.h"
 #include "engines/unreal/vm.h"
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -33,6 +35,25 @@ public:
     // events: the game's InitGame, then each actor's PreBeginPlay and
     // BeginPlay, then PostBeginPlay, then SetInitialState.
     void beginPlay(const std::string& defaultGame);
+    // A player joining, as the engine logs one in (after beginPlay): the
+    // start the game type picks (its FindPlayerStart), the character that
+    // start names (The Fallen's CTVE_PlayerStart.Player; else `playerClass`,
+    // "Package.Class", the .ini's [URL] Class), spawned by the game type's
+    // Login; a viewport and console given to it; then Possess,
+    // TravelPostAccept and the game type's PostLogin. nullptr, with
+    // `error`, if Login refuses.
+    VmObject* login(const std::string& playerClass, const std::string& playerName, std::string& error);
+    VmObject* player() const { return player_; }
+
+    // Where a point is in the level: its zone and leaf, found down the
+    // level's BSP (the zone and leaf on the point's side of the last node).
+    // A PointRegion value (Zone, iLeaf, ZoneNumber).
+    Value regionAt(const std::array<float, 3>& point);
+    // Sets an actor's Region from its Location (as the engine does when
+    // actors are spawned or move).
+    void updateRegion(VmObject* actor);
+    int editorCameras() const { return editorCameras_; } // UnrealEd's cameras, left out
+
     // Moves the world on: each actor's timer, Tick and state code.
     void tick(float seconds);
 
@@ -57,16 +78,23 @@ private:
     VmObject* levelInfo_ = nullptr;
     VmObject* game_ = nullptr;
     VmObject* levelObject_ = nullptr;
+    VmObject* player_ = nullptr;
+    Model model_;
+    bool hasModel_ = false;
+    int editorCameras_ = 0;
     std::vector<VmObject*> actors_;
     float time_ = 0;
 };
 
+// A setting from a game's .ini ("Engine.Engine", "DefaultGame"); empty if
+// it isn't there.
+std::string iniSetting(const PackageSet& packages, std::string_view section, std::string_view key);
 // The game type a game's levels run with: its .ini's [Engine.Engine]
 // DefaultGame ("DS9.DS9_GameInfo"), else Engine's GameInfo.
 std::string defaultGameType(const PackageSet& packages);
 
-// A level's start, run for what it changes: its scripts' start-up events
-// and `seconds` of ticks, then each placed actor compared with how it was
+// A level's start, run for what it changes: its scripts' start-up events,
+// a player logging in, and `seconds` of ticks, then each placed actor compared with how it was
 // saved (destroyed, hidden, its draw type, its light's type and
 // brightness). For drawing a level as it looks when play begins.
 struct LevelStart {
@@ -75,6 +103,8 @@ struct LevelStart {
     double milliseconds = 0;
     size_t errors = 0, missingNatives = 0;
     int accessedNone = 0;
+    std::string player;     // the player's class, once logged in
+    std::string loginError; // why the player couldn't log in, if not
 };
 Error runLevelStart(const PackageSet& packages, const Package& map, const std::string& defaultGame, float seconds,
                     LevelStart& out);

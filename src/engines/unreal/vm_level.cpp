@@ -55,6 +55,7 @@ ScriptLevel::~ScriptLevel() {
 }
 
 Error ScriptLevel::load() {
+    hasModel_ = findLevelModel(map_, &model_) >= 0 && !model_.nodes.empty();
     std::vector<int32_t> refs;
     if (Error err = readLevelActors(map_, refs))
         return err;
@@ -71,6 +72,17 @@ Error ScriptLevel::load() {
         VmClass* cls = cref ? vm_.classAt(*cref.package, cref.exportIndex) : nullptr;
         if (!cls) {
             vm_.reportError("the level's actor " + map_.path(ref) + " has no class that loads");
+            continue;
+        }
+        // UnrealEd keeps its viewports' cameras in the level as Camera
+        // actors, which are PlayerPawns: left out, or the player logging
+        // in would take one over (GameInfo.Login reuses a PlayerPawn
+        // without a player).
+        bool camera = false;
+        for (const VmClass* c = cls; c && !camera; c = c->parent())
+            camera = lowerText(c->name) == "camera";
+        if (camera) {
+            ++editorCameras_;
             continue;
         }
         VmObject* a = vm_.create(cls, vm_.name(map_.objectName(ref)));
@@ -149,6 +161,107 @@ void ScriptLevel::beginPlay(const std::string& defaultGame) {
             vm_.callEvent(a, "SetInitialState");
 }
 
+VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& playerName, std::string& error) {
+    error.clear();
+    if (!game_) {
+        error = "no game type to log in to";
+        return nullptr;
+    }
+    // Which start, and so which character.
+    VmClass* cls = nullptr;
+    if (VmFunction* find = vm_.findFunction(game_, vm_.name("FindPlayerStart"))) {
+        const Value start = vm_.invoke(find, game_, {Value::objectValue(nullptr), Value::byteValue(255), Value::stringValue("")});
+        if (VmObject* s = start.asObject())
+            if (Value* p = s->find(vm_, "Player"); p && p->asObject() && p->o->asClass)
+                cls = p->o->asClass;
+    }
+    if (!cls && !playerClass.empty())
+        cls = vm_.findClass(playerClass);
+    if (!cls)
+        if (Value* p = game_->find(vm_, "DefaultPlayerClass"); p && p->asObject() && p->o->asClass)
+            cls = p->o->asClass;
+    if (!cls) {
+        error = "no player class";
+        return nullptr;
+    }
+    VmFunction* login = vm_.findFunction(game_, vm_.name("Login"));
+    if (!login) {
+        error = game_->cls->name + " has no Login";
+        return nullptr;
+    }
+    const std::string options = "?Name=" + playerName + "?Class=" + cls->package->name() + "." + cls->name;
+    Value message = Value::stringValue("");
+    const Value pawn = vm_.invoke(login, game_,
+                                  {Value::stringValue(""), Value::stringValue(options), message, Value::objectValue(cls->object)},
+                                  {nullptr, nullptr, &message, nullptr});
+    player_ = pawn.asObject();
+    if (!player_) {
+        error = "Login refused: " + (message.s.empty() ? std::string("no reason given") : message.s);
+        return nullptr;
+    }
+    // The engine's side of the player: a viewport (a class with no script,
+    // made up as a kind of Player) with the .ini's console.
+    VmClass* playerBase = vm_.findClass("Engine.Player");
+    VmClass* viewportClass = vm_.defineIntrinsic("Viewport", playerBase);
+    VmObject* viewport = vm_.create(viewportClass, vm_.name("Viewport0"));
+    if (Value* v = viewport->find(vm_, "Actor"))
+        v->o = player_;
+    if (VmClass* consoleClass = vm_.findClass(iniSetting(vm_.packages(), "Engine.Engine", "Console"))) {
+        VmObject* console = vm_.create(consoleClass, 0, viewport);
+        if (Value* v = viewport->find(vm_, "Console"))
+            v->o = console;
+        if (Value* v = console->find(vm_, "Viewport"))
+            v->o = viewport;
+    }
+    if (Value* v = player_->find(vm_, "Player"))
+        v->o = viewport;
+    vm_.callEvent(player_, "Possess");
+    vm_.callEvent(game_, "AcceptInventory", {Value::objectValue(player_)});
+    vm_.callEvent(player_, "TravelPostAccept");
+    vm_.callEvent(game_, "PostLogin", {Value::objectValue(player_)});
+    return player_;
+}
+
+Value ScriptLevel::regionAt(const std::array<float, 3>& p) {
+    int zone = 0, leaf = -1;
+    if (hasModel_) {
+        int32_t n = 0;
+        for (int guard = 0; guard < 100000 && n >= 0 && size_t(n) < model_.nodes.size(); ++guard) {
+            const BspNode& node = model_.nodes[size_t(n)];
+            const bool front = node.plane[0] * p[0] + node.plane[1] * p[1] + node.plane[2] * p[2] - node.plane[3] >= 0;
+            zone = node.zone[front ? 1 : 0];
+            leaf = node.leaf[front ? 1 : 0];
+            n = front ? node.front : node.back;
+            if (n <= 0)
+                break;
+        }
+    }
+    Value v;
+    Value* saved = levelInfo_ ? levelInfo_->find(vm_, "Region") : nullptr;
+    if (saved && saved->type == VType::Struct) {
+        v = *saved;
+        if (const VmStruct* st = v.st) {
+            VmObject* zoneActor = size_t(zone) < model_.zones.size() ? vm_.objectAt(map_, model_.zones[size_t(zone)].actor) : nullptr;
+            if (VmProperty* f = st->findProperty(vm_.name("Zone")))
+                v.fields[size_t(f->slot)] = Value::objectValue(zoneActor);
+            if (VmProperty* f = st->findProperty(vm_.name("iLeaf")))
+                v.fields[size_t(f->slot)] = Value::intValue(leaf);
+            if (VmProperty* f = st->findProperty(vm_.name("ZoneNumber")))
+                v.fields[size_t(f->slot)] = Value::byteValue(zone);
+        }
+    }
+    return v;
+}
+
+void ScriptLevel::updateRegion(VmObject* a) {
+    if (!a || !hasModel_)
+        return;
+    Value* location = a->find(vm_, "Location");
+    Value* region = a->find(vm_, "Region");
+    if (location && region)
+        vm_.assign(*region, regionAt(Vm::vectorOf(*location)));
+}
+
 void ScriptLevel::tick(float seconds) {
     time_ += seconds;
     if (Value* v = levelInfo_->find(vm_, "TimeSeconds"))
@@ -187,6 +300,7 @@ VmObject* ScriptLevel::spawn(VmClass* cls, VmObject* owner, NameId tag, const Va
     if (rotation)
         if (Value* v = a->find(vm_, "Rotation"))
             vm_.assign(*v, *rotation);
+    updateRegion(a);
     if (owner && !owner->deleted)
         vm_.callEvent(owner, "GainedChild", {Value::objectValue(a)});
     for (const char* event : {"Spawned", "PreBeginPlay", "BeginPlay", "PostBeginPlay", "SetInitialState"}) {
@@ -208,10 +322,12 @@ void ScriptLevel::destroy(VmObject* a) {
     a->deleted = true;
 }
 
-std::string defaultGameType(const PackageSet& packages) {
+std::string iniSetting(const PackageSet& packages, std::string_view section, std::string_view key) {
     std::ifstream in(packages.iniFile(), std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    bool inEngine = false;
+    const std::string wantSection = "[" + lowerText(std::string(section)) + "]";
+    const std::string wantKey = lowerText(std::string(key)) + "=";
+    bool inSection = false;
     size_t at = 0;
     while (at < text.size()) {
         size_t end = text.find('\n', at);
@@ -222,13 +338,18 @@ std::string defaultGameType(const PackageSet& packages) {
         while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
             line.pop_back();
         if (!line.empty() && line.front() == '[') {
-            inEngine = lowerText(line) == "[engine.engine]";
+            inSection = lowerText(line) == wantSection;
             continue;
         }
-        if (inEngine && lowerText(line).rfind("defaultgame=", 0) == 0)
-            return line.substr(12);
+        if (inSection && lowerText(line).rfind(wantKey, 0) == 0)
+            return line.substr(wantKey.size());
     }
-    return "Engine.GameInfo";
+    return "";
+}
+
+std::string defaultGameType(const PackageSet& packages) {
+    const std::string game = iniSetting(packages, "Engine.Engine", "DefaultGame");
+    return game.empty() ? "Engine.GameInfo" : game;
 }
 
 Error runLevelStart(const PackageSet& packages, const Package& map, const std::string& defaultGame, float seconds,
@@ -253,6 +374,10 @@ Error runLevelStart(const PackageSet& packages, const Package& map, const std::s
             before.push_back({a->exportIndex, {a, byteOf(a, "DrawType"), byteOf(a, "bHidden"), byteOf(a, "LightType"),
                                                byteOf(a, "LightBrightness")}});
     level.beginPlay(defaultGame);
+    std::string loginError;
+    if (VmObject* p = level.login(iniSetting(packages, "URL", "Class"), iniSetting(packages, "URL", "Name"), loginError))
+        out.player = p->cls->name;
+    out.loginError = loginError;
     for (int i = 0; i < int(seconds * 30); ++i)
         level.tick(1.0f / 30);
     for (const auto& [index, was] : before) {
@@ -392,6 +517,8 @@ void registerEngineNatives(Vm& vm) {
     reg("Actor.SetLocation", [=](NativeCall& c) {
         if (Value* v = c.self ? c.self->find(c.vm, "Location") : nullptr)
             c.vm.assign(*v, c.args[0]);
+        if (c.vm.level)
+            c.vm.level->updateRegion(c.self);
         c.result = B(true);
     });
     reg("Actor.SetRotation", [=](NativeCall& c) {
@@ -404,6 +531,8 @@ void registerEngineNatives(Vm& vm) {
             const Vec a = Vm::vectorOf(*v), d = Vm::vectorOf(c.args[0]);
             *v = c.vm.vectorValue(a[0] + d[0], a[1] + d[1], a[2] + d[2]);
         }
+        if (c.vm.level)
+            c.vm.level->updateRegion(c.self);
         c.result = B(true);
     });
     reg("Actor.MoveSmooth", [=](NativeCall& c) {
@@ -411,6 +540,8 @@ void registerEngineNatives(Vm& vm) {
             const Vec a = Vm::vectorOf(*v), d = Vm::vectorOf(c.args[0]);
             *v = c.vm.vectorValue(a[0] + d[0], a[1] + d[1], a[2] + d[2]);
         }
+        if (c.vm.level)
+            c.vm.level->updateRegion(c.self);
         c.result = B(true);
     });
     reg("Actor.SetCollision", [](NativeCall& c) {

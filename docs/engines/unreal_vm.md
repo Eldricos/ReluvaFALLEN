@@ -1,12 +1,14 @@
 # The UnrealScript virtual machine
 
-Status: **runs The Fallen's levels' start-up**, not the game. Every class
-of the game loads (`vm.cpp`), every default property converts to its
-type, and all 74 maps start: their actors made, the game type spawned,
-the start-up events sent, then three seconds of ticks, with no crash
-and, other than scripts finding no player (none has joined), one kind of
-script error, a mistake in the game's own script (below). The Maps page
-draws each level as its scripts leave it when play begins.
+Status: **runs The Fallen's levels' start-up and the player's login**,
+not the game. Every class of the game loads (`vm.cpp`), every default
+property converts to its type, and all 74 maps start: their actors made,
+the game type spawned, the start-up events sent, the player logged in as
+the level's character, then twenty seconds of ticks, with no crash. The
+script errors left are mistakes in the game's own scripts (below) and
+None accessed where natives not written yet would have filled
+something in. The Maps page draws each level as its scripts leave it
+when play begins.
 
 Clean room as the rest of the engine ([unreal.md](unreal.md)): the
 bytecode and the objects are as [script.md](../formats/unreal/script.md)
@@ -104,34 +106,95 @@ their `Level`, `XLevel` and `Outer` set. Then `beginPlay`:
    `Destroyed` (and their owner `LostChild`); `bStatic` and `bNoDelete`
    actors refuse to go.
 
+UnrealEd keeps its viewports' cameras in the level as `Camera` actors
+(292 of them over The Fallen's maps). `Camera` is a `PlayerPawn`, and in
+single player `GameInfo.Login` takes over any `PlayerPawn` in the level
+that has no player (meant for players travelling between levels), so
+they're left out; the original must drop them too, or every login would
+become an editor camera.
+
+### Where actors are
+
+The engine keeps each actor's `Region` (its zone, BSP leaf and zone
+number) as it's spawned and moves; scripts read it
+(`Level.Player.Region.Zone.bWaterZone`). `ScriptLevel::regionAt` walks
+the level's BSP from the root to the point, taking the zone and leaf on
+its side of the last node. Against the regions saved with The Fallen's
+placed actors (four maps, 2,808 actors with one): the same zone for all
+but 8, the same leaf too for 2,738. Actors saved with no region (the
+LevelInfo, brushes: zone 0, leaf -1) aren't in the world, and keep
+none.
+
+### The player logging in
+
+After `beginPlay`, `login` does the engine's side of a player joining,
+in this order (Reluva's reading of the public UnrealScript documentation
+and of what the scripts expect):
+
+1. The start: the game type's own `FindPlayerStart`.
+2. The character: The Fallen's starts (`CTVE_PlayerStart`) name it in
+   their `Player` property (M01_KiraL1A's: `PLYR.DS9_Kira`), which no
+   script reads, so the game's engine must spawn it; otherwise the .ini's
+   `[URL] Class` (`PLYR.DS9_Sisko`), else the game type's
+   `DefaultPlayerClass`.
+3. The game type's `Login` with options `?Name=Player?Class=...`: it
+   spawns the pawn at the start (whose `PreBeginPlay` sets The Fallen's
+   `Level.Player`).
+4. The engine's own objects for it: a viewport (`Viewport` has no script
+   class, it's C++ only: made up as a kind of `Player`, `Vm::defineIntrinsic`,
+   so `Viewport(Player)` casts work) holding the .ini's console
+   (`UMenu.DS9_Console`).
+5. `Possess`, the game type's `AcceptInventory`, `TravelPostAccept`,
+   the game type's `PostLogin`.
+
+On M01_KiraL1A this plays the opening as the scripts have it: Kira's
+`InitPlayerStart` gives her the start's weapons and items, spawns her
+HUD (`DS9_Hud`), triggers the opening camera director, and freezes and
+hides her for the start's 12 seconds; then `CTV_Human`'s `Frozen` timer
+beams her in (`CTV_TransporterBeamIn`), which puts her in `PlayerWalking`
+about 17 seconds in.
+
 `reluva-tool ue-run <game> <map | -all> [seconds]` runs it and reports
 what scripts did: their log (repeats counted), errors, natives not
-written yet by calls, None accessed by place. On The Fallen (October
-2026), all 74 maps, 3 seconds each: 37 million calls, 0.3 s to start a
-map on average (M01_KiraL1A, 3279 actors, 0.9 s), ticking at about a
-tenth of real time on average but half of it on the biggest map.
+written yet by calls, None accessed by place, and the player as it ends
+up (its state and HUD). On The Fallen (October 2026), all 74 maps, 20
+seconds each: 174 million calls; 0.3 s to start a map on average
+(M01_KiraL1A, 3,275 actors, 0.9 s), ticking at about a fifteenth of real
+time on average but half of it on the biggest map. A player logs in on
+every map, as twelve characters (DS9_Sisko and DS9_Worf on 15 maps each,
+DS9_Kira, their EVA, ES, Beaten and Kira's Cardassian disguise on the
+rest), all with their HUD but on Entry (the menu's level, whose start
+isn't The Fallen's); 72 are walking by 20 seconds in, and on the other
+two (M01_KiraL1B, M05_SiskoL2) the player starts in water and swims.
 
 What's left before play, by what `ue-run` reports:
 
-- **No player.** Most of the None accessed is scripts looking at
-  `Level.Player` or a player's pawn. A player has to log in
-  (`GameInfo.Login`) and the engine fill `Level.Player`.
-- **Natives not written** (31): The Fallen's own skeletal meshes
+- **Natives not written** (43): The Fallen's own skeletal meshes
   (`C3DActorInit`, `C3DIsBoned`, `C3DGetAttachPtCoords`...), its
   `ListActors` iterator (an AI's list of known actors, not yet
   understood), `CheckFOV`, `GetRendererFlags`; and the engine's
   movement, collision and AI (`Trace`, `MoveTo`, `TurnToward`,
   `FindPathToward`, `PointCheck`, the path node iterators), which need
-  collision against the level.
+  collision against the level; its splines (`CTVE_Spline.GetSplineData`),
+  which the camera directors of the opening sequences read, so they
+  access None most of all; its dialogue (`FindBestDialogLine`,
+  `StartDialog`) and documents.
 - **Speed**: values are copied freely and calls looked up by name; the
   biggest maps tick at half real time.
-- **The game's own mistake**: `DS9_GrigariSentryDrone` (and its kin)
+- **The game's own mistakes**: `DS9_GrigariSentryDrone` (and its kin)
   `goto 'DetermineAction'` in their `DefensiveStance` state, where it's
-  a function, not a label.
+  a function, not a label, `DS9_Grigari` `goto 'CheckCloak'` in
+  `MeleeAttack` and `DS9_FriendlyAI` `goto 'AlarmRunner'` in
+  `Acquisition`, which have no such labels (reported, and the code
+  carries on); `CTV_ElevatorMover.InitRamp` and `CTV_TriggerLight.Tick`
+  divide by an elevator's move time or a light's change time, 0 in some
+  (floats divide to infinity, as they do: the light's fade then ends at
+  once; reported).
 
 ## In the Maps page
 
-Loading a map runs its start and a second of play (`runLevelStart`),
+Loading a map runs its start, the player's login and a second of play
+(`runLevelStart`),
 then compares each placed actor with how it was saved: destroyed,
 hidden or shown, drawn another way, its light's type or brightness. The
 lightmaps, sprites and meshes use the result: lights the scripts turned

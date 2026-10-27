@@ -630,10 +630,11 @@ void MapViewer::load(int index) {
     info_.push_back(line);
     if (started) {
         std::snprintf(line, sizeof line,
-                      "scripts started in %.0f ms (P turns them off): %d lights changed, %d actors hidden, %d shown, "
+                      "scripts started in %.0f ms (P turns them off), player %s: %d lights changed, %d actors hidden, %d shown, "
                       "%d drawn differently, %d destroyed; %zu kinds of script error, %zu natives not written, None "
                       "accessed %d times",
-                      start.milliseconds, start.lights, start.hidden, start.shown, start.drawTypes, start.removed, start.errors,
+                      start.milliseconds, start.player.empty() ? ("none, " + start.loginError).c_str() : start.player.c_str(),
+                      start.lights, start.hidden, start.shown, start.drawTypes, start.removed, start.errors,
                       start.missingNatives, start.accessedNone);
         info_.push_back(line);
     } else {
