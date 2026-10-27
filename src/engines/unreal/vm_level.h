@@ -21,6 +21,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace reluva::unreal {
@@ -238,7 +239,19 @@ private:
     bool hasModel_ = false;
     std::unique_ptr<LevelCollision> collision_;
     std::map<int, BrushBox> brushes_; // movers' boxes, by export index
-    std::map<std::pair<const VmClass*, NameId>, int> slots_;
+    // Property slots by class and name (the address of the name's text:
+    // prop() is only given string literals).
+    struct SlotKey {
+        const VmClass* cls;
+        const char* name;
+        bool operator==(const SlotKey&) const = default;
+    };
+    struct SlotHash {
+        size_t operator()(const SlotKey& k) const {
+            return std::hash<const void*>()(k.cls) * 31 + std::hash<const void*>()(k.name);
+        }
+    };
+    std::unordered_map<SlotKey, int, SlotHash> slots_;
     std::map<VmObject*, std::vector<VmObject*>> touching_;
     std::map<VmObject*, Goal> goals_;
     std::set<VmObject*> fallers_; // falling since a tick before

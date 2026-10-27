@@ -145,14 +145,16 @@ std::string lower(const std::string& s) { return fs::toLower(s); }
 
 // --- Properties ----------------------------------------------------------------------------
 
+// By the class and the name's text where it is: the engine side asks for
+// properties by string literals, many times an actor a tick, and interning
+// the name each time took a third of a level's run.
 Value* ScriptLevel::prop(VmObject* a, const char* name) {
     if (!a || !a->cls)
         return nullptr;
-    const NameId n = vm_.name(name);
-    const auto key = std::make_pair(static_cast<const VmClass*>(a->cls), n);
+    const SlotKey key{a->cls, name};
     auto it = slots_.find(key);
     if (it == slots_.end()) {
-        VmProperty* p = a->cls->findProperty(n);
+        VmProperty* p = a->cls->findProperty(vm_.name(name));
         it = slots_.emplace(key, p ? p->slot : -1).first;
     }
     return it->second >= 0 && size_t(it->second) < a->values.size() ? &a->values[size_t(it->second)] : nullptr;
