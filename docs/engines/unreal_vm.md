@@ -87,7 +87,7 @@ rotators, strings, states, `IsA`, `DynamicLoadObject`...), and the
 Engine ones a level needs so far (`vm_level.cpp`): `Spawn`, `Destroy`,
 `SetTimer`, `Sleep`, location, rotation and collision setters, the actor
 iterators (`AllActors`, `ChildActors`, `BasedActors`, `RadiusActors` and
-the visible ones by radius, `AllPawns`), the pawn list, animation
+the visible ones by radius, `RadiusPawns`, `AllPawns`), the pawn list, animation
 groups from the actor's mesh. A native not written yet returns an empty
 value and is counted.
 
@@ -415,6 +415,33 @@ Faces are channels:
   blinks, and where the head looks. It returns at once for a pawn not
   drawn in the last four seconds (`LastRenderTime`, which the Maps
   page's drawing sets).
+  - To pick whom to look at, it goes through the pawns within 800 units
+    (`RadiusPawns`). It weights each by how near it is, more for the
+    one talking and the enemy, times what `CheckFOV` says of it.
+  - It then turns the head (`C3DApplyWorldRotation` on `Bip01_Head`)
+    toward the chosen pawn's head, eased and kept within limits.
+  - On DS9_Ops, up to 12 heads look at someone at once. Each head is on
+    average 22° off the line to its target, where the body's facing is
+    37° off.
+- `CheckFOV(Pos, Rot, Target, Radius, CosFOV, out BestHitLocation,
+  bCheckExtents, bCalcVisible, LocationZAdjust, HeightAdjust)` says how
+  much of `Target` is seen from `Pos` looking along `Rot`. The AI's sight
+  uses it, and so do the turrets, the player's auto-aim and the heads.
+  How it works is Reluva's reading of how the scripts use it: they
+  compare the result against 0, 0.1, 0.3, 0.5 and 0.99, and the heads
+  multiply a weight by it.
+  - It returns 0 when the target's middle is beyond `Radius` or outside
+    the cone `CosFOV` is the cosine of. The middle is its Location raised
+    by `LocationZAdjust`; the heads pass the head's height.
+  - The points it looks for are the middle, and with either flag also
+    the top, bottom and sides of the target's collision cylinder, whose
+    height is grown by `HeightAdjust`. A point is seen if nothing in the
+    world is in the way (as `FastTrace`).
+  - With `bCalcVisible`, it returns the share of the points seen.
+    Otherwise it returns 1 if any is seen, which is why the turrets'
+    check for more than 0.99 can pass with `bCheckExtents`.
+  - `BestHitLocation` is the first point seen, the middle first. The
+    turrets aim there.
 - `C3DUsesC3DMesh` says whether the mesh is in The Fallen's own layout
   (its imported-model block), and `C3DIsBoned` whether it's built on
   bones. `Pawn` sets its face's channels up only if the first is true.
@@ -580,8 +607,6 @@ Not done:
   in an IK chain.
 - `C3DApplyIKOnBasePose` and `C3DRemoveRotation` aren't written; no
   script calls them.
-- `CheckFOV` isn't written, so a pawn's head never picks anyone to look
-  at.
 
 ## Playing a level
 

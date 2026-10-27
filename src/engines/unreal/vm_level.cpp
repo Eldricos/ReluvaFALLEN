@@ -672,6 +672,15 @@ void registerEngineNatives(Vm& vm) {
                 if (distance(location(c.vm, v.o), at) <= c.f(2))
                     c.items.push_back(v);
         });
+    // RadiusPawns(class<Actor> BaseClass, out Actor Actor, float Radius,
+    // optional Vector Loc): the pawns among those (a pawn's head looks for
+    // someone to look at with it).
+    reg("Actor.RadiusPawns", [](NativeCall& c) {
+        const Vec at = c.given.size() > 3 && c.given[3] ? Vm::vectorOf(c.args[3]) : location(c.vm, c.self);
+        for (Value& v : actorsOf(c.vm, c.args[0]))
+            if (c.vm.isA(v.o, "Pawn") && distance(location(c.vm, v.o), at) <= c.f(2))
+                c.items.push_back(v);
+    });
     reg("Actor.TouchingActors", [](NativeCall&) {}); // no collision yet
     reg("Actor.AllPawns", [](NativeCall& c) {
         for (Value& v : actorsOf(c.vm, c.args[0]))

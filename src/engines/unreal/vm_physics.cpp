@@ -11,6 +11,8 @@
 
 #include "engines/unreal/vm_level.h"
 
+#include "engines/unreal/actors.h"
+
 #include "common/fs.h"
 
 #include <algorithm>
@@ -901,6 +903,71 @@ void registerMovementNatives(Vm& vm) {
                                                                              : (loc ? Vm::vectorOf(*loc) : std::array<float, 3>{});
         std::array<float, 3> where{}, n{};
         c.result = Value::boolValue(!c.vm.level->trace(c.self, start, Vm::vectorOf(c.args[0]), {}, false, where, n));
+    });
+    // CheckFOV(Vector Pos, Rotator Rot, Actor Target, float Radius, float CosFOV,
+    // out Vector BestHitLocation, optional bool bCheckExtents, optional bool
+    // bCalcVisible, optional float LocationZAdjust, optional float HeightAdjust):
+    // how much of Target is seen from Pos looking along Rot. Reluva's reading
+    // of how the scripts use it (thresholds of 0, 0.1, 0.5 and 0.99; a head's
+    // weight for whom to look at multiplied by it):
+    // - 0 if its middle (Location raised by LocationZAdjust) is beyond Radius
+    //   or outside the cone CosFOV is the cosine of;
+    // - the points looked for are its middle and, with bCheckExtents or
+    //   bCalcVisible, its top, bottom and sides (its collision cylinder, its
+    //   height by HeightAdjust more), each seen if nothing in the world is in
+    //   the way;
+    // - with bCalcVisible, the share of them seen; else 1 if any is;
+    // - BestHitLocation the first seen (the middle first), where a turret aims.
+    reg("Actor.CheckFOV", [](NativeCall& c) {
+        c.result = Value::floatValue(0);
+        VmObject* target = c.o(2);
+        if (!c.vm.level || !c.self || !target || target->deleted)
+            return;
+        using V = std::array<float, 3>;
+        const V from = Vm::vectorOf(c.args[0]);
+        const auto r = Vm::rotatorOf(c.args[1]);
+        const auto axes = rotationAxes({r[0], r[1], r[2]});
+        const float radius = c.f(3), cosFov = c.f(4);
+        const bool extents = c.b(6), share = c.b(7);
+        const float zAdjust = c.f(8), heightAdjust = c.f(9);
+        const Value* loc = target->find(c.vm, "Location");
+        if (!loc)
+            return;
+        V middle = Vm::vectorOf(*loc);
+        middle[2] += zAdjust;
+        c.args[5] = c.vm.vectorValue(middle[0], middle[1], middle[2]);
+        const V to{middle[0] - from[0], middle[1] - from[1], middle[2] - from[2]};
+        const float distance = std::sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]);
+        if (distance > radius)
+            return;
+        if (distance > 1e-3f &&
+            (to[0] * axes[0][0] + to[1] * axes[0][1] + to[2] * axes[0][2]) / distance < cosFov)
+            return;
+        std::vector<V> points{middle};
+        if (extents || share) {
+            const Value* h = target->find(c.vm, "CollisionHeight");
+            const Value* rad = target->find(c.vm, "CollisionRadius");
+            const float up = 0.9f * ((h ? h->asFloat() : 0) + heightAdjust), side = 0.9f * (rad ? rad->asFloat() : 0);
+            // Across the line of sight, level.
+            V across{-to[1], to[0], 0};
+            const float l = std::sqrt(across[0] * across[0] + across[1] * across[1]);
+            across = l > 1e-3f ? V{across[0] / l, across[1] / l, 0} : V{0, 1, 0};
+            points.push_back({middle[0], middle[1], middle[2] + up});
+            points.push_back({middle[0], middle[1], middle[2] - up});
+            points.push_back({middle[0] + across[0] * side, middle[1] + across[1] * side, middle[2]});
+            points.push_back({middle[0] - across[0] * side, middle[1] - across[1] * side, middle[2]});
+        }
+        int seen = 0;
+        for (const V& p : points) {
+            V where{}, n{};
+            if (c.vm.level->trace(c.self, from, p, {}, false, where, n))
+                continue;
+            if (seen++ == 0)
+                c.args[5] = c.vm.vectorValue(p[0], p[1], p[2]);
+            if (!share)
+                break;
+        }
+        c.result = Value::floatValue(share ? float(seen) / float(points.size()) : seen > 0 ? 1.0f : 0.0f);
     });
     reg("Actor.PointCheck", [](NativeCall& c) { // true if there's room there
         const std::array<float, 3> extent = c.given.size() > 1 && c.given[1] ? Vm::vectorOf(c.args[1]) : std::array<float, 3>{};
