@@ -374,11 +374,14 @@ blended triangles, enough to see a frame), driven by steps:
 - **M01_KiraL1A:** the opening's directors fly over the monastery
   bridge, then follow her and a monk, letterboxed.
 
-**Speed**, measured without drawing (`ue-play`, M01_KiraL2, 20 s):
+**Speed**, measured without drawing (`ue-play`, M01_KiraL2, 20 s, 600
+frames): 13 s in all, about 22 ms a frame.
 - The scripts' ticks take 3.4 s.
-- The page's own work (lightmaps, animated textures, the overlay) takes
-  about 9 ms a frame.
-- Reading the live actors and the camera adds about 8 ms a frame.
+- The page's own work (mostly the fire and water textures) takes 5.3 s,
+  as it does when not playing.
+- The rest is reading the live actors and the camera each frame, plus
+  starting play and loading meshes once.
 
-So a frame's CPU work is close to its 33 ms on this machine, before any
-drawing.
+The biggest maps' ticks take twice as long. There, and with drawing
+added, a slower machine falls below 30 frames a second, and the game
+then runs slower than real time.

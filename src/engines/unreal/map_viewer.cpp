@@ -1307,9 +1307,10 @@ void MapViewer::drawPlayHud() {
                   view_.letterbox ? "  (cut scene)" : "",
                   play_->behind() > 1 ? ("  " + std::to_string(int(play_->behind())) + " s behind real time").c_str() : "");
     const int y = kFrameH - font::kLineHeight - 4;
+    const int width = std::min(kFrameW, int(font::length(line)) * font::kAdvance + 8);
     for (int yy = y - 2; yy < kFrameH; ++yy) {
         uint8_t* p = overlay_.row(yy);
-        for (int x = 0; x < int(font::length(line)) * font::kAdvance + 8 && x < kFrameW; ++x)
+        for (int x = 0; x < width; ++x)
             p[x * 4 + 3] = std::max<uint8_t>(p[x * 4 + 3], 150);
     }
     font::drawText(overlay_, 4, y, line, Color{230, 230, 230});
