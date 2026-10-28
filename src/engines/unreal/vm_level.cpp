@@ -139,6 +139,7 @@ Error ScriptLevel::load() {
             continue;
         }
         vm_.applyProperties(a, map_, props);
+        localizedSet_ += vm_.applyLocalizedActor(a, map_.name());
         if (!levelInfo_ && vm_.isA(a, "LevelInfo"))
             levelInfo_ = a;
         // A mover's brush's own BSP (UnrealEd builds one for each), to

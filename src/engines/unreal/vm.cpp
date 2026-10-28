@@ -496,9 +496,12 @@ const std::string* Vm::configSetting(const std::string& section, const std::stri
 // int folder beside System, then in System (the engine's own: Engine.int,
 // SoftDrv.int). Surrounding quotes are dropped. Null if it's nowhere.
 std::optional<std::string> Vm::localized(const std::string& package, const std::string& section,
-                                         const std::string& key) {
+                                         const std::string& key, bool classesToo) {
     const std::filesystem::path system = packages_.iniFile().parent_path();
-    for (const std::string& file : {package + ".int", std::string("Classes.int")})
+    std::vector<std::string> files{package + ".int"};
+    if (classesToo)
+        files.push_back("Classes.int");
+    for (const std::string& file : files)
         for (const std::filesystem::path& folder : {system.parent_path() / "int", system.parent_path() / "Int", system}) {
             const IniFile& ini = iniFileAt(folder / file);
             auto sec = ini.find(lower(section));
@@ -530,6 +533,32 @@ void Vm::applyLocalized(VmClass& c) {
                 setFromText(*prop, c.defaults[size_t(prop->slot + k)], *value);
         }
     }
+}
+
+// The Fallen's map .int names its actors' sections by their Tag, not
+// their object name as UE1's own do (M01_KiraL2's [notaligned1] is the
+// message of the SpecialEvent tagged so; no section is named after an
+// object), so every actor with that tag takes its keys.
+int Vm::applyLocalizedActor(VmObject* a, const std::string& map) {
+    const Value* tag = a ? a->find(*this, "Tag") : nullptr;
+    if (!tag || !tag->i)
+        return 0;
+    const std::string section = nameText(tag->i);
+    int set = 0;
+    for (const VmClass* c = a->cls; c; c = c->parent())
+        for (const VmProperty* prop : c->properties) {
+            if (!(prop->flags & propflag::Localized) || prop->type == VType::Struct)
+                continue;
+            Value* v = a->find(*this, prop->name);
+            for (int k = 0; v && k < prop->arrayDim && size_t(prop->slot + k) < a->values.size(); ++k) {
+                const std::string key = prop->arrayDim > 1 ? prop->name + "[" + std::to_string(k) + "]" : prop->name;
+                if (const auto value = localized(map, section, key, false)) {
+                    setFromText(*prop, v[k], *value);
+                    ++set;
+                }
+            }
+        }
+    return set;
 }
 
 void Vm::loadStruct(VmStruct& s, const ScriptObject& so) {

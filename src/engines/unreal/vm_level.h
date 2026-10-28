@@ -444,6 +444,7 @@ public:
     void makeGhost(VmObject* actor, bool ghost);
     const std::vector<VmObject*>& ghosts() const { return ghosts_; }
     int placedGhosts() const { return placedGhosts_; } // set aside at the start, placed as ghosts
+    int localizedSet() const { return localizedSet_; } // actors' strings from the map's .int
     // The camera the line being said asks for (its table's CAMERA column:
     // "CAM(A:x,y,z,pitch,yaw,roll F:fov D:dist)" in the world, R: the same
     // from the speaker); false if it asks for none of those.
@@ -726,6 +727,7 @@ private:
     int ticks_ = 0;
     int skinChannels_ = 0;
     int placedGhosts_ = 0;
+    int localizedSet_ = 0;
     std::vector<VmObject*> movers_; // the level's, which traces of the world meet
     int editorCameras_ = 0;
     std::vector<VmObject*> actors_;
