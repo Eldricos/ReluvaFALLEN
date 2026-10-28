@@ -2023,6 +2023,19 @@ bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4
     if (it == posers_.end()) {
         Poser p;
         p.poser = LayeredPoser::open(*look.mesh.package, look.mesh.exportIndex, ctx_.sets());
+        if (p.poser) {
+            // Where its skeleton's axes go as it's drawn.
+            const Mesh& m = meshes_[size_t(at)];
+            const Vec3f zero = placeMeshVertex(m, m.origin, ctx_.meshTurn, ctx_.meshYawQuarters);
+            std::array<Vec3f, 3> axes{};
+            for (size_t k = 0; k < 3; ++k) {
+                Vec3f step = m.origin;
+                step[k] += m.scale[k] != 0 ? 1 / m.scale[k] : 0;
+                const Vec3f to = placeMeshVertex(m, step, ctx_.meshTurn, ctx_.meshYawQuarters);
+                axes[k] = {to[0] - zero[0], to[1] - zero[1], to[2] - zero[2]};
+            }
+            p.poser->setPlacement(axes);
+        }
         it = posers_.emplace(std::make_pair(look.mesh.package, look.mesh.exportIndex), std::move(p)).first;
     }
     Poser& p = it->second;
@@ -2034,7 +2047,7 @@ bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4
         if (part == p.parts.end())
             part = p.parts.emplace(std::make_pair(l.bone, l.rest), p.poser->part(l.bone, l.rest)).first;
         if (!part->second.empty())
-            layers.push_back({l.anim, l.frame, &part->second, l.weight});
+            layers.push_back({l.anim, l.frame, &part->second, l.weight, l.clear});
     }
     std::vector<LayeredPoser::Face> faces;
     if (p.poser->hasFace())

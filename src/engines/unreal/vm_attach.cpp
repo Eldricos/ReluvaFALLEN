@@ -139,6 +139,8 @@ ScriptLevel::ActorMesh* ScriptLevel::actorMesh(VmObject* a) {
                 unitStep[k] += mesh.scale[k] != 0 ? 1 / mesh.scale[k] : 0;
                 am->skeleton[k] = sub(placeMeshVertex(mesh, unitStep), zero);
             }
+            if (am->poser)
+                am->poser->setPlacement({am->skeleton[0], am->skeleton[1], am->skeleton[2]});
         }
         it = actorMeshes_.emplace(m, std::move(am)).first;
     }
@@ -169,7 +171,7 @@ std::vector<LayeredPoser::Layer> ScriptLevel::posedLayers(VmObject* a, ActorMesh
             layers.push_back({names.back(), l.fromFrame, &part->second, l.fromWeight});
         }
         names.push_back(vm_.nameText(l.sequence));
-        layers.push_back({names.back(), l.frame, &part->second, l.weight});
+        layers.push_back({names.back(), l.frame, &part->second, l.weight, l.clear});
     }
     return layers;
 }

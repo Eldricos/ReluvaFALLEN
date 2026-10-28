@@ -1650,6 +1650,9 @@ struct LayeredPoser::Impl {
     std::vector<Mat43> faceWorlds;
     // Each vertex's bones and weights.
     std::vector<std::vector<std::pair<uint32_t, float>>> vertexBones;
+    // The actor's forward, side and up axes in the skeleton's space.
+    std::array<Vec3f, 3> actorAxes{Vec3f{1, 0, 0}, Vec3f{0, 1, 0}, Vec3f{0, 0, 1}};
+    Mat43 cleared(const Mat43& under, const Mat43& over, const Mat43& parentWorld, std::array<bool, 3> clear) const;
 
     BoneReader reader() const { return BoneReader{data, base, from, base + data.size()}; }
     bool locals(std::string_view base, float fraction, const std::vector<Layer>& layers,
@@ -1830,7 +1833,15 @@ bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const
             const Layer& layer = layers[l];
             if (!layer.part || i >= layer.part->size() || !(*layer.part)[i] || layer.weight <= 0)
                 continue;
-            const Mat43 theirs = local(over[l], i);
+            Mat43 theirs = local(over[l], i);
+            // The part's first bone, keeping some of its turn.
+            const bool first = bones[i].parent < 0 || !(*layer.part)[size_t(bones[i].parent)];
+            if (first && (layer.clear[0] || layer.clear[1] || layer.clear[2])) {
+                Mat43 parentWorld{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+                for (int p = bones[i].parent; p >= 0; p = bones[size_t(p)].parent)
+                    parentWorld = then(parentWorld, out[size_t(p)]);
+                theirs = cleared(placed, theirs, parentWorld, layer.clear);
+            }
             const float w = std::min(1.0f, layer.weight);
             for (size_t k = 0; k < placed.size(); ++k)
                 placed[k] += (theirs[k] - placed[k]) * w;
@@ -1840,6 +1851,64 @@ bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const
     if (adjust && !adjust->empty())
         adjusted(out, *adjust);
     return true;
+}
+
+// A layer's first bone (`over`, in its parent) turned as it is under it
+// (`under`) about the actor's axes the layer clears, and by the rest of
+// the layer's turn: the turn from one to the other, in the skeleton's
+// space, less its twist about each of those axes.
+Mat43 LayeredPoser::Impl::cleared(const Mat43& under, const Mat43& over, const Mat43& parentWorld,
+                                  std::array<bool, 3> clear) const {
+    const Mat43 wu = then(under, parentWorld), wo = then(over, parentWorld);
+    Mat43 rel = then(inverseOf(wu), wo);
+    // The quaternion whose rotation() this is.
+    const float tr = rel[0] + rel[4] + rel[8];
+    std::array<float, 4> q{};
+    if (tr > 0) {
+        const float r = std::sqrt(1 + tr) * 2;
+        q = {(rel[7] - rel[5]) / r, (rel[2] - rel[6]) / r, (rel[3] - rel[1]) / r, r / 4};
+    } else if (rel[0] > rel[4] && rel[0] > rel[8]) {
+        const float r = std::sqrt(1 + rel[0] - rel[4] - rel[8]) * 2;
+        q = {r / 4, (rel[1] + rel[3]) / r, (rel[2] + rel[6]) / r, (rel[7] - rel[5]) / r};
+    } else if (rel[4] > rel[8]) {
+        const float r = std::sqrt(1 + rel[4] - rel[0] - rel[8]) * 2;
+        q = {(rel[1] + rel[3]) / r, r / 4, (rel[5] + rel[7]) / r, (rel[2] - rel[6]) / r};
+    } else {
+        const float r = std::sqrt(1 + rel[8] - rel[0] - rel[4]) * 2;
+        q = {(rel[2] + rel[6]) / r, (rel[5] + rel[7]) / r, r / 4, (rel[3] - rel[1]) / r};
+    }
+    // Yaw about up, pitch about the side, roll about forward.
+    const std::array<size_t, 3> axisOf{2, 1, 0};
+    for (size_t k = 0; k < 3; ++k) {
+        if (!clear[k])
+            continue;
+        const Vec3f a = vunit(actorAxes[axisOf[k]]);
+        // Its twist about `a`, taken off: q times the twist's conjugate.
+        const float along = q[0] * a[0] + q[1] * a[1] + q[2] * a[2];
+        std::array<float, 4> t{a[0] * along, a[1] * along, a[2] * along, q[3]};
+        const float n = std::sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2] + t[3] * t[3]);
+        if (n < 1e-6f)
+            continue;
+        for (float& c : t)
+            c /= n;
+        const std::array<float, 4> tc{-t[0], -t[1], -t[2], t[3]};
+        q = {q[3] * tc[0] + q[0] * tc[3] + q[1] * tc[2] - q[2] * tc[1],
+             q[3] * tc[1] - q[0] * tc[2] + q[1] * tc[3] + q[2] * tc[0],
+             q[3] * tc[2] + q[0] * tc[1] - q[1] * tc[0] + q[2] * tc[3],
+             q[3] * tc[3] - q[0] * tc[0] - q[1] * tc[1] - q[2] * tc[2]};
+    }
+    rel = rotation(q);
+    Mat43 w = then(wu, rel);
+    for (size_t c = 0; c < 3; ++c)
+        w[9 + c] = wo[9 + c];
+    return then(w, inverseOf(parentWorld));
+}
+
+void LayeredPoser::setPlacement(const std::array<Vec3f, 3>& skeletonInActor) {
+    // The actor's axis k in the skeleton: the k-th parts of where the
+    // skeleton's axes go.
+    for (size_t k = 0; k < 3; ++k)
+        impl->actorAxes[k] = {skeletonInActor[0][k], skeletonInActor[1][k], skeletonInActor[2][k]};
 }
 
 // The scripts' turns, then each limb's reach: its upper bone turned so the

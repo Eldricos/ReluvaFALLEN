@@ -85,15 +85,18 @@ float lastOf(const MeshAnimSeq& s) { return s.numFrames > 1 ? 1 - 1.0f / float(s
 
 // PlayAnim, LoopAnim: the sequence from its start (after a tween into it
 // of `tween` seconds), `rate` times its own speed.
-void ScriptLevel::startAnim(VmObject* a, NameId sequence, float rate, float tween, bool loop) {
+void ScriptLevel::startAnim(VmObject* a, NameId sequence, float rate, float tween, bool loop, float minRate) {
     Value* seqValue = prop(a, "AnimSequence");
     if (!seqValue)
         return;
     const MeshAnimSeq* s = findAnim(vm_, a, sequence);
     // Looping it already: only its speed changes.
     if (loop && s && seqValue->i == sequence && boolOf(prop(a, "bAnimLoop")) && animating(a)) {
+        const float perRate = s->rate / float(std::max(1, s->numFrames));
         if (Value* r = prop(a, "AnimRate"))
-            r->f = rate * s->rate / float(std::max(1, s->numFrames));
+            r->f = rate * perRate;
+        if (Value* m = prop(a, "AnimMinRate"))
+            m->f = std::max(0.0f, minRate) * perRate;
         return;
     }
     noteTweenFrom(a, tween > 0 && s);
@@ -115,7 +118,10 @@ void ScriptLevel::startAnim(VmObject* a, NameId sequence, float rate, float twee
         return;
     }
     const float n = float(std::max(1, s->numFrames));
-    set("AnimRate", std::max(0.0f, rate) * s->rate / n);
+    // Negative: scaled by its speed (each unit a second, `-rate` times its
+    // own speed), but no slower than `minRate` times it.
+    set("AnimRate", rate * s->rate / n);
+    set("AnimMinRate", std::max(0.0f, minRate) * s->rate / n);
     set("AnimLast", lastOf(*s));
     setBool("bAnimFinished", false);
     if (tween > 0) {
@@ -176,7 +182,18 @@ const ScriptLevel::TweenFrom* ScriptLevel::tweenFromOf(VmObject* a) const {
 bool ScriptLevel::animating(VmObject* a) {
     const Value* frame = prop(a, "AnimFrame");
     const Value* rate = prop(a, "AnimRate");
-    return (frame && frame->asFloat() < 0) || (rate && rate->asFloat() > 0);
+    return (frame && frame->asFloat() < 0) || (rate && rate->asFloat() != 0);
+}
+
+float ScriptLevel::rateNow(VmObject* a, float rate, float minRate) {
+    if (rate >= 0)
+        return rate;
+    float speed = 0;
+    if (const Value* v = prop(a, "Velocity")) {
+        const auto vel = Vm::vectorOf(*v);
+        speed = std::sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
+    }
+    return std::max(-rate * speed, minRate);
 }
 
 void ScriptLevel::waitForAnim(VmObject* a) {
@@ -219,10 +236,12 @@ void ScriptLevel::animate(VmObject* a, float dt) {
         return;
     Value* frame = prop(a, "AnimFrame");
     Value* rate = prop(a, "AnimRate");
-    if (!frame || !rate || (frame->asFloat() >= 0 && rate->asFloat() <= 0)) {
+    if (!frame || !rate || (frame->asFloat() >= 0 && rate->asFloat() == 0)) {
         endAnimWait(a, false);
         return;
     }
+    const Value* minRate = rate->f < 0 ? prop(a, "AnimMinRate") : nullptr;
+    const float playRate = rateNow(a, rate->f, minRate ? minRate->asFloat() : 0);
     const Value* seqValue = prop(a, "AnimSequence");
     const MeshAnimSeq* s = seqValue ? findAnim(vm_, a, seqValue->i) : nullptr;
     const float n = s ? float(std::max(1, s->numFrames)) : 1;
@@ -238,7 +257,7 @@ void ScriptLevel::animate(VmObject* a, float dt) {
         }
         left -= speed > 0 ? towards / speed : left;
         frame->f = 0;
-        if (rate->f <= 0) { // TweenAnim: there
+        if (rate->f == 0) { // TweenAnim: there
             if (Value* f = prop(a, "bAnimFinished"))
                 f->i = 1;
             vm_.callEvent(a, "AnimEnd");
@@ -251,7 +270,7 @@ void ScriptLevel::animate(VmObject* a, float dt) {
     const float last = s ? lastOf(*s) : 0;
     const float end = loop ? 1.0f : last; // a loop goes round through its last frame back to its first
     const float from = frame->f;
-    float to = from + rate->f * left;
+    float to = from + playRate * left;
     auto notify = [&](float lo, float hi) { notifyBetween(vm_, a, s, lo, hi); };
     if (to < end) {
         frame->f = to;
@@ -307,12 +326,15 @@ const std::map<NameId, ScriptLevel::SkinChannel>* ScriptLevel::skinsOf(VmObject*
 
 // C3DPlayAnim, C3DLoopAnim: as PlayAnim and LoopAnim, on a part of the
 // skeleton, fading in over the tween.
-void ScriptLevel::playLayer(VmObject* a, NameId group, NameId sequence, float rate, float tween, bool loop, NameId bone) {
+void ScriptLevel::playLayer(VmObject* a, NameId group, NameId sequence, float rate, float tween, bool loop, NameId bone,
+                            float minRate, std::array<bool, 3> clear) {
     const MeshAnimSeq* s = findAnim(vm_, a, sequence);
     AnimLayer& l = layers_[a][group];
     const float n = s ? float(std::max(1, s->numFrames)) : 1;
     if (loop && s && l.sequence == sequence && l.loop && !l.finished && l.weightRate >= 0) {
-        l.rate = std::max(0.0f, rate) * s->rate / n; // looping it already: only its speed changes
+        l.rate = rate * s->rate / n; // looping it already: only its speed changes
+        l.minRate = std::max(0.0f, minRate) * s->rate / n;
+        l.clear = clear;
         return;
     }
     // Replacing one that shows: it stays as it is under this one, which
@@ -330,7 +352,9 @@ void ScriptLevel::playLayer(VmObject* a, NameId group, NameId sequence, float ra
     l.loop = loop;
     l.frame = 0;
     l.finished = !s;
-    l.rate = s ? std::max(0.0f, rate) * s->rate / n : 0;
+    l.rate = s ? rate * s->rate / n : 0; // negative: scaled by speed, as an actor's own
+    l.minRate = s ? std::max(0.0f, minRate) * s->rate / n : 0;
+    l.clear = clear;
     if (tween > 0) {
         l.weightRate = 1 / tween;
     } else {
@@ -341,8 +365,9 @@ void ScriptLevel::playLayer(VmObject* a, NameId group, NameId sequence, float ra
 
 // C3DTweenAnim: the part to the sequence's first frame, fading in over
 // `seconds`, then still (C3DAnimEnd when there).
-void ScriptLevel::tweenLayer(VmObject* a, NameId group, NameId sequence, float seconds, NameId bone) {
-    playLayer(a, group, sequence, 0, seconds, false, bone);
+void ScriptLevel::tweenLayer(VmObject* a, NameId group, NameId sequence, float seconds, NameId bone,
+                             std::array<bool, 3> clear) {
+    playLayer(a, group, sequence, 0, seconds, false, bone, 0, clear);
     AnimLayer& l = layers_[a][group];
     l.rate = 0;
     l.finished = false;
@@ -368,7 +393,7 @@ bool ScriptLevel::layerAnimating(VmObject* a, NameId group) {
     if (it == layers_.end())
         return false;
     auto l = it->second.find(group);
-    return l != it->second.end() && !l->second.finished && (l->second.rate > 0 || l->second.weightRate > 0);
+    return l != it->second.end() && !l->second.finished && (l->second.rate != 0 || l->second.weightRate > 0);
 }
 
 void ScriptLevel::waitForLayer(VmObject* a, NameId group) { layerWaits_[a] = {group, a->stateSerial}; }
@@ -406,7 +431,7 @@ void ScriptLevel::animateLayers(VmObject* a, float dt) {
         }
         if (l.finished)
             continue;
-        if (l.rate <= 0) {
+        if (l.rate == 0) {
             if (l.weightRate == 0) { // a tween there
                 l.finished = true;
                 ended.push_back(group);
@@ -415,7 +440,7 @@ void ScriptLevel::animateLayers(VmObject* a, float dt) {
         }
         const MeshAnimSeq* s = findAnim(vm_, a, l.sequence);
         const float end = l.loop ? 1.0f : (s ? lastOf(*s) : 0);
-        const float from = l.frame, to = from + l.rate * dt;
+        const float from = l.frame, to = from + rateNow(a, l.rate, l.minRate) * dt;
         if (to < end) {
             l.frame = to;
             notifyBetween(vm_, a, s, from, to);
@@ -492,7 +517,8 @@ void registerAnimationNatives(Vm& vm) {
     reg("Actor.LoopAnim", [](NativeCall& c) {
         if (c.vm.level && c.self)
             c.vm.level->startAnim(c.self, c.i(0), c.given.size() > 1 && c.given[1] ? c.f(1) : 1,
-                                  c.given.size() > 2 && c.given[2] ? c.f(2) : 0, true);
+                                  c.given.size() > 2 && c.given[2] ? c.f(2) : 0, true,
+                                  c.given.size() > 3 && c.given[3] ? c.f(3) : 0);
     });
     // TweenAnim(name Sequence, float Time)
     reg("Actor.TweenAnim", [](NativeCall& c) {
@@ -523,19 +549,27 @@ void registerAnimationNatives(Vm& vm) {
     // optional float TweenTime, optional name InheritBone, optional bool ClearYaw, ClearPitch, ClearRoll)
     auto f = [](NativeCall& c, size_t k, float fallback) { return c.given.size() > k && c.given[k] ? c.f(k) : fallback; };
     auto n = [](NativeCall& c, size_t k) { return c.given.size() > k && c.given[k] ? c.i(k) : 0; };
+    // ClearYaw, ClearPitch, ClearRoll from argument k on.
+    auto clears = [](NativeCall& c, size_t k) {
+        std::array<bool, 3> out{};
+        for (size_t j = 0; j < 3; ++j)
+            out[j] = c.given.size() > k + j && c.given[k + j] && c.b(k + j);
+        return out;
+    };
     reg("Actor.C3DPlayAnim", [=](NativeCall& c) {
         if (c.vm.level && c.self)
-            c.vm.level->playLayer(c.self, c.i(0), c.i(1), f(c, 3, 1), f(c, 4, 0), false, n(c, 5));
+            c.vm.level->playLayer(c.self, c.i(0), c.i(1), f(c, 3, 1), f(c, 4, 0), false, n(c, 5), 0, clears(c, 6));
     });
     // C3DLoopAnim(group, sequence, boned, rate, tween time, min rate, inherit bone, clear...)
     reg("Actor.C3DLoopAnim", [=](NativeCall& c) {
         if (c.vm.level && c.self)
-            c.vm.level->playLayer(c.self, c.i(0), c.i(1), f(c, 3, 1), f(c, 4, 0), true, n(c, 6));
+            c.vm.level->playLayer(c.self, c.i(0), c.i(1), f(c, 3, 1), f(c, 4, 0), true, n(c, 6), f(c, 5, 0),
+                                  clears(c, 7));
     });
     // C3DTweenAnim(group, sequence, boned, time, inherit bone, clear...)
     reg("Actor.C3DTweenAnim", [=](NativeCall& c) {
         if (c.vm.level && c.self)
-            c.vm.level->tweenLayer(c.self, c.i(0), c.i(1), c.f(3), n(c, 4));
+            c.vm.level->tweenLayer(c.self, c.i(0), c.i(1), c.f(3), n(c, 4), clears(c, 5));
     });
     reg("Actor.C3DTweenOutAnim", [](NativeCall& c) {
         if (c.vm.level && c.self)

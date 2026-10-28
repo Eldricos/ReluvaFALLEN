@@ -420,7 +420,7 @@ bool LevelPlay::look(VmObject* a, Look& out) {
             // What it replaced first, held under it while it fades in.
             if (l.fromSequence)
                 out.layers.push_back({vm.nameText(l.fromSequence), bone, l.rest, l.fromFrame, l.fromWeight});
-            out.layers.push_back({vm.nameText(l.sequence), bone, l.rest, l.frame, l.weight});
+            out.layers.push_back({vm.nameText(l.sequence), bone, l.rest, l.frame, l.weight, l.clear});
         }
     out.faces.clear();
     if (const auto* skins = level_->skinsOf(a))

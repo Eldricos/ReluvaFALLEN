@@ -162,7 +162,14 @@ public:
         float fraction = 0;             // through it, as an actor's AnimFrame
         const std::vector<bool>* part = nullptr;
         float weight = 1;               // how much it shows over what's under it
+        // The part's first bone keeps the turn it has under the layer about
+        // the actor's up, side and forward axes (C3DPlayAnim's ClearYaw,
+        // ClearPitch, ClearRoll), taking only the rest of the layer's.
+        std::array<bool, 3> clear{};
     };
+    // Where the skeleton's axes go in the actor's space (as the mesh is
+    // placed): for the layers' clear, which needs the actor's axes.
+    void setPlacement(const std::array<Vec3f, 3>& skeletonInActor);
     // What's done to the pose on top of its animations (The Fallen's
     // scripts bend the back, turn the head, reach for a gun), in the
     // skeleton's space: the bones' own units and axes, as placed vertices

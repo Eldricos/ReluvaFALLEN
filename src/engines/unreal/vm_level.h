@@ -245,7 +245,9 @@ public:
     // the sequence's own speed, after a tween of `tween` seconds),
     // TweenAnim's, whether one's playing or tweening, and a latent
     // FinishAnim's wait for its end.
-    void startAnim(VmObject* actor, NameId sequence, float rate, float tween, bool loop);
+    // A negative rate is scaled by the actor's speed, never below
+    // `minRate` (LoopAnim's MinRate, as `rate` is: times its own speed).
+    void startAnim(VmObject* actor, NameId sequence, float rate, float tween, bool loop, float minRate = 0);
     void tweenAnim(VmObject* actor, NameId sequence, float seconds);
     bool animating(VmObject* actor);
     void waitForAnim(VmObject* actor);
@@ -270,6 +272,8 @@ public:
         float frame = 0, rate = 0; // as AnimFrame (below 0: tweening into it) and AnimRate
         bool loop = false, finished = false;
         float weight = 0, weightRate = 0; // how much it shows (0-1), and its change a second
+        float minRate = 0;                // with a negative rate (scaled by speed), the least it goes at
+        std::array<bool, 3> clear{};      // its first bone keeps the actor's own turn in yaw, pitch, roll
         // The layer it replaced, held where it was under this one while
         // this one fades in over it.
         NameId fromSequence = 0;
@@ -282,8 +286,13 @@ public:
     };
     const std::map<NameId, AnimLayer>* layersOf(VmObject* actor) const;
     const std::map<NameId, SkinChannel>* skinsOf(VmObject* actor) const;
-    void playLayer(VmObject* actor, NameId group, NameId sequence, float rate, float tween, bool loop, NameId bone);
-    void tweenLayer(VmObject* actor, NameId group, NameId sequence, float seconds, NameId bone);
+    void playLayer(VmObject* actor, NameId group, NameId sequence, float rate, float tween, bool loop, NameId bone,
+                   float minRate = 0, std::array<bool, 3> clear = {});
+    void tweenLayer(VmObject* actor, NameId group, NameId sequence, float seconds, NameId bone,
+                    std::array<bool, 3> clear = {});
+    // An animation's rate now: a negative one is scaled by the actor's
+    // speed, at least `minRate`.
+    float rateNow(VmObject* actor, float rate, float minRate);
     void tweenOutLayer(VmObject* actor, NameId group, float seconds);
     bool layerAnimating(VmObject* actor, NameId group);
     void waitForLayer(VmObject* actor, NameId group);
