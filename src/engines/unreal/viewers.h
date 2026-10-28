@@ -53,6 +53,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -256,6 +257,7 @@ public:
     // Playing: the camera let loose, in front of the live actor of that
     // name looking at it; false if there's none.
     bool watchActor(const std::string& name);
+    float liveLightLevel(const LightSource& l);
     // The player put by an actor (`offset` from it, facing `yaw` degrees),
     // falling; and where it is, its state and physics (ue-play's tests).
     bool teleportPlayer(const std::string& name, const Vec3f& offset, float yaw);
@@ -299,8 +301,20 @@ private:
     };
     gfx::Mat4 moverTransform(const MoverDraw& m) const;
     static gfx::Mat4 moverPlacement(const Mover& m, const Vec3f& location, const Rotator& rotation);
+    // The lights that move and change while playing (lit actors not among
+    // the level's own lights), each frame; given to the renderer too.
+    void gatherDynamicLights(const gfx::Vec3& eye);
+    std::vector<LightSource> dynamic_;
+    std::set<int32_t> staticLightRefs_; // the level's own lights (in its lightmaps)
+    std::vector<ScriptLevel::LitActor> litScratch_;
+    // A light's share of its brightness now (its level, if it changes).
+    float levelOf(const LightSource& l) const {
+        return l.animated >= 0 && size_t(l.animated) < lightLevels_.size() ? lightLevels_[size_t(l.animated)] : 1;
+    }
+    // over: on top of the same polygons drawn already; moverLight: lit
+    // as a whole by it (a mover, where it is now), not by its vertices.
     void drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh, const gfx::Mat4& model, bool levelLit,
-                     bool over = false); // over: on top of the same polygons drawn already
+                     bool over = false, const MeshLight* moverLight = nullptr);
 
     std::vector<std::string> names_;
     int index_ = 0;

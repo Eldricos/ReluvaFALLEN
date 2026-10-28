@@ -17,12 +17,13 @@ struct ClipVertex {
     float x, y, z, w;
     float u, v;
     float r, g, b, a;
+    float wx, wy, wz; // where it is in the world (for the dynamic lights)
 };
 
 ClipVertex mix(const ClipVertex& p, const ClipVertex& q, float t) {
     auto l = [t](float a, float b) { return a + (b - a) * t; };
-    return {l(p.x, q.x), l(p.y, q.y), l(p.z, q.z), l(p.w, q.w), l(p.u, q.u),
-            l(p.v, q.v), l(p.r, q.r), l(p.g, q.g), l(p.b, q.b), l(p.a, q.a)};
+    return {l(p.x, q.x), l(p.y, q.y), l(p.z, q.z), l(p.w, q.w), l(p.u, q.u), l(p.v, q.v),
+            l(p.r, q.r), l(p.g, q.g), l(p.b, q.b), l(p.a, q.a), l(p.wx, q.wx), l(p.wy, q.wy), l(p.wz, q.wz)};
 }
 
 float factor(gfx::Blend f, float src, float dst, float srcA, float dstA) {
@@ -179,6 +180,9 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
         out.y = mvp[1] * p[0] + mvp[5] * p[1] + mvp[9] * p[2] + mvp[13];
         out.z = mvp[2] * p[0] + mvp[6] * p[1] + mvp[10] * p[2] + mvp[14];
         out.w = mvp[3] * p[0] + mvp[7] * p[1] + mvp[11] * p[2] + mvp[15];
+        out.wx = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
+        out.wy = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+        out.wz = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14];
         const float* uv = call.texGen == gfx::TexGen::Uv2 ? v.uv2 : v.uv;
         // Through the pre and post rows (the turbulence between them left out).
         auto rows = [](const std::array<float, 3>& r0, const std::array<float, 3>& r1, float& u, float& w) {
@@ -295,7 +299,24 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                         return (b0 * (v0->c.*f) * v0->invW + b1 * (v1->c.*f) * v1->invW + b2 * (v2->c.*f) * v2->invW) / iw;
                     };
                     float src[4] = {attr(&ClipVertex::r), attr(&ClipVertex::g), attr(&ClipVertex::b), attr(&ClipVertex::a)};
-                    if (tex) {
+                    // The dynamic lights' light here: alone, or times the
+                    // texture (below).
+                    const bool lit = call.dynamicLights || call.dynamicLightsTextured;
+                    if (lit) {
+                        const float px = attr(&ClipVertex::wx), py = attr(&ClipVertex::wy), pz = attr(&ClipVertex::wz);
+                        float sum[3] = {0, 0, 0};
+                        for (const gfx::DynamicLight& l : lights_) {
+                            const float dx = px - l.origin[0], dy = py - l.origin[1], dz = pz - l.origin[2];
+                            const float f = std::clamp(1 - std::sqrt(dx * dx + dy * dy + dz * dz) / std::max(l.radius, 1e-3f),
+                                                       0.0f, 1.0f);
+                            for (int k = 0; k < 3; ++k)
+                                sum[k] += l.color[size_t(k)] * f;
+                        }
+                        for (int k = 0; k < 3; ++k)
+                            src[k] = sum[k];
+                        src[3] = 1;
+                    }
+                    if (tex && !call.dynamicLights) {
                         float u = attr(&ClipVertex::u), v = attr(&ClipVertex::v);
                         int tx = int(std::floor(u * float(tex->w))), ty = int(std::floor(v * float(tex->h)));
                         if (tex->clamp) {
@@ -309,7 +330,9 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                         for (int k = 0; k < 4; ++k)
                             src[k] *= float(texel[k]) / 255.0f;
                     }
-                    const float alpha = src[3];
+                    float alpha = src[3];
+                    if (call.dynamicLightsTextured)
+                        src[3] = 1; // its alpha only tested
                     if ((call.state.alphaTest == gfx::AlphaTest::Gt0 && alpha <= 0) ||
                         (call.state.alphaTest == gfx::AlphaTest::Lt128 && alpha >= 0.5f) ||
                         (call.state.alphaTest == gfx::AlphaTest::Ge128 && alpha < 0.5f))

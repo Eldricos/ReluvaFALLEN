@@ -465,6 +465,16 @@ public:
         float ledge = 0, reach = 0, seconds = 0, startFrame = -1, lastFrame = 0, done = 0;
         std::array<float, 3> to(float height) const;
     };
+    // The actors giving light now (a LightType and some brightness): where,
+    // and their light's settings, for the lights that move and change
+    // while the game runs (a spark's flash, an explosion's, a flashlight).
+    struct LitActor {
+        VmObject* actor = nullptr;
+        std::array<float, 3> location{};
+        uint8_t type = 0, brightness = 0, hue = 0, saturation = 255, radius = 0, period = 32, phase = 0, effect = 0;
+        bool isStatic = false; // bStatic
+    };
+    void litActors(std::vector<LitActor>& out);
     // A noise the AI may hear (MakeNoise; weapons' and projectiles' sounds).
     void makeNoise(VmObject* maker, float loudness);
     struct NoiseStats {

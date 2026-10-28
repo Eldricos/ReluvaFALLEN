@@ -454,6 +454,11 @@ std::vector<std::string> LevelPlay::activeObjectives() {
     return out;
 }
 
+VmObject* LevelPlay::actorAt(int32_t ref) {
+    VmObject* a = ref ? vm_->objectAt(map_, ref) : nullptr;
+    return a && !a->deleted ? a : nullptr;
+}
+
 std::string LevelPlay::playerState() {
     return player_ && player_->state ? player_->state->name : std::string("none");
 }

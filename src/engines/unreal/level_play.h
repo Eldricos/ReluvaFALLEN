@@ -159,6 +159,10 @@ public:
     Vm& vm() { return *vm_; }
     ScriptLevel& level() { return *level_; }
     VmObject* player() const { return player_; }
+    // The live actor an object reference in the level's package names
+    // (a placed light...); null if none or destroyed.
+    VmObject* actorAt(int32_t ref);
+    const Package& map() const { return map_; }
     const std::string& loginError() const { return loginError_; }
     float time() const { return time_; }       // seconds played
     float behind() const { return behind_; }   // real seconds not yet played (it's slower than real time)

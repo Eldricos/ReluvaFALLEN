@@ -82,12 +82,13 @@ Vec3f lightAt(const LevelLights& lights, const Vec3f& p, const Vec3f& n) {
     Vec3f total{0.1f, 0.1f, 0.1f}; // a little, so unlit sides aren't black
     for (const LightSource& l : lights.unique) {
         const Vec3f d{l.position[0] - p[0], l.position[1] - p[1], l.position[2] - p[2]};
-        const float dist = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-        if (dist >= l.radius || dist <= 0)
+        const float straight = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        const float dist = lightDistance(l, p);
+        if (dist >= l.radius || straight <= 0)
             continue;
         float amount = 1 - dist / l.radius;
         if (l.incidence)
-            amount *= std::max(0.0f, (n[0] * d[0] + n[1] * d[1] + n[2] * d[2]) / dist);
+            amount *= std::max(0.0f, (n[0] * d[0] + n[1] * d[1] + n[2] * d[2]) / straight);
         for (size_t k = 0; k < 3; ++k)
             total[k] += l.color[k] * amount;
     }
@@ -209,6 +210,10 @@ void MapViewer::load(int index) {
 
     // The lightmaps, lit from the level's lights, as textures.
     lights_ = gatherLights(ctx_.packages, *pkg, model, scripted);
+    staticLightRefs_.clear();
+    for (const int32_t ref : model.lights)
+        if (ref)
+            staticLightRefs_.insert(ref);
     const LevelLights& lights = lights_;
     const auto tLights = Clock::now();
     LightmapAtlas atlas = buildLightmaps(model, lights);
@@ -497,9 +502,7 @@ void MapViewer::load(int index) {
         if (!a.unlit && a.style != kStyleTranslucent && a.style != kStyleModulated) {
             light = {0.15f, 0.15f, 0.15f};
             for (const LightSource& l : lights.unique) {
-                const float dist = std::sqrt((l.position[0] - a.location[0]) * (l.position[0] - a.location[0]) +
-                                             (l.position[1] - a.location[1]) * (l.position[1] - a.location[1]) +
-                                             (l.position[2] - a.location[2]) * (l.position[2] - a.location[2]));
+                const float dist = lightDistance(l, a.location);
                 if (dist < l.radius)
                     for (size_t k = 0; k < 3; ++k)
                         light[k] += l.color[k] * (1 - dist / l.radius);
@@ -606,7 +609,7 @@ void MapViewer::load(int index) {
     } else {
         info_.push_back(runScripts_ ? "scripts didn't start: " + startError : "scripts off (P turns them on)");
     }
-    info_.push_back("Not drawn yet: lights' effects other than their brightness (flicker, pulse...), movers' own lighting");
+    info_.push_back("Not drawn yet: light effects' patterns across surfaces (a torch's waver, water's shimmer: as brightness only)");
 }
 
 bool MapViewer::watchActor(const std::string& name) {
@@ -957,6 +960,7 @@ void MapViewer::update(uint64_t nowMs) {
 
     updateLightmaps(dt);
     updateAnimatedTextures(dt);
+    gatherDynamicLights(pos_);
 
     // The renderer raises colours to 1 / its gamma.
     renderer_->setGamma(1 / displayGamma_);
@@ -998,10 +1002,16 @@ void MapViewer::update(uint64_t nowMs) {
         const MoverDraw& m = movers_[i];
         VmObject* live = play_ && i < moverActors_.size() ? moverActors_[i] : nullptr;
         LevelPlay::Look look;
-        if (live && play_->look(live, look))
-            drawBatches(m.batches, moverMesh_, moverPlacement(m.mover, look.location, look.rotation), false);
-        else
-            drawBatches(m.batches, moverMesh_, moverTransform(m), false);
+        // Lit where it is now, by the lights as they are now.
+        if (live && play_->look(live, look)) {
+            const MeshLight light = meshLightAt(look.location);
+            drawBatches(m.batches, moverMesh_, moverPlacement(m.mover, look.location, look.rotation), false, false,
+                        &light);
+        } else {
+            const gfx::Mat4 place = moverTransform(m);
+            const MeshLight light = meshLightAt(Vec3f{place[12], -place[13], place[14]});
+            drawBatches(m.batches, moverMesh_, place, false, false, &light);
+        }
     }
     if (animate_)
         animTime_ += dt;
@@ -1229,6 +1239,23 @@ void MapViewer::updateAnimatedTextures(float dt) {
         renderer_->updateTextures(regions);
 }
 
+// A changing light's share of its brightness now: its curve; while
+// playing, a light the scripts may change as its live actor is (its
+// LightType and LightBrightness: a TriggerLight fading, a light turned
+// off, or destroyed).
+float MapViewer::liveLightLevel(const LightSource& l) {
+    if (!play_ || !l.scripted || !l.ref)
+        return lightLevel(l, lightTime_);
+    VmObject* a = play_->actorAt(l.ref);
+    if (!a)
+        return 0;
+    Vm& vm = play_->vm();
+    const Value* type = a->find(vm, "LightType");
+    const Value* brightness = a->find(vm, "LightBrightness");
+    const float share = brightness && l.brightness ? float(brightness->asInt()) / float(l.brightness) : 1;
+    return std::clamp(lightLevel(l, type ? uint8_t(type->asInt()) : l.type, lightTime_) * share, 0.0f, 2.0f);
+}
+
 // Redraws the lightmaps that pulsing, flickering... lights reach, where
 // those lights' brightness changed.
 void MapViewer::updateLightmaps(float dt) {
@@ -1236,7 +1263,7 @@ void MapViewer::updateLightmaps(float dt) {
     std::vector<bool> changed(changingLights_.size(), false);
     bool any = false;
     for (size_t i = 0; i < changingLights_.size(); ++i) {
-        const float level = lightLevel(changingLights_[i], lightTime_);
+        const float level = liveLightLevel(changingLights_[i]);
         if (std::fabs(level - lightLevels_[i]) * 255 >= 1) {
             lightLevels_[i] = level;
             changed[i] = any = true;
@@ -1357,7 +1384,7 @@ void MapViewer::drawSurfaceSwaps() {
 }
 
 void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh, const gfx::Mat4& model,
-                            bool levelLit, bool over) {
+                            bool levelLit, bool over, const MeshLight* moverLight) {
     auto lit = [&](const Batch& b) {
         return levelLit && lightmaps_ && b.lightmap && !blended(b.polyFlags) &&
                !(b.polyFlags & (polyflag::FakeBackdrop | polyflag::Unlit));
@@ -1375,6 +1402,12 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
         // With a lightmap the second pass lights it; else the vertex colours
         // (shading by facing, or a mover's light).
         call.rgbSource = lit(b) ? gfx::ColorSource::Constant : gfx::ColorSource::Vertex;
+        if (moverLight && !(b.polyFlags & polyflag::Unlit) && !blended(b.polyFlags)) {
+            call.rgbSource = gfx::ColorSource::Lighting;
+            call.ambientLight = moverLight->ambient;
+            call.directedLight = moverLight->directed;
+            call.lightDirection = moverLight->direction;
+        }
         if (!(b.polyFlags & polyflag::Modulated)) // those multiply what's there, so stay as they are
             call.color = {kExposure, kExposure, kExposure, 1};
         if (b.polyFlags & polyflag::Masked)
@@ -1406,7 +1439,62 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
             light.state.alphaTest = gfx::AlphaTest::None;
             renderer_->draw(light);
         }
+        // The lights that move and change (a spark's flash, an
+        // explosion's) added over it: its texture times their light, as
+        // UE1 adds dynamic light to the lightmap's.
+        if (!dynamic_.empty() && !over && !blended(b.polyFlags) && !(b.polyFlags & polyflag::Unlit) && call.texture) {
+            gfx::DrawCall dyn = call;
+            dyn.dynamicLightsTextured = true;
+            dyn.state.src = gfx::Blend::One;
+            dyn.state.dst = gfx::Blend::One;
+            dyn.state.depthEqual = true;
+            dyn.state.depthWrite = false;
+            renderer_->draw(dyn);
+        }
     }
+}
+
+// The lit actors that aren't the level's own lights (those are in its
+// lightmaps) nor static (as in UE1, those light the world only through
+// lightmaps): their light as it is now, the nearest kMaxDynamicLights to
+// the eye given to the renderer.
+void MapViewer::gatherDynamicLights(const gfx::Vec3& eye) {
+    dynamic_.clear();
+    if (!play_)
+        return;
+    play_->level().litActors(litScratch_);
+    const Package* map = &play_->map();
+    for (const ScriptLevel::LitActor& a : litScratch_) {
+        if (a.isStatic || (a.actor->package == map && staticLightRefs_.count(a.actor->exportIndex + 1)))
+            continue;
+        LightSource l;
+        l.position = {a.location[0], a.location[1], a.location[2]};
+        l.radius = kRadiusUnit * (float(a.radius) + 1);
+        l.type = a.type;
+        l.effect = a.effect;
+        l.period = float(std::max<uint8_t>(a.period, 1)) / 35;
+        l.phase = float(a.phase) / 256;
+        const float level = lightLevel(l, lightTime_);
+        if (level <= 0)
+            continue;
+        const Vec3f c = lightColor(a.hue, a.saturation, a.brightness);
+        l.color = {c[0] * level, c[1] * level, c[2] * level};
+        dynamic_.push_back(l);
+    }
+    const Vec3f e{eye[0], -eye[1], eye[2]};
+    auto dist2 = [&](const LightSource& l) {
+        const float dx = l.position[0] - e[0], dy = l.position[1] - e[1], dz = l.position[2] - e[2];
+        return dx * dx + dy * dy + dz * dz;
+    };
+    if (dynamic_.size() > size_t(gfx::kMaxDynamicLights)) {
+        std::partial_sort(dynamic_.begin(), dynamic_.begin() + gfx::kMaxDynamicLights, dynamic_.end(),
+                          [&](const LightSource& a, const LightSource& b) { return dist2(a) < dist2(b); });
+        dynamic_.resize(size_t(gfx::kMaxDynamicLights));
+    }
+    std::vector<gfx::DynamicLight> lights;
+    for (const LightSource& l : dynamic_)
+        lights.push_back({toWorld(l.position), l.radius, {l.color[0], l.color[1], l.color[2]}});
+    renderer_->setDynamicLights(lights);
 }
 
 void MapViewer::drawOverlay(uint64_t nowMs) {
@@ -1514,17 +1602,26 @@ std::pair<gfx::TextureId, std::array<int, 2>> MapViewer::textureOf(const ObjectR
 MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
     MeshLight light;
     Vec3f total{}, toward{};
-    for (const LightSource& l : lights_.unique) {
+    // The level's lights as bright as they are now (pulsing, flickering,
+    // turned off by scripts), then the lights that move and change.
+    auto add = [&](const LightSource& l, float level) {
+        if (level <= 0)
+            return;
         const Vec3f dv{l.position[0] - at[0], l.position[1] - at[1], l.position[2] - at[2]};
-        const float dist = std::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
-        if (dist >= l.radius || dist <= 0)
-            continue;
-        const float amount = 1 - dist / l.radius;
+        const float straight = std::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
+        const float dist = lightDistance(l, at);
+        if (dist >= l.radius || straight <= 0)
+            return;
+        const float amount = (1 - dist / l.radius) * level;
         for (size_t k = 0; k < 3; ++k) {
             total[k] += l.color[k] * amount;
-            toward[k] += dv[k] / dist * amount;
+            toward[k] += dv[k] / straight * amount;
         }
-    }
+    };
+    for (const LightSource& l : lights_.unique)
+        add(l, levelOf(l));
+    for (const LightSource& l : dynamic_)
+        add(l, 1);
     for (size_t k = 0; k < 3; ++k) {
         light.ambient[k] = std::min(kMaxLight, 0.15f + 0.5f * total[k]);
         light.directed[k] = std::min(kMaxLight, 0.7f * total[k]);

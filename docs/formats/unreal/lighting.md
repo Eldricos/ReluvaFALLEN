@@ -63,6 +63,9 @@ For each sample, its position on the surface's plane, then:
 - **Radius**: `25 * (LightRadius + 1)` world units; default radius 64.
 - **Facing**: the cosine between the surface's normal and the direction to
   the light (none for `LightEffect` 13, non-incidence).
+- **Cylinder** (`LightEffect` 17, 4,301 of The Fallen's lights, the most
+  used effect): the distance is across only, so the light reaches its
+  radius at any height, as UE1's cylinder lights do.
 - **Cone** (`LightEffect` 8 static spot, 12 spotlight): the light's
   `Rotation` gives its direction, `LightCone` (0-255) its half-angle as
   0-90 degrees, fading to the edge.
@@ -103,6 +106,25 @@ curves (to be compared with the original running):
 | Strobe | on the first tenth |
 | Flicker | random, a new value 20 times a second: 0.4-1, out now and then |
 
+Light effects that change over time (`LightEffect`), on The Fallen 255
+watery shimmers, 224 fire wavers, 45 torch wavers, 30 slow and fast
+waves, and a few shocks, discos and rotors, change the light's
+brightness as a whole, times its type's curve: torch waver 0.85-1 and
+fire waver 0.7-1 (smooth random, 6 and 10 changes a second), shimmer
+two sines round 0.8, the waves a sine 0.7-1 (0.5 and 2 a second), shock
+dropping to 0.2 at random, disco and rotor a sine over their period. In
+UE1 these move across the surfaces (a waver's ripple, a wave rolling
+by); those patterns aren't drawn. Reluva's reading of their names.
+
+Lights the scripts may change (any class but plain `Light`, like
+`TriggerLight`, or one with a Tag a trigger can name) are kept apart
+the same way, starting as they are (one that starts off, at nothing),
+and while the game runs follow their live actor: its `LightType` and
+`LightBrightness` against the brightness it was placed with (a
+TriggerLight fading, a light switched off or destroyed). With them and
+the effects, 3,436 of the lights change (1,377 before), over 34,029
+lightmaps; the most texels kept apart in one map is about 291,000.
+
 The light a sample gets is linear in each light's brightness, so a
 lightmap reached by changing lights is kept as its light without them
 plus each one's at full brightness (`AnimatedLightmap`), and redrawn as
@@ -110,7 +132,23 @@ plus each one's at full brightness (`AnimatedLightmap`), and redrawn as
 changes by a step of the 255. The Maps page uploads only those
 lightmaps' rectangles (`Renderer3D::updateTextures()`), all in one copy
 each frame. On The Fallen a map has up to 49 such lights over at most
-about 89000 texels. Movers and placed meshes are lit by them steadily.
+about 89000 texels (291,000 with the scripted lights and effects).
+
+**What moves** is lit as the lights are now: meshes and movers by the
+level's lights at their current brightness (a pulsing light pulses on
+them), from where they are each frame (a door sliding into the dark goes
+dark), and by the dynamic lights.
+
+**Dynamic lights**: while playing, the actors with a light that aren't
+`bStatic` and aren't the level's own lights (a spark burst's flash, an
+explosion's, a muzzle's, a flashlight). As UE1, they light the world
+without shadows: each frame the nearest 16 to the eye go to the
+renderer, and each lit surface of the level and of the movers is drawn
+again, its texture times their light added over it (UE1's texture x
+(lightmap + dynamic light); the renderer's `dynamicLightsTextured`).
+Static lights left out of the level's lightmaps (built before they were
+placed) light nothing, as in UE1. On M01_SiskoL1A a spark burst lights
+the wall round it for a tenth of a second.
 
 The 128 brightness unit, the linear falloff and the cone's angle are the
 first things to tune against the original.

@@ -46,11 +46,30 @@ struct LightSource {
     // cycle of `period` seconds started `phase` (0-1) of the way through.
     uint8_t type = kLightSteady;
     float period = 1, phase = 0;
+    // Its LightEffect (Engine.Actor's ELightEffect). Cylinder (17) lights
+    // to its radius across, at any height; the wavers, shimmer and waves
+    // change its brightness over time (here as a whole: their patterns
+    // across a surface aren't drawn).
+    uint8_t effect = 0;
+    bool cylinder = false;
+    // Its actor (an object reference in the level's package), its own
+    // LightBrightness, and whether scripts may change it while the game
+    // runs (a TriggerLight and the like, or one a trigger can name by its
+    // Tag): such a light's lightmaps follow the live actor.
+    int32_t ref = 0;
+    uint8_t brightness = 64;
+    bool scripted = false;
     int animated = -1; // its index in LevelLights::animated, if its brightness changes
 };
 
-// The share of its brightness (0-1) a light gives `time` seconds in.
+// The share of its brightness (0-1) a light gives `time` seconds in: its
+// LightType's curve times its LightEffect's.
 float lightLevel(const LightSource& light, float time);
+// As lightLevel, for a light now of type `type`.
+float lightLevel(const LightSource& light, uint8_t type, float time);
+// How far a point is from a light, as its light falls off: straight, or
+// across for a cylinder.
+float lightDistance(const LightSource& light, const Vec3f& point);
 
 // World units per step of an actor's LightRadius.
 constexpr float kRadiusUnit = 25;

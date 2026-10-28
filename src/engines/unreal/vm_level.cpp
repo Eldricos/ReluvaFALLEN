@@ -328,6 +328,38 @@ Value ScriptLevel::regionAt(const std::array<float, 3>& p) {
     return v;
 }
 
+void ScriptLevel::litActors(std::vector<LitActor>& out) {
+    out.clear();
+    auto byte = [&](VmObject* a, const char* name, uint8_t otherwise) {
+        const Value* v = prop(a, name);
+        return v ? uint8_t(v->asInt()) : otherwise;
+    };
+    for (VmObject* a : actors_) {
+        if (a->deleted)
+            continue;
+        const Value* type = prop(a, "LightType");
+        if (!type || type->asInt() == 0)
+            continue;
+        LitActor l;
+        l.brightness = byte(a, "LightBrightness", 0);
+        const Value* loc = prop(a, "Location");
+        if (!l.brightness || !loc)
+            continue;
+        l.actor = a;
+        l.location = Vm::vectorOf(*loc);
+        l.type = uint8_t(type->asInt());
+        l.hue = byte(a, "LightHue", 0);
+        l.saturation = byte(a, "LightSaturation", 255);
+        l.radius = byte(a, "LightRadius", 0);
+        l.period = byte(a, "LightPeriod", 32);
+        l.phase = byte(a, "LightPhase", 0);
+        l.effect = byte(a, "LightEffect", 0);
+        const Value* isStatic = prop(a, "bStatic");
+        l.isStatic = isStatic && isStatic->asBool();
+        out.push_back(l);
+    }
+}
+
 // A noise an actor makes (MakeNoise; a sound played without bNoHearNoise):
 // each pawn but the player and whoever made it hears it if it's loud
 // enough where the pawn is: Loudness x 800 over the distance, halved with

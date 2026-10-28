@@ -43,7 +43,9 @@ public:
     void beginFrame(const gfx::Mat4& viewProj, const gfx::Vec3& eye, Color clear) override;
     void draw(const gfx::DrawCall& call) override;
     void setView(const gfx::Mat4& viewProj, const gfx::Vec3& eye) override;
-    void setDynamicLights(const std::vector<gfx::DynamicLight>&) override {}
+    void setDynamicLights(const std::vector<gfx::DynamicLight>& lights) override {
+        lights_.assign(lights.begin(), lights.begin() + std::ptrdiff_t(std::min<size_t>(lights.size(), gfx::kMaxDynamicLights)));
+    }
     void setViewport(int x, int y, int w, int h) override;
     void setDepthRange(float maxDepth) override { depthRange_ = maxDepth; }
     void clearDepth() override;
@@ -64,6 +66,7 @@ public:
     int lastTriangles() const { return lastTriangles_; }
 
 private:
+    std::vector<gfx::DynamicLight> lights_;
     struct Texture {
         int w = 0, h = 0;
         bool clamp = false;

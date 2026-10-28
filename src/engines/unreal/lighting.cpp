@@ -21,6 +21,8 @@ constexpr float kPi = 3.14159265358979f;
 constexpr uint8_t kEffectStaticSpot = 8;
 constexpr uint8_t kEffectSpotlight = 12;
 constexpr uint8_t kEffectNonIncidence = 13;
+constexpr uint8_t kEffectTorchWaver = 1, kEffectFireWaver = 2, kEffectWateryShimmer = 3, kEffectSlowWave = 5,
+                  kEffectFastWave = 6, kEffectShock = 9, kEffectDisco = 10, kEffectCylinder = 17, kEffectRotor = 18;
 
 Vec3f add(const Vec3f& a, const Vec3f& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
 Vec3f sub(const Vec3f& a, const Vec3f& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
@@ -40,6 +42,7 @@ bool readLight(const PackageSet& packages, const Package& package, int32_t ref, 
     if (!obj || defaults.actorProperties(*obj.package, obj.exportIndex, props) ||
         !props.vector("Location", l.position))
         return false;
+    l.ref = ref;
     // What the level's scripts did to it at the start.
     const ScriptedActor* changed = nullptr;
     if (scripted && obj.package == &package)
@@ -53,7 +56,12 @@ bool readLight(const PackageSet& packages, const Package& package, int32_t ref, 
     l.type = changed && changed->lightType >= 0 ? uint8_t(changed->lightType) : props.byte("LightType", kLightSteady);
     const uint8_t brightness = changed && changed->lightBrightness >= 0 ? uint8_t(changed->lightBrightness)
                                                                        : props.byte("LightBrightness", 64);
-    if (l.type == kLightNone || brightness == 0)
+    // Scripts may turn it on later (a TriggerLight waiting for its
+    // trigger, one a trigger names by its Tag): kept, at nothing for now.
+    const std::string cls = obj.package->className(obj.exportIndex + 1);
+    const std::string tag = props.nameValue("Tag");
+    l.scripted = (!cls.empty() && cls != "Light") || (!tag.empty() && tag != "None" && tag != cls);
+    if (brightness == 0 || (l.type == kLightNone && !l.scripted))
         return true;
     l.color = lightColor(props.byte("LightHue"), props.byte("LightSaturation", 255), brightness);
     l.radius = kRadiusUnit * (float(props.byte("LightRadius", 64)) + 1);
@@ -61,7 +69,10 @@ bool readLight(const PackageSet& packages, const Package& package, int32_t ref, 
     l.period = float(std::max<uint8_t>(props.byte("LightPeriod", 32), 1)) / 35;
     l.phase = float(props.byte("LightPhase")) / 256;
     const uint8_t effect = props.byte("LightEffect");
+    l.effect = effect;
+    l.cylinder = effect == kEffectCylinder;
     l.incidence = effect != kEffectNonIncidence;
+    l.brightness = brightness;
     if (effect == kEffectSpotlight || effect == kEffectStaticSpot) {
         l.spot = true;
         Rotator rot;
@@ -74,9 +85,15 @@ bool readLight(const PackageSet& packages, const Package& package, int32_t ref, 
     return true;
 }
 
+bool animatedEffect(uint8_t effect) {
+    return effect == kEffectTorchWaver || effect == kEffectFireWaver || effect == kEffectWateryShimmer ||
+           effect == kEffectSlowWave || effect == kEffectFastWave || effect == kEffectShock || effect == kEffectDisco ||
+           effect == kEffectRotor;
+}
+
 bool changes(const LightSource& l) {
     return l.type == kLightPulse || l.type == kLightBlink || l.type == kLightFlicker || l.type == kLightStrobe ||
-           l.type == kLightSubtlePulse;
+           l.type == kLightSubtlePulse || animatedEffect(l.effect) || l.scripted;
 }
 
 // A repeatable random number 0-1 for a light at a step of time.
@@ -126,11 +143,55 @@ Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness) {
     return c;
 }
 
-float lightLevel(const LightSource& l, float time) {
+float lightLevel(const LightSource& l, float time) { return lightLevel(l, l.type, time); }
+
+float lightDistance(const LightSource& l, const Vec3f& p) {
+    const float dx = l.position[0] - p[0], dy = l.position[1] - p[1], dz = l.cylinder ? 0 : l.position[2] - p[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+namespace {
+
+// Smooth noise 0-1 for a light: random values `rate` times a second,
+// blended between.
+float smoothNoise(uint32_t seed, float time, float rate) {
+    const float t = std::max(0.0f, time) * rate;
+    const uint32_t step = uint32_t(t);
+    const float f = t - float(step), s = f * f * (3 - 2 * f);
+    return noise(seed, step) * (1 - s) + noise(seed, step + 1) * s;
+}
+
+// The share a light's LightEffect gives, 0-1, `time` seconds in. In UE1
+// these move across the surfaces (a torch's waver, water's shimmer, a
+// wave rolling by); here each changes the light's brightness as a whole,
+// at the rates their names suggest. Reluva's reading.
+float effectLevel(const LightSource& l, float time) {
+    const uint32_t seed = uint32_t(int32_t(l.position[0] * 3 + l.position[1] * 5 + l.position[2] * 11)) ^ 0x5bd1e995u;
+    switch (l.effect) {
+    case kEffectTorchWaver: return 0.85f + 0.15f * smoothNoise(seed, time, 6);
+    case kEffectFireWaver: return 0.7f + 0.3f * smoothNoise(seed, time, 10);
+    case kEffectWateryShimmer:
+        return 0.8f + 0.1f * std::sin(time * 5.1f + float(seed & 255)) + 0.1f * std::sin(time * 7.3f + float(seed >> 8 & 255));
+    case kEffectSlowWave:
+    case kEffectFastWave: {
+        const float rate = l.effect == kEffectSlowWave ? 0.5f : 2.0f;
+        return 0.7f + 0.3f * (0.5f + 0.5f * std::sin(2 * kPi * (time * rate + l.phase)));
+    }
+    case kEffectShock: return smoothNoise(seed, time, 15) < 0.3f ? 0.2f : 1.0f;
+    case kEffectDisco:
+    case kEffectRotor: return 0.6f + 0.4f * (0.5f + 0.5f * std::sin(2 * kPi * (time / std::max(l.period, 0.05f) + l.phase)));
+    default: return 1;
+    }
+}
+
+} // namespace
+
+float lightLevel(const LightSource& l, uint8_t type, float time) {
+    return effectLevel(l, time) * [&] {
     // How far through its cycle it is, 0-1.
     const float cycles = time / std::max(l.period, 1e-3f) + l.phase;
     const float at = cycles - std::floor(cycles);
-    switch (l.type) {
+    switch (type) {
     case kLightPulse: return 0.6f + 0.39f * std::sin(2 * kPi * at);
     case kLightSubtlePulse: return 0.9f + 0.09f * std::sin(2 * kPi * at);
     case kLightBlink: return at < 0.5f ? 1.0f : 0.0f;
@@ -141,8 +202,10 @@ float lightLevel(const LightSource& l, float time) {
                               uint32_t(std::max(0.0f, time) * 20));
         return r < 0.15f ? 0.0f : 0.4f + 0.6f * r;
     }
-    default: return 1;
+    case kLightNone: return 0.0f;
+    default: return 1.0f;
     }
+    }();
 }
 
 LevelLights gatherLights(const PackageSet& packages, const Package& package, const Model& model,
@@ -381,18 +444,18 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
                             if (src.radius <= 0)
                                 continue;
                             const Vec3f d = sub(src.position, p);
-                            const float dist = length(d);
-                            if (dist >= src.radius || dist <= 0)
+                            const float dist = lightDistance(src, p), straight = length(d);
+                            if (dist >= src.radius || straight <= 0)
                                 continue;
                             float amount = 1 - dist / src.radius;
                             if (src.incidence) {
-                                const float facing = dot(n, d) / dist;
+                                const float facing = dot(n, d) / straight;
                                 if (facing <= 0)
                                     continue;
                                 amount *= facing;
                             }
                             if (src.spot) {
-                                const float c = -dot(d, src.direction) / dist;
+                                const float c = -dot(d, src.direction) / straight;
                                 if (c < src.cosCone)
                                     continue;
                                 amount *= (c - src.cosCone) / std::max(1e-3f, 1 - src.cosCone);

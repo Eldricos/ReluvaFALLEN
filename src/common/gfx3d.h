@@ -152,6 +152,10 @@ struct DrawCall {
     // lights (Renderer3D::setDynamicLights) cast on each pixel: for a pass
     // over drawn geometry that adds it.
     bool dynamicLights = false;
+    // The texture times that light (alpha tested as usual): for a pass
+    // that adds it over drawn geometry, so the light adds to what's there
+    // (UE1's texture x (lightmap + dynamic light)).
+    bool dynamicLightsTextured = false;
     DrawState state;
 };
 
