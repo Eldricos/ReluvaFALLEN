@@ -230,10 +230,16 @@ What the type means:
 Then come `(s, s, 5)`, the shared animation sets the mesh's animations
 come from (`shared.MaleTwo`, `shared.Male`), and `(m, m, 4)` places
 worked out in advance. Each place is a name, 12 floats and an i32, from
-the origin as a type 2 point: the Jem'Hadar's gun tip in each firing
-pose, `FireGunTipLoc`, `FireCrchGunTipLoc`, `FireShldrGunTipLoc`... A
-crouched shot's tip is lowest and a shot from the shoulder highest, with
-Y up in the float copy.
+the origin: the Jem'Hadar's gun tip in each firing pose,
+`FireGunTipLoc`, `FireCrchGunTipLoc`, `FireShldrGunTipLoc`... A crouched
+shot's tip is lowest and a shot from the shoulder highest.
+
+They're in the skeleton's units (Scale applied, from the origin, the
+import turn not applied), not the float copy's. Checked: JemHaddar has a
+GunTip of its own (type 1, on its gun). Posed through each firing
+animation, the tip comes within 1.3 units of `FireRunFGunTipLoc`, 3.5 of
+`FireRunLGunTipLoc` and 8 to 12 of four more. Read in the float copy's
+space, it is 18 to 100 units off every one.
 
 Checked:
 - On The Fallen, all 419 meshes with the block read: 429 attachment

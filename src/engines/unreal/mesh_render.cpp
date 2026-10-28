@@ -103,6 +103,10 @@ Vec3f placeMeshFloatVector(const Mesh& mesh, const Vec3f& v, MeshTurn turn, int 
     return turnScaled(mesh, s, turn, yawQuarters);
 }
 
+Vec3f placeMeshScaled(const Mesh& mesh, const Vec3f& v, MeshTurn turn, int yawQuarters) {
+    return turnScaled(mesh, v, turn, yawQuarters);
+}
+
 Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn, int yawQuarters) {
     out = GpuMesh{};
     // The mesh's own placement: less Origin, scaled by Scale, turned by RotOrigin.

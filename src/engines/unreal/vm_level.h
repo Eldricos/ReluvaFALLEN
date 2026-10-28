@@ -332,6 +332,12 @@ public:
     void turnBoneInActor(VmObject* actor, NameId bone, const Rot& rotation);
     bool setIk(VmObject* actor, NameId chain, const Vec* at, const std::array<Vec, 3>* axes, float weight);
     void clearIk(VmObject* actor, NameId chain);
+    // C3DRemoveRotation: the bone's turns (C3DApplyRotation's and
+    // C3DApplyWorldRotation's) taken off about those axes.
+    void removeBoneTurn(VmObject* actor, NameId bone, bool yaw, bool pitch, bool roll);
+    // C3DApplyIKOnBasePose: whether a chain's IK reaches from the actor's
+    // own animation, the layers then over it (else after them).
+    void ikOnBase(VmObject* actor, NameId chain, bool onBase);
     // All of that as the poser takes it, with the actor where it is now
     // (empty if nothing's done to its bones).
     LayeredPoser::Adjust boneAdjust(VmObject* actor);
@@ -604,7 +610,8 @@ private:
     ActorMesh* actorMesh(VmObject* actor);
     const std::vector<Vec>* posedVertices(VmObject* actor, ActorMesh& mesh); // packed, as this tick has them
     std::vector<LayeredPoser::Layer> posedLayers(VmObject* actor, ActorMesh& mesh, std::vector<std::string>& names);
-    bool attachFrame(VmObject* actor, ActorMesh& mesh, const MeshAttachPoint& point, Vec& at, std::array<Vec, 3>& axes);
+    bool attachFrame(VmObject* actor, ActorMesh& mesh, const MeshAttachPoint& point, Vec& at, std::array<Vec, 3>& axes,
+                     bool precomputed = false);
     void toWorld(VmObject* actor, Vec& at, std::array<Vec, 3>* axes);
     void placeAttached();
     std::map<const VmObject*, std::shared_ptr<ActorMesh>> actorMeshes_; // by mesh object
@@ -626,6 +633,7 @@ private:
             Vec at{};
             std::array<Vec, 3> axes{};
             float placeWeight = 0, turnWeight = 0;
+            bool onBase = false; // reaching from the actor's own animation, under the layers
         };
         std::array<Ik, 4> limbs;
         // Each limb's point in its end bone's axes, and the point's axes in

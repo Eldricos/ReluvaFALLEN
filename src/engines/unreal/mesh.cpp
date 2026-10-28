@@ -1826,9 +1826,22 @@ bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const
     for (size_t l = 0; l < layers.size(); ++l)
         if (!sourceOf(layers[l].anim, layers[l].fraction, over[l]))
             return false;
+    // The base animation, with the reaches done to it first.
+    std::vector<Mat43> base(bones.size());
+    for (size_t i = 0; i < bones.size(); ++i)
+        base[i] = local(under, i);
+    Adjust onBase, after;
+    if (adjust) {
+        after = *adjust;
+        after.reaches.clear();
+        for (const Adjust::Reach& reach : adjust->reaches)
+            (reach.onBase ? onBase : after).reaches.push_back(reach);
+        if (!onBase.reaches.empty())
+            adjusted(base, onBase);
+    }
     out.resize(bones.size());
     for (size_t i = 0; i < bones.size(); ++i) {
-        Mat43 placed = local(under, i);
+        Mat43 placed = base[i];
         for (size_t l = 0; l < layers.size(); ++l) {
             const Layer& layer = layers[l];
             if (!layer.part || i >= layer.part->size() || !(*layer.part)[i] || layer.weight <= 0)
@@ -1848,8 +1861,8 @@ bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const
         }
         out[i] = placed;
     }
-    if (adjust && !adjust->empty())
-        adjusted(out, *adjust);
+    if (!after.empty())
+        adjusted(out, after);
     return true;
 }
 

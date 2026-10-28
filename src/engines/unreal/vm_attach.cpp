@@ -240,7 +240,8 @@ void ScriptLevel::toWorld(VmObject* a, Vec& at, Axes* axes) {
 // turn and offset from the float copy's space.
 namespace {
 
-bool pointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttachPoint& point, Vec& at, Axes& axes) {
+bool pointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttachPoint& point, Vec& at, Axes& axes,
+                bool precomputed = false) {
     if (point.type == 1) {
         if (!verts || point.triangle < 0 || size_t(point.triangle) >= mesh.tris.size())
             return false;
@@ -260,6 +261,15 @@ bool pointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttac
         axes = inFrame(point.axes, frame);
         return true;
     }
+    // From the origin: a precomputed place in the skeleton's units (Scale
+    // applied, the import turn not), a type 2 point in the float copy's
+    // (see mesh.md).
+    if (precomputed) {
+        at = placeMeshScaled(mesh, point.offset);
+        for (size_t k = 0; k < 3; ++k)
+            axes[k] = unit(placeMeshScaled(mesh, point.axes[k]));
+        return true;
+    }
     at = placeMeshFloatVector(mesh, point.offset);
     for (size_t k = 0; k < 3; ++k)
         axes[k] = unit(placeMeshFloatVector(mesh, point.axes[k]));
@@ -268,8 +278,9 @@ bool pointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttac
 
 } // namespace
 
-bool ScriptLevel::attachFrame(VmObject* a, ActorMesh& m, const MeshAttachPoint& point, Vec& at, Axes& axes) {
-    return pointFrame(m.mesh, point.type == 1 ? posedVertices(a, m) : nullptr, point, at, axes);
+bool ScriptLevel::attachFrame(VmObject* a, ActorMesh& m, const MeshAttachPoint& point, Vec& at, Axes& axes,
+                              bool precomputed) {
+    return pointFrame(m.mesh, point.type == 1 ? posedVertices(a, m) : nullptr, point, at, axes, precomputed);
 }
 
 bool ScriptLevel::attachPointAt(VmObject* a, NameId name, bool precomputed, bool world, Vec& location, Rot& rotation) {
@@ -278,7 +289,7 @@ bool ScriptLevel::attachPointAt(VmObject* a, NameId name, bool precomputed, bool
         m ? findPoint(precomputed ? m->mesh.precomputedPoints : m->mesh.attachPoints, vm_.nameText(name)) : nullptr;
     Vec at{};
     Axes axes{};
-    if (!point || !attachFrame(a, *m, *point, at, axes))
+    if (!point || !attachFrame(a, *m, *point, at, axes, precomputed))
         return false;
     if (world) {
         toWorld(a, at, &axes);
@@ -486,6 +497,36 @@ void ScriptLevel::turnBoneInActor(VmObject* a, NameId bone, const Rot& rotation)
     forgetPose(a);
 }
 
+void ScriptLevel::removeBoneTurn(VmObject* a, NameId bone, bool yaw, bool pitch, bool roll) {
+    auto it = bends_.find(a);
+    if (it == bends_.end())
+        return;
+    Bends& b = it->second;
+    // C3DApplyRotation's axes: 0 Pitch, 1 Yaw, 2 Roll.
+    const std::array<bool, 3> off{pitch, yaw, roll};
+    for (int k = 0; k < 3; ++k)
+        if (off[size_t(k)])
+            b.turns.erase({bone, k});
+    if (auto t = b.actorTurns.find(bone); t != b.actorTurns.end()) {
+        // A rotator: Pitch, Yaw, Roll.
+        for (size_t k = 0; k < 3; ++k)
+            if (off[k])
+                t->second[k] = 0;
+        if (t->second[0] == 0 && t->second[1] == 0 && t->second[2] == 0)
+            b.actorTurns.erase(t);
+    }
+    forgetPose(a);
+}
+
+void ScriptLevel::ikOnBase(VmObject* a, NameId chain, bool onBase) {
+    bool place = false;
+    const int l = limbOf(vm_.nameText(chain), place);
+    if (l < 0)
+        return;
+    bends_[a].limbs[size_t(l)].onBase = onBase;
+    forgetPose(a);
+}
+
 bool ScriptLevel::setIk(VmObject* a, NameId chain, const Vec* at, const Axes* axes, float weight) {
     bool place = false;
     const int l = limbOf(vm_.nameText(chain), place);
@@ -583,6 +624,7 @@ LayeredPoser::Adjust ScriptLevel::adjustOf(VmObject* a, ActorMesh& m) {
         LayeredPoser::Adjust::Reach r;
         r.bone = kLimbs[l].bone;
         r.offset = vec3(e.offset);
+        r.onBase = ik.onBase;
         if (ik.place) {
             r.at = vec3(within(mul(within(sub(ik.at, base), frame), 1 / ds), sk));
             r.placeWeight = ik.placeWeight;
@@ -799,6 +841,17 @@ void registerAttachNatives(Vm& vm) {
     reg("Actor.C3DClearIkTarget", [](NativeCall& c) {
         if (c.vm.level && c.self)
             c.vm.level->clearIk(c.self, c.i(0));
+    });
+    // C3DRemoveRotation(name Bone, bool bYawAxis, bool bPitchAxis, bool
+    // bRollAxis) and C3DApplyIKOnBasePose(name IkChain, int Val): no script
+    // calls them; these are Reluva's readings of their names.
+    reg("Actor.C3DRemoveRotation", [](NativeCall& c) {
+        if (c.vm.level && c.self)
+            c.vm.level->removeBoneTurn(c.self, c.i(0), c.b(1), c.b(2), c.b(3));
+    });
+    reg("Actor.C3DApplyIKOnBasePose", [](NativeCall& c) {
+        if (c.vm.level && c.self)
+            c.vm.level->ikOnBase(c.self, c.i(0), c.i(1) != 0);
     });
     // Setting up The Fallen's meshes for its renderer: nothing to do here.
     for (const char* none : {"Actor.C3DActorInit", "Actor.C3DInitAltMeshes"})

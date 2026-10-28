@@ -195,6 +195,7 @@ public:
             float placeWeight = 0, turnWeight = 0;
             Vec3f at{}, offset{};
             std::array<Vec3f, 3> axes{};
+            bool onBase = false; // done to the base animation, before the layers
         };
         std::vector<Turn> turns;
         std::vector<SpaceTurn> spaceTurns;

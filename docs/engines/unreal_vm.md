@@ -1112,7 +1112,15 @@ frame count and frames a second.
 
 - `PlayAnim(Sequence, Rate, TweenTime)` plays it once: `AnimRate` is
   `Rate` times the sequence's frames a second over its frame count.
-  With a tween, it first tweens into the first frame over `TweenTime`.
+  With a tween, it first tweens into the first frame over `TweenTime`,
+  from the frame showing when it began (kept with the actor; one begun
+  mid-tween starts from where that one started). While `AnimFrame` is
+  below 0 the mesh is drawn blended from that frame to the first.
+- A negative rate is scaled by the actor's speed (as the public
+  UnrealScript documentation has it): each unit a second of `Velocity`
+  plays `-Rate` times the sequence's speed, never slower than
+  `LoopAnim`'s `MinRate` times it (`AnimMinRate`). No script of The
+  Fallen's passes one.
 - `LoopAnim` does the same, looping. If it's looping that sequence
   already, only its rate changes (scripts call it every tick).
 - `TweenAnim(Sequence, Time)` goes to its first frame over `Time` and
@@ -1161,6 +1169,17 @@ natives:
   rest of the skeleton. It fades in over the tween, its weight rising
   from 0 to 1.
 - **Holding a pose:** `C3DTweenAnim` fades to the first frame.
+- **Replacing one:** a layer started on a group whose layer shows holds
+  the old one where it was, under the new one, until the new one has
+  faded in (a combo's right punch into the left).
+- **Keeping the actor's turn:** `ClearYaw`, `ClearPitch` and `ClearRoll`
+  keep the part's first bone turned as it is under the layer about the
+  actor's up, side and forward axes (the layer's turn less its twist
+  about each); the bones below take the layer as it is. `CTV_Human`'s
+  melee sets all three except when swimming, so a punch while running
+  keeps the spine turned with the run and the arm punches.
+- **Speed-scaled:** `C3DLoopAnim`'s negative rate and `MinRate` as an
+  actor's own.
 - **Ticking:** a layer moves on at its rate, calls the sequence's
   notifications, and at its end (and each loop's) sends
   `C3DAnimEnd(Group)`. The scripts answer that with
@@ -1228,13 +1247,22 @@ On M01_KiraL2, firing while running throws `MelRunPnchL`. The frame
 drawn mid-punch has her legs exactly as in the run without it, and her
 upper body turned into the punch.
 
+Drawing a face: its channels are the vertex-key clips (`Blink`,
+`EyeBrows`, `Phonemes`, [mesh.md](../formats/unreal/mesh.md)). Each
+clip's first key is the same neutral face, in `BaseReference`'s pose (on
+Quark to within a few units, at the hands); the later keys move 8 to 32
+of his 377 vertices. A channel is its clip's key at its time (between
+two, blended) less the neutral face, times its weight. Each vertex's
+share is turned by its bones from `BaseReference`'s pose to the one
+drawn and added to the posed vertices. A channel at the clip's start
+adds nothing, so only the faces away from neutral are posed at draw
+time. On DS9_Ops the scripts set Phonemes 0.07 to 0.1 s in, EyeBrows
+0.07 and Blink 0.01: Dax's lids drop, her brows lift and her mouth
+changes shape.
+
 Not done:
-- **Faces:** drawing them. Their sequences are vertex animations
-  ([mesh.md](../formats/unreal/mesh.md): `Blink`, `EyeBrows` and `Phonemes` are the clips with
-  vertex keys), still to be combined with the bones' pose.
-- **Layer options:** the layers' `ClearYaw`/`ClearPitch`/`ClearRoll`.
-- **Speed-scaled rates:** a negative rate, which no script uses.
-- **Tweens:** blending from the old pose (drawn at the first frame).
+- **Lip sync:** the game has no lip-sync data, so Phonemes is only ever
+  where the head's expression script puts it.
 
 ### Bones and attachment points
 
@@ -1368,8 +1396,18 @@ Not done:
   natives: the order of a bone's axes, the axes `C3DApplyRotation` turns
   about, the actor's axes for `C3DApplyWorldRotation`, and what reaches
   in an IK chain.
-- `C3DApplyIKOnBasePose` and `C3DRemoveRotation` aren't written; no
-  script calls them.
+- `C3DRemoveRotation(Bone, bYawAxis, bPitchAxis, bRollAxis)` and
+  `C3DApplyIKOnBasePose(IkChain, Val)` are Reluva's readings of their
+  names, as no script calls them. The first takes the bone's turns
+  (`C3DApplyRotation`'s about those axes, those parts of
+  `C3DApplyWorldRotation`'s) back off. With the second's `Val` not 0,
+  the chain's reach is done to the actor's own animation, before the
+  layers go over it, rather than after them.
+- Type 2 points are read in the float copy's space: read in the
+  skeleton's, as the precomputed places are, more of them lie nearer
+  their mesh's surface (29 of 67, against 8), but the phaser rifle's
+  grips then put Kira's hands inside her, so which is right isn't
+  settled.
 
 ## Playing a level
 
@@ -1406,7 +1444,8 @@ falling further behind. The Maps page plays one with Enter:
     where their animation is (`AnimFrame`, below). A character's
     animation from the shared sets is borrowed the first time it plays
     one its mesh lacks (the run, `runf`). While tweening into an
-    animation, it's drawn at the animation's first frame.
+    animation, it's drawn blended from the frame the tween began at to
+    the animation's first.
   - Sprites.
   - Movers where their scripts have moved them.
 
