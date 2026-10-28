@@ -663,7 +663,9 @@ The game's side is all script:
 - `?RESTART` (`RestartLevel`) plays the map again from where it began.
 
 Checked on M04_KiraL1 (quick save, walk off, quick load: the same
-place, view and HUD) and with the menus' Save and Load.
+place, view and HUD) and with the menus' Save and Load. All 74 maps
+save after four seconds of play, load back and play on (`ue-play ...
+savegame QuickSave travel "?load=QuickSave.dsa"`).
 
 Not kept: what the engine works out again each tick (posed meshes,
 the colliders' list, the limbs' effectors) and the dialogue table's
