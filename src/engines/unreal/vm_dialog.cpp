@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cctype>
 #include <cstring>
+#include <sstream>
 
 namespace reluva::unreal {
 
@@ -303,10 +304,15 @@ int ScriptLevel::pickDialogLine(const std::string& type, const std::string& spea
 
 int ScriptLevel::bestDialogLine(const std::vector<int>& matches) {
     std::vector<int> best;
+    // This mission's first, then another's its conditions tie to the
+    // story, then the general ones, then another mission's that only
+    // happen to fit (M03's hail answered "Stand by, Captain", not M04's
+    // "I can't get a signal lock"); the least said of those.
     auto rank = [&](int i) {
         const DialogLine& l = dialogLines_[size_t(i)];
         const bool elsewhere = dialogNumber_.empty() || l.mission.size() != 3 || upper(l.mission.substr(1)) != dialogNumber_;
-        return std::make_tuple(elsewhere, generalMission(l.mission), dialogPlays_[size_t(i)]);
+        const int tier = !elsewhere ? 0 : generalMission(l.mission) ? 2 : l.condition.empty() ? 3 : 1;
+        return std::make_pair(tier, dialogPlays_[size_t(i)]);
     };
     for (const int i : matches) {
         if (!best.empty() && rank(i) > rank(best.front()))
@@ -391,6 +397,15 @@ bool ScriptLevel::runsOn(int index) { return runOnFrom(index) >= 0; }
 // here: one of this map's mission or a general one, or another mission's
 // whose conditions tie it to the story (DS9Phase...). Without the last,
 // a hail on M06 got mission 10's "Aye, sir.", and M04's guards M10's.
+// Whether a line is for whoever the player plays: Kira's, Sisko's or
+// Worf's own (K, S, W) only for them ("Stand by, Major" is KEN's).
+bool ScriptLevel::forPlayer(const DialogLine& l) const {
+    if (!dialogWho_ || l.mission.size() != 3)
+        return true;
+    const char m = char(std::toupper(uint8_t(l.mission[0])));
+    return (m != 'K' && m != 'S' && m != 'W') || m == dialogWho_;
+}
+
 bool ScriptLevel::ofThisMission(const DialogLine& l) {
     if (dialogNumber_.empty() || generalMission(l.mission) || !l.condition.empty())
         return true;
@@ -451,6 +466,9 @@ float ScriptLevel::lineSeconds(const DialogLine& l) {
 void ScriptLevel::beginLine(DialogThread& t, int index) {
     const DialogLine& l = dialogLines_[size_t(index)];
     ++dialogPlays_[size_t(index)];
+    if (dialogSaid_.size() >= 256)
+        dialogSaid_.erase(dialogSaid_.begin());
+    dialogSaid_.push_back(index);
     currentLine_ = index;
     // Its voice: the Sound of its record in the package of its table's
     // name, heard everywhere (lines are meant to be heard, over the
@@ -513,11 +531,18 @@ void ScriptLevel::beginLine(DialogThread& t, int index) {
         *v = Value::intValue(index);
     if (Value* v = prop(levelInfo_, "CurrentLineFlags"))
         *v = Value::intValue(flags);
-    if (!l.event.empty())
-        if (VmObject* input = dialogInput()) {
-            vm_.callEvent(input, "DoSpecialEvent", {Value::stringValue(l.event)});
-            vm_.callEvent(input, "DoEvent", {Value::nameValue(vm_.name(l.event))});
+    // Its EVENT: words apart by spaces, each a tag to trigger, or with a
+    // '-' before it one of the HUD's beam-downs ("-BeamDownAmmo
+    // -BeamDownShield"; tags have hyphens inside, "go-ODO-2").
+    if (VmObject* input = l.event.empty() ? nullptr : dialogInput()) {
+        std::istringstream words(l.event);
+        for (std::string w; words >> w;) {
+            if (w.size() > 1 && w[0] == '-')
+                vm_.callEvent(input, "DoSpecialEvent", {Value::stringValue(w.substr(1))});
+            else
+                vm_.callEvent(input, "DoEvent", {Value::nameValue(vm_.name(w))});
         }
+    }
     for (const auto& [who, anim] : {std::pair{t.speaker, l.speakerAnim}, std::pair{t.listener, l.listenerAnim}})
         if (who && !anim.empty() && !who->deleted)
             vm_.callEvent(who, "PlayDialogAnim", {Value::nameValue(vm_.name(anim)), Value::floatValue(1), Value::floatValue(0.2f)});
@@ -576,7 +601,7 @@ void ScriptLevel::tickDialog(float seconds) {
             std::vector<int> matches;
             for (size_t i = 0; i < dialogLines_.size(); ++i) {
                 const DialogLine& n = dialogLines_[i];
-                if (dialogKeyMatches(key, n.key()) && (n.condition.empty() || testCondition(n.condition)))
+                if (dialogKeyMatches(key, n.key()) && forPlayer(n) && (n.condition.empty() || testCondition(n.condition)))
                     matches.push_back(int(i));
             }
             return bestDialogLine(matches);

@@ -4753,7 +4753,7 @@ private:
 int cmdUePlay(int argc, char** argv) {
     if (argc < 4) {
         std::fprintf(stderr, "usage: reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | "
-                             "teleport <actor> <dx> <dy> <dz> <yaw> | where | down <key> | up <key> | press <key> | travel <url> | saves <dir> | watch <actor> | "
+                             "teleport <actor> <dx> <dy> <dz> <yaw> | where | lines | actor <name> | console <command> | down <key> | up <key> | press <key> | travel <url> | saves <dir> | watch <actor> | "
                              "drag <dx> <dy> | click <x> <y> | shot <file.ppm>]...\n");
         return 2;
     }
@@ -4879,6 +4879,16 @@ int cmdUePlay(int argc, char** argv) {
             i += 4;
             std::printf("teleport %s: %s\n", who.c_str(), page.teleportPlayer(who, off, yaw) ? "there" : "no such actor");
             frame();
+        } else if (step == "console" && i + 1 < argc) {
+            const std::string command = argv[++i];
+            std::printf("console %s: %s\n", command.c_str(), page.consoleCommand(command).c_str());
+            frame();
+        } else if (step == "actor" && i + 1 < argc) {
+            const std::string who = argv[++i];
+            std::printf("actor %s: %s\n", who.c_str(), page.describeActor(who).c_str());
+        } else if (step == "lines") {
+            for (const std::string& l : page.linesSaid())
+                std::printf("  line %s\n", l.c_str());
         } else if (step == "where") {
             std::printf("where: %s\n", page.describePlayer().c_str());
         } else if ((step == "down" || step == "up") && i + 1 < argc) {

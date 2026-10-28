@@ -60,6 +60,12 @@ Vec3f placeMeshScaled(const Mesh& mesh, const Vec3f& v, MeshTurn turn = MeshTurn
 // Where an actor puts its mesh: Location + PrePivot, turned by Rotation,
 // scaled by DrawScale; then into the renderer's axes (Y negated).
 gfx::Mat4 meshPlacement(const Vec3f& location, const Rotator& rotation, float drawScale, const Vec3f& prePivot);
+// A scale along the mesh's axes before its RotOrigin turns them (The
+// Fallen's AxisScale: CTV_Quad, turned a quarter, is narrowed along its
+// length), for vertices placed as uploadMesh places them: to go after
+// meshPlacement. An imported mesh's own turn comes before: the scripts
+// scale its beams along X as they're drawn.
+gfx::Mat4 meshAxisScaling(const Mesh& mesh, const Vec3f& scale);
 
 // Which frames to draw: between two, `lerp` of the way to the second.
 struct MeshPose {

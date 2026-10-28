@@ -172,6 +172,8 @@ public:
                     const std::string& lineId); // the thread's number, 0 if no line would do
     bool dialogPlaying(int thread) const;
     bool dialogLineSpecial(int index);
+    // The lines begun so far, in order (their indexes; the last 256).
+    const std::vector<int>& linesSaid() const { return dialogSaid_; }
     bool testCondition(const std::string& condition);
     // The lines being said now: the speaker's code, the text, the type.
     struct Subtitle {
@@ -682,6 +684,7 @@ private:
     bool runsOn(int index);
     std::string playerSpeaker();
     bool ofThisMission(const DialogLine& l);
+    bool forPlayer(const DialogLine& l) const;
     // The AI's own lines (FSE on first seeing an enemy, LSE losing it, KIL
     // killing it, SUR surrendering, AMB and REP now and then): said by the
     // pawn, its conditions about it.
@@ -708,6 +711,7 @@ private:
     bool dialogLoaded_ = false;
     std::vector<DialogLine> dialogLines_;
     std::vector<int> dialogPlays_;      // how often each line's been said
+    std::vector<int> dialogSaid_;       // the lines begun, in order
     std::vector<bool> dialogFollows_;   // only reached from another line
     std::vector<bool> dialogOurs_;      // this level's and this player's
     std::string dialogNumber_;          // the map's mission number ("01", "OP"), if it has one

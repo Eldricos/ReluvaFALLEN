@@ -304,6 +304,14 @@ public:
     // falling; and where it is, its state and physics (ue-play's tests).
     bool teleportPlayer(const std::string& name, const Vec3f& offset, float yaw);
     std::string describePlayer();
+    // A console command as the player types it (its ConsoleCommand), and
+    // what it answers; ue-play's tests.
+    std::string consoleCommand(const std::string& command);
+    // A live actor of that name: where it is, its state, physics and
+    // collision, whether it's hidden ("no such actor" if there's none).
+    std::string describeActor(const std::string& name);
+    // The dialogue lines said so far, a key and its text each.
+    std::vector<std::string> linesSaid();
 
 private:
     void load(int index);

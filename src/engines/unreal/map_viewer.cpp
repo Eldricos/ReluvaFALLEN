@@ -669,6 +669,62 @@ bool MapViewer::teleportPlayer(const std::string& name, const Vec3f& offset, flo
     return false;
 }
 
+std::string MapViewer::consoleCommand(const std::string& command) {
+    if (!play_ || !play_->player())
+        return "no player";
+    const Value v = play_->vm().callEvent(play_->player(), "ConsoleCommand", {Value::stringValue(command)});
+    return v.s;
+}
+
+std::string MapViewer::describeActor(const std::string& name) {
+    if (!play_)
+        return "not playing";
+    Vm& vm = play_->vm();
+    for (VmObject* a : play_->level().actors()) {
+        if (a->deleted || fs::toLower(vm.nameText(a->name)) != fs::toLower(name))
+            continue;
+        auto num = [&](const char* p) {
+            const Value* v = a->find(vm, p);
+            return v ? v->asFloat() : 0.0f;
+        };
+        auto flag = [&](const char* p) {
+            const Value* v = a->find(vm, p);
+            return v && v->asBool();
+        };
+        const Value* at = a->find(vm, "Location");
+        const auto l = at ? Vm::vectorOf(*at) : std::array<float, 3>{};
+        auto object = [&](const char* p) {
+            const Value* v = a->find(vm, p);
+            return v && v->asObject() ? vm.nameText(v->o->name) : std::string("None");
+        };
+        char buf[512];
+        std::snprintf(buf, sizeof buf,
+                      "%s at %.1f %.1f %.1f, state %s, physics %d, radius %.0f height %.0f%s%s%s; draw type %d, "
+                      "style %d, scale %.2f, glow %.2f, mesh %s, skin %s, texture %s, %zu copies",
+                      a->cls->name.c_str(), double(l[0]), double(l[1]), double(l[2]),
+                      a->state ? a->state->name.c_str() : "none", int(num("Physics")), double(num("CollisionRadius")),
+                      double(num("CollisionHeight")), flag("bCollideActors") ? ", collides with actors" : "",
+                      flag("bHidden") ? ", hidden" : "", a->disabled.empty() ? "" : ", some events disabled",
+                      int(num("DrawType")), int(num("Style")), double(num("DrawScale")), double(num("ScaleGlow")),
+                      object("Mesh").c_str(), object("Skin").c_str(), object("Texture").c_str(),
+                      play_->level().multiMeshes(a).size());
+        return buf;
+    }
+    return "no such actor";
+}
+
+std::vector<std::string> MapViewer::linesSaid() {
+    std::vector<std::string> out;
+    if (!play_)
+        return out;
+    ScriptLevel& level = play_->level();
+    for (const int i : level.linesSaid()) {
+        const DialogLine& l = level.dialogLines()[size_t(i)];
+        out.push_back(l.key() + ": " + l.text + (l.event.empty() ? "" : " [" + l.event + "]"));
+    }
+    return out;
+}
+
 std::string MapViewer::describePlayer() {
     if (!play_ || !play_->player())
         return "no player";
@@ -1898,6 +1954,8 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
                 tex = look.skin;
             if (!tex && k < mesh.textures.size())
                 tex = ctx_.packages.resolve(*look.mesh.package, mesh.textures[k]);
+            if (!tex) // no skin of its own: the actor's Texture (the transporter's strips)
+                tex = look.texture;
             skins.push_back(textured_ ? textureOf(tex).first : 0);
         }
         play_->drawn(a);
@@ -1928,7 +1986,7 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
 
 // An actor's copies: its mesh posed as it is (its animation now) in each
 // one's place, turned, scaled by DrawScale and along its own axes by
-// AxisScale, in its style, as bright as its ScaleGlow (where it's lit, or
+// AxisScale (along its axes before RotOrigin), in its style, as bright as its ScaleGlow (where it's lit, or
 // wholly if the actor's unlit); or, for a sprite, its texture (the copy's
 // own, else the actor's) facing the camera.
 void MapViewer::drawCopies(VmObject* a, const LevelPlay::Look& look, const std::vector<LevelPlay::Copy>& copies,
@@ -1947,16 +2005,15 @@ void MapViewer::drawCopies(VmObject* a, const LevelPlay::Look& look, const std::
                 tex = look.skin;
             if (!tex && k < mesh.textures.size())
                 tex = ctx_.packages.resolve(*look.mesh.package, mesh.textures[k]);
+            if (!tex) // no skin of its own: the actor's Texture (the transporter's strips)
+                tex = look.texture;
             skins.push_back(textured_ ? textureOf(tex).first : 0);
         }
         const MeshPose pose = poseAtFraction(mesh, mesh.findAnim(look.animSequence), look.animFrame, look.animLoop);
         for (const LevelPlay::Copy& c : copies) {
-            gfx::Mat4 placement = meshPlacement(c.location, c.rotation, c.drawScale, look.prePivot);
-            for (size_t k = 0; k < 3; ++k) {
-                placement[k] *= c.axisScale[0];
-                placement[4 + k] *= c.axisScale[1];
-                placement[8 + k] *= c.axisScale[2];
-            }
+            const gfx::Mat4 placement =
+                gfx::multiply(meshPlacement(c.location, c.rotation, c.drawScale, look.prePivot),
+                              meshAxisScaling(mesh, c.axisScale));
             MeshLight light = look.unlit ? MeshLight{{1, 1, 1}, {}, {0, 0, 1}} : meshLightAt(c.location);
             for (size_t k = 0; k < 3; ++k) {
                 light.ambient[k] *= c.scaleGlow;

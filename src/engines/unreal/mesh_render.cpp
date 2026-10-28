@@ -200,6 +200,21 @@ gfx::Mat4 meshPlacement(const Vec3f& location, const Rotator& rot, float drawSca
     return gfx::multiply(m, scaling({drawScale, drawScale, drawScale}));
 }
 
+// RotOrigin's turn R (its rows where each axis goes), then
+// R diag(scale) R^T: scaled along the axes before it, turned back.
+gfx::Mat4 meshAxisScaling(const Mesh& mesh, const Vec3f& scale) {
+    const std::array<Vec3f, 3> axes = rotationAxes(mesh.rotOrigin);
+    gfx::Mat4 m = scaling({1, 1, 1});
+    for (size_t col = 0; col < 3; ++col)
+        for (size_t row = 0; row < 3; ++row) {
+            float v = 0;
+            for (size_t k = 0; k < 3; ++k)
+                v += axes[k][row] * scale[k] * axes[k][col];
+            m[col * 4 + row] = v;
+        }
+    return m;
+}
+
 MeshPose poseAt(const Mesh& mesh, const MeshAnimSeq* anim, float time, float startFraction) {
     MeshPose p;
     if (!anim || anim->numFrames <= 0 || mesh.animFrames <= 0)

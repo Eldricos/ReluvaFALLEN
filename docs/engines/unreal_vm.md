@@ -538,13 +538,36 @@ the natives.
   above. Else the player's other options: asking for a report. Then the
   answer: its NEXTLINE (O'Brien's "Stand by" then "Energizing… now",
   which beams the ammunition down, in a beam-down zone; elsewhere the
-  mission's refusal), else that crewmate's report (HBO, to the player or
+  mission's refusal; below), else that crewmate's report (HBO, to the player or
   to no one). Then the sign-off: its RETURNLINE, else the player's HCL
   (not after the crewmate has signed off). On M06_WorfL1A: "Captain,
   what is your status?", Sisko's mission report, "Understood. Worf out."
   On M03_KiraL2 with 20 shots left: "Chief, I need rifle ammunition.",
   "Sir, I can't beam anything to your current position - there's too
   much ionic distortion.", "Acknowledged. Kira out."
+- **The supply beam-down**, played through on M03_SiskoL1B (`ue-play
+  ... press 2 console "set DS9_FederationPhaserRifleAmmo AmmoAmount 20"
+  teleport DS9_BeamZone1 0 0 0 0 press f1 press f ...`): with 20 of
+  the rifle's 150 shots left, standing in the map's `DS9_BeamZone`, the
+  hail goes "Chief, I'm running low on ammunition." (`LowAmmo( 0.2 )`,
+  which also sets the rifle's `LastCheckForMinimum` to 30), "Stand by,
+  Captain." (`InBeamDownZone`: the HUD's `InBeamZone`, inside a zone's
+  radius by its signal strength), "Energizing… now." (EVENT
+  `-BeamDownAmmo -BeamDownShield`), "Acknowledged. Sisko out." The
+  ammunition clip is beamed in where Sisko faces, the transporter's
+  strips and violet sparks round it for a second or two; walking onto it
+  he stoops to pick it up and has 40 shots.
+  - **A line's EVENT** is words apart by spaces: each is a tag to
+    trigger (the dialogue input's `DoEvent`), or with a `-` before it one
+    of the HUD's beam-downs (`DoSpecialEvent("BeamDownAmmo")`: the
+    script compares the whole word). Passed whole, nothing was beamed.
+  - **Which NEXTLINE answer**: of the lines the key matches whose
+    conditions hold and that are for whoever the player plays (`KEN`'s
+    "Stand by, Major" only for Kira), this mission's first, then another
+    mission's its conditions tie to the story, then the general ones,
+    then another mission's that only happen to fit. Before, M04's "I
+    can't get a signal lock" (`G04`, no condition) beat the general
+    "Stand by, Captain".
 - **A condition's arguments**: a number where a name parameter comes
   first leaves the name out: `LowAmmo( 0.2 )` is any weapon under a
   fifth (taking 0.2 for the weapon's name, it was never true).
@@ -858,8 +881,18 @@ known.
   and are let go when their `LifeSpan` runs out (none: they last). An actor with a copy list is drawn as its copies only (even none
   yet), unless it asks to be drawn as well (`bMultiMeshRenderInitial`).
   Each copy is drawn as the actor's mesh or sprite, in its place, with
-  its rotation, `DrawScale`, `AxisScale` (along its own axes),
-  `ScaleGlow`, style and texture.
+  its rotation, `DrawScale`, `AxisScale`, `ScaleGlow`, style and
+  texture. `AxisScale` goes along the mesh's axes before its
+  `RotOrigin` turns them, as a mesh's own Scale does: the transporter's
+  strips (`CTV_Quad`, 800 long in X and turned a quarter by RotOrigin)
+  are narrowed to a tenth of their length and grown upwards. An
+  imported mesh's turn into the game's axes comes before it: the
+  scripts scale their beams' sections along X as they're drawn.
+- **A mesh with no skin of its own** (no MultiSkins, Skin, or texture
+  in the mesh) takes the actor's `Texture`, as UE1 does: the
+  transporter's strips (`Texture = StripTexture`), impact flares.
+  Before, they were drawn plain white: big white slabs over a beam-down,
+  a white square where a rifle shot hit.
 - **Copies by physics mode** (`moveMultiMeshes`):
   - Placed by their own natives or scripts, only aged: arcs (`Spark`),
     beams (`BeamSustain`), the M4 rifle's gas cloud (`GasCloudM4`,
@@ -1501,7 +1534,10 @@ blended triangles, enough to see a frame), driven by steps:
 `watch <actor>` (the camera let loose in front of a live actor),
 `teleport <actor> <dx> <dy> <dz> <yaw>` (the player put by an actor,
 facing yaw degrees, falling), `where` (the player's place, velocity,
-state, physics and animation),
+state, physics and animation), `actor <name>` (a live actor's place,
+state, collision and look), `lines` (the dialogue lines said so far),
+`console <command>` (as the player types it: `set
+DS9_FederationPhaserRifleAmmo AmmoAmount 20`),
 `drag <dx> <dy>`, `click <x> <y>`, `shot <file.ppm>`. Checked that way:
 - **M01_KiraL2:** Kira runs down the stone corridor from behind, the
   camera swinging to her side, and turns into the wall with the camera
