@@ -47,6 +47,9 @@ Error readLevelActors(const Package& map, std::vector<int32_t>& out) {
 ScriptLevel::ScriptLevel(Vm& vm, const Package& map) : vm_(vm), map_(map) {
     vm_.level = this;
     registerEngineNatives(vm_);
+    reseedEffectRandom();
+    reseedEffectPhysicsRandom();
+    reseedCoreRandom();
 }
 
 ScriptLevel::~ScriptLevel() {
@@ -72,6 +75,16 @@ Error ScriptLevel::load() {
         b.prePivot = m.prePivot;
         b.mainScale = m.mainScale;
         b.postScale = m.postScale;
+        float scale = 1;
+        for (size_t k = 0; k < 3; ++k)
+            scale = std::max(scale, std::fabs(m.mainScale[k]) * std::max({std::fabs(m.postScale[0]),
+                                                                          std::fabs(m.postScale[1]),
+                                                                          std::fabs(m.postScale[2])}));
+        for (const Poly& p : m.polys)
+            for (const Vec3f& v : p.vertices) {
+                const float dx = v[0] - m.prePivot[0], dy = v[1] - m.prePivot[1], dz = v[2] - m.prePivot[2];
+                b.radius = std::max(b.radius, std::sqrt(dx * dx + dy * dy + dz * dz) * scale);
+            }
         for (size_t i = 0; i < map_.exports().size(); ++i)
             if (map_.path(int32_t(i) + 1) == m.name) {
                 brushes_[int(i)] = b;
@@ -698,6 +711,8 @@ void registerEngineNatives(Vm& vm) {
             if (c.given.size() > k && c.given[k])
                 if (Value* v = c.self->find(c.vm, names[k]))
                     v->i = c.b(k);
+        if (c.vm.level)
+            c.vm.level->collisionChanged();
     });
     reg("Actor.SetCollisionSize", [=](NativeCall& c) {
         if (c.self) {

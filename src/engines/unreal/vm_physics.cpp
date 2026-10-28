@@ -202,6 +202,22 @@ const std::vector<std::pair<VmObject*, const ScriptLevel::CollideSlots*>>& Scrip
     return colliders_;
 }
 
+const std::vector<std::pair<VmObject*, const ScriptLevel::CollideSlots*>>& ScriptLevel::collidingActors() {
+    const auto& all = colliders();
+    if (collidingDirty_ || collidingTick_ != ticks_ + 1 || collidingCount_ != all.size()) {
+        colliding_.clear();
+        for (const auto& c : all) {
+            const int slot = c.second->collideActors;
+            if (slot >= 0 && size_t(slot) < c.first->values.size() && c.first->values[size_t(slot)].asBool())
+                colliding_.push_back(c);
+        }
+        collidingTick_ = ticks_ + 1;
+        collidingCount_ = all.size();
+        collidingDirty_ = false;
+    }
+    return colliding_;
+}
+
 namespace {
 // A value by its slot (none for -1).
 Value* slotOf(VmObject* a, int slot) {
@@ -226,8 +242,9 @@ bool ScriptLevel::clear(const Vec& point, const Vec& extent, VmObject* self) {
     // Movers that block it count too.
     for (VmObject* m : movers_)
         if (m != self && !m->deleted && boolOf(prop(m, "bCollideActors")) &&
-            (boolOf(prop(m, "bBlockActors")) || boolOf(prop(m, "bBlockPlayers"))) && moverOverlaps(m, point, extent))
+            (boolOf(prop(m, "bBlockActors")) || boolOf(prop(m, "bBlockPlayers"))) && moverOverlaps(m, point, extent)) {
             return false;
+        }
     return true;
 }
 
@@ -237,7 +254,7 @@ bool ScriptLevel::place(VmObject* a, const Vec& point) {
         return false;
     const Vec e = extentOf(a);
     if (!boolOf(prop(a, "bCollideWorld")) || clear(point, e, a)) {
-        *loc = vm_.vectorValue(point[0], point[1], point[2]);
+        vm_.setVector(*loc, point[0], point[1], point[2]);
         updateRegion(a);
         return true;
     }
@@ -250,7 +267,7 @@ bool ScriptLevel::place(VmObject* a, const Vec& point) {
         for (const Vec& t : tries) {
             const Vec at = add(point, t);
             if (clear(at, e, a)) {
-                *loc = vm_.vectorValue(at[0], at[1], at[2]);
+                vm_.setVector(*loc, at[0], at[1], at[2]);
                 updateRegion(a);
                 return true;
             }
@@ -277,7 +294,7 @@ bool ScriptLevel::resize(VmObject* a, float r, float h, bool alignToFloor, bool 
     *hv = Value::floatValue(h);
     collidersTick_ = -1;
     if (!boolOf(prop(a, "bCollideWorld")) || clear(at, {r, r, h}, a)) {
-        *loc = vm_.vectorValue(at[0], at[1], at[2]);
+        vm_.setVector(*loc, at[0], at[1], at[2]);
         updateRegion(a);
         return true;
     }
@@ -310,7 +327,7 @@ bool ScriptLevel::pickWallAdjust(VmObject* pawn) {
         Vec where{}, n{};
         if (trace(pawn, from, aside, e, false, where, n) || trace(pawn, aside, beyond, e, false, where, n))
             continue;
-        *dest = vm_.vectorValue(aside[0], aside[1], aside[2]);
+        vm_.setVector(*dest, aside[0], aside[1], aside[2]);
         return true;
     }
     return false;
@@ -389,7 +406,27 @@ bool ScriptLevel::moverSpace(VmObject* m, MoverSpace& space) {
     return true;
 }
 
+// Whether a box swept from `start` by `delta` comes within reach of a
+// mover's brush at all (its bounding sphere): most traces pass far from
+// most movers, and placing them in its space is the costly part. It also
+// keeps a flat brush's BSP (a force field: one plane, solid all the way
+// behind it) from blocking things across the level: CM04_Lab's refused
+// 301 placings 2000 units from one.
+bool ScriptLevel::moverNear(VmObject* m, const Vec& start, const Vec& delta, const Vec& e) {
+    auto it = m->package == &map_ ? brushes_.find(m->exportIndex) : brushes_.end();
+    if (it == brushes_.end() || it->second.radius <= 0)
+        return true;
+    const Vec c = vecOf(prop(m, "Location"));
+    const float len2 = dot(delta, delta);
+    float t = len2 > 0 ? std::clamp(dot(sub(c, start), delta) / len2, 0.0f, 1.0f) : 0;
+    const Vec nearest = add(start, mul(delta, t));
+    const float reach = it->second.radius + length(e) + 1;
+    return dot(sub(c, nearest), sub(c, nearest)) <= reach * reach;
+}
+
 bool ScriptLevel::moverHit(VmObject* m, const Vec& start, const Vec& delta, const Vec& e, float& time, Vec& normal) {
+    if (!moverNear(m, start, delta, e))
+        return false;
     MoverSpace sp;
     if (!moverSpace(m, sp)) {
         Vec bmin, bmax;
@@ -406,6 +443,8 @@ bool ScriptLevel::moverHit(VmObject* m, const Vec& start, const Vec& delta, cons
 }
 
 bool ScriptLevel::moverOverlaps(VmObject* m, const Vec& centre, const Vec& e) {
+    if (!moverNear(m, centre, {0, 0, 0}, e))
+        return false;
     MoverSpace sp;
     if (!moverSpace(m, sp)) {
         Vec bmin, bmax;
@@ -417,6 +456,11 @@ bool ScriptLevel::moverOverlaps(VmObject* m, const Vec& centre, const Vec& e) {
         return true;
     }
     const Vec c = sp.local(centre, true), le = sp.extent(e);
+    // Within its brush's box first: a flat brush (a force field's sheet)
+    // makes a BSP of one plane, solid all the way behind it.
+    for (size_t k = 0; k < 3; ++k)
+        if (c[k] + le[k] < sp.b->min[k] - 1 || c[k] - le[k] > sp.b->max[k] + 1)
+            return false;
     return sp.b->collision->solid(Vec3f{c[0], c[1], c[2]}, Vec3f{le[0], le[1], le[2]});
 }
 
@@ -467,7 +511,7 @@ ScriptLevel::MoveHit ScriptLevel::moveActor(VmObject* a, const Vec& delta) {
         const bool blocks = boolOf(prop(a, "bBlockActors")), blocksPlayers = boolOf(prop(a, "bBlockPlayers"));
         Value* ownerValue = prop(a, "Owner");
         VmObject* owner = ownerValue ? ownerValue->asObject() : nullptr;
-        for (const auto& [o, slots] : colliders()) {
+        for (const auto& [o, slots] : collidingActors()) {
             if (o == a || o->deleted || o == owner)
                 continue;
             const CollideSlots& cs = *slots;
@@ -503,7 +547,7 @@ ScriptLevel::MoveHit ScriptLevel::moveActor(VmObject* a, const Vec& delta) {
             ++movement.blockedByActors;
     }
     const Vec end = add(start, mul(delta, time));
-    *locValue = vm_.vectorValue(end[0], end[1], end[2]);
+    vm_.setVector(*locValue, end[0], end[1], end[2]);
     out.time = time;
     out.normal = n;
     out.actor = by;
@@ -572,7 +616,7 @@ void ScriptLevel::updateTouching(VmObject* a) {
     const float r = floatOf(prop(a, "CollisionRadius")), h = floatOf(prop(a, "CollisionHeight"));
     std::vector<VmObject*>& now = touching_[a];
     std::vector<VmObject*> touching;
-    for (const auto& [o, slots] : colliders()) {
+    for (const auto& [o, slots] : collidingActors()) {
         if (o == a || o->deleted)
             continue;
         const CollideSlots& cs = *slots;
@@ -709,25 +753,31 @@ VmObject* ScriptLevel::trace(VmObject* self, const Vec& start, const Vec& end, c
     // Movers count as the world; other actors only if asked.
     {
         const Vec d = sub(end, start);
-        for (VmObject* o : actors ? actors_ : movers_) {
-            if (o == self || o->deleted || !boolOf(prop(o, "bCollideActors")))
-                continue;
-            if (!boolOf(prop(o, "bBlockActors")) && !boolOf(prop(o, "bProjTarget")) && !boolOf(prop(o, "bBlockPlayers")))
-                continue;
-            const bool mover = vm_.isA(o, "Mover");
-            if (!actors && !mover)
-                continue;
+        auto check = [&](VmObject* o, const CollideSlots& cs) {
+            if (o == self || o->deleted || !boolOf(slotOf(o, cs.collideActors)))
+                return;
+            if (!boolOf(slotOf(o, cs.blockActors)) && !boolOf(prop(o, "bProjTarget")) &&
+                !boolOf(slotOf(o, cs.blockPlayers)))
+                return;
+            if (!actors && !cs.mover)
+                return;
             float t = 1;
             Vec on{};
-            const bool hit = mover ? moverHit(o, start, d, extent, t, on)
-                                   : cylinderHit(start, d, extent[0], extent[2], vecOf(prop(o, "Location")),
-                                               floatOf(prop(o, "CollisionRadius")), floatOf(prop(o, "CollisionHeight")), t, on);
+            const bool hit = cs.mover ? moverHit(o, start, d, extent, t, on)
+                                      : cylinderHit(start, d, extent[0], extent[2], vecOf(slotOf(o, cs.location)),
+                                                    floatOf(slotOf(o, cs.radius)), floatOf(slotOf(o, cs.height)), t, on);
             if (hit && t < time) {
                 time = t;
                 n = on;
                 by = o;
             }
-        }
+        };
+        if (actors)
+            for (const auto& [o, cs] : collidingActors())
+                check(o, *cs);
+        else
+            for (VmObject* o : movers_)
+                check(o, collideSlots(o));
     }
     hitLocation = add(start, mul(sub(end, start), time));
     hitNormal = n;
@@ -807,7 +857,7 @@ void ScriptLevel::steer(VmObject* a, float dt) {
     Goal& g = it->second;
     auto finish = [&] {
         if (Value* acc = prop(a, "Acceleration"))
-            *acc = vm_.vectorValue(0, 0, 0);
+            vm_.setVector(*acc, 0, 0, 0);
         if (a->latent && a->stateSerial == g.stateSerial)
             a->sleeping = 0; // the latent call ends: its code carries on next tick
         goals_.erase(it);
@@ -860,7 +910,7 @@ void ScriptLevel::steer(VmObject* a, float dt) {
         const float rate = floatOf(prop(a, "AccelRate"), 500);
         if (Value* acc = prop(a, "Acceleration")) {
             const Vec d = mul(normalOf(to), rate);
-            *acc = vm_.vectorValue(d[0], d[1], d[2]);
+            vm_.setVector(*acc, d[0], d[1], d[2]);
         }
         if (Value* d = prop(a, "DesiredRotation")) {
             auto want = Vm::rotatorOf(*d);
@@ -869,7 +919,7 @@ void ScriptLevel::steer(VmObject* a, float dt) {
                 const Vec focus = g.focusActor && !g.focusActor->deleted ? vecOf(prop(g.focusActor, "Location")) : g.focus;
                 faces = sub(focus, here);
                 if (Value* f = prop(a, "Focus"))
-                    *f = vm_.vectorValue(focus[0], focus[1], focus[2]);
+                    vm_.setVector(*f, focus[0], focus[1], focus[2]);
             }
             *d = vm_.rotatorValue(want[0], yawOf(faces), want[2]);
         }
@@ -945,7 +995,7 @@ void ScriptLevel::physics(VmObject* a, float dt) {
             accel = mul(normalOf(accel), accelRate);
         v[2] = 0;
         steerVelocity(groundFriction, floatOf(prop(a, "GroundSpeed"), 320));
-        *velocityValue = vm_.vectorValue(v[0], v[1], v[2]);
+        vm_.setVector(*velocityValue, v[0], v[1], v[2]);
         if (length(v) > 0.01f)
             moveSmooth(a, mul(v, dt));
         if (a->deleted)
@@ -986,7 +1036,7 @@ void ScriptLevel::physics(VmObject* a, float dt) {
         v = add(v, mul(add(gravity, mul(accel, airControl)), dt));
         if (length(v) > terminal)
             v = mul(normalOf(v), terminal);
-        *velocityValue = vm_.vectorValue(v[0], v[1], v[2]);
+        vm_.setVector(*velocityValue, v[0], v[1], v[2]);
         // Down until something stops it; off a wall or slope too steep to
         // stand on, the rest of the move slides along it (and may land).
         Vec delta = mul(v, dt);
@@ -996,7 +1046,7 @@ void ScriptLevel::physics(VmObject* a, float dt) {
             if (a->deleted || physicsValue->asInt() != kPhysFalling)
                 break;
             const Vec along = sub(v, mul(h.normal, dot(v, h.normal)));
-            *velocityValue = vm_.vectorValue(along[0], along[1], along[2]);
+            vm_.setVector(*velocityValue, along[0], along[1], along[2]);
             delta = mul(sub(delta, mul(h.normal, dot(delta, h.normal))), 1 - h.time);
             h = length(delta) > 1e-3f ? moveActor(a, delta) : MoveHit{};
         }
@@ -1013,7 +1063,7 @@ void ScriptLevel::physics(VmObject* a, float dt) {
                 landed[2] = 0;
                 if (!vm_.isA(a, "Pawn"))
                     landed = {0, 0, 0};
-                *velocityValue = vm_.vectorValue(landed[0], landed[1], landed[2]);
+                vm_.setVector(*velocityValue, landed[0], landed[1], landed[2]);
             }
             if (Value* base = prop(a, "Base"))
                 base->o = h.actor;
@@ -1021,7 +1071,7 @@ void ScriptLevel::physics(VmObject* a, float dt) {
             // Wedged between two walls: only the fall along both is left.
             Vec now = vecOf(velocityValue);
             now = sub(now, mul(h.normal, std::min(0.0f, dot(now, h.normal))));
-            *velocityValue = vm_.vectorValue(now[0], now[1], now[2]);
+            vm_.setVector(*velocityValue, now[0], now[1], now[2]);
         }
         break;
     }
@@ -1033,7 +1083,7 @@ void ScriptLevel::physics(VmObject* a, float dt) {
             const float mass = std::max(1.0f, floatOf(prop(a, "Mass"), 100));
             v = add(v, mul(gravity, dt * (1 - floatOf(prop(a, "Buoyancy")) / mass)));
         }
-        *velocityValue = vm_.vectorValue(v[0], v[1], v[2]);
+        vm_.setVector(*velocityValue, v[0], v[1], v[2]);
         moveSmooth(a, mul(v, dt));
         if (swim && !a->deleted) {
             Value* r = prop(a, "Region");
@@ -1047,7 +1097,7 @@ void ScriptLevel::physics(VmObject* a, float dt) {
     }
     case kPhysProjectile: {
         v = add(v, mul(accel, dt));
-        *velocityValue = vm_.vectorValue(v[0], v[1], v[2]);
+        vm_.setVector(*velocityValue, v[0], v[1], v[2]);
         const MoveHit h = moveActor(a, mul(v, dt));
         if (h.hit() && !a->deleted && h.actor == levelInfo_)
             vm_.callEvent(a, "HitWall", {vm_.vectorValue(h.normal[0], h.normal[1], h.normal[2]), Value::objectValue(levelInfo_)});

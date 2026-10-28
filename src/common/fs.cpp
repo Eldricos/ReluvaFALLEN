@@ -13,8 +13,9 @@ namespace reluva::fs {
 
 std::string toLower(std::string_view s) {
     std::string out(s);
-    std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    for (char& c : out) // ASCII, as tolower in the C locale
+        if (c >= 'A' && c <= 'Z')
+            c = char(c + ('a' - 'A'));
     return out;
 }
 

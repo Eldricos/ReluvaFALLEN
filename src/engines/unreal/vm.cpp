@@ -129,12 +129,16 @@ Value VmProperty::zero() const {
 }
 
 VmProperty* VmStruct::findProperty(NameId name) const {
-    // The most derived first: a subclass can declare a property of the
+    // The most derived wins: a subclass can declare a property of the
     // same name again (The Fallen redeclares SoundVolume and others).
-    for (auto it = properties.rbegin(); it != properties.rend(); ++it)
-        if ((*it)->nameId == name)
-            return *it;
-    return nullptr;
+    if (indexed_ != properties.size()) {
+        byName_.clear();
+        for (VmProperty* p : properties)
+            byName_[p->nameId] = p;
+        indexed_ = properties.size();
+    }
+    auto it = byName_.find(name);
+    return it != byName_.end() ? it->second : nullptr;
 }
 
 bool VmClass::isA(const VmClass* other) const {
@@ -166,10 +170,24 @@ Vm::Vm(const PackageSet& packages) : packages_(packages) {
 Vm::~Vm() = default;
 
 NameId Vm::name(std::string_view text) {
-    std::string key = lower(text);
-    auto it = nameIds_.find(key);
+    // Lower-cased on the stack: names are looked up many times a tick.
+    char buffer[128];
+    std::string key;
+    std::string_view lowered;
+    if (text.size() <= sizeof buffer) {
+        for (size_t i = 0; i < text.size(); ++i) {
+            const char c = text[i];
+            buffer[i] = c >= 'A' && c <= 'Z' ? char(c + ('a' - 'A')) : c;
+        }
+        lowered = std::string_view(buffer, text.size());
+    } else {
+        key = lower(text);
+        lowered = key;
+    }
+    auto it = nameIds_.find(lowered);
     if (it != nameIds_.end())
         return it->second;
+    key = std::string(lowered);
     const NameId id = NameId(names_.size());
     names_.emplace_back(text);
     nameIds_.emplace(std::move(key), id);
@@ -962,15 +980,29 @@ const VmStruct* Vm::coreStruct(std::string_view structName) {
 Value Vm::vectorValue(float x, float y, float z) {
     Value v;
     v.type = VType::Struct;
-    v.st = coreStruct("Vector");
+    if (!vectorStruct_)
+        vectorStruct_ = coreStruct("Vector");
+    v.st = vectorStruct_;
     v.fields = {Value::floatValue(x), Value::floatValue(y), Value::floatValue(z)};
     return v;
+}
+
+void Vm::setVector(Value& v, float x, float y, float z) {
+    if (!vectorStruct_)
+        vectorStruct_ = coreStruct("Vector");
+    if (v.type == VType::Struct && v.st == vectorStruct_ && v.fields.size() == 3) {
+        v.fields[0].f = x, v.fields[1].f = y, v.fields[2].f = z;
+        return;
+    }
+    v = vectorValue(x, y, z);
 }
 
 Value Vm::rotatorValue(int32_t pitch, int32_t yaw, int32_t roll) {
     Value v;
     v.type = VType::Struct;
-    v.st = coreStruct("Rotator");
+    if (!rotatorStruct_)
+        rotatorStruct_ = coreStruct("Rotator");
+    v.st = rotatorStruct_;
     v.fields = {Value::intValue(pitch), Value::intValue(yaw), Value::intValue(roll)};
     return v;
 }
@@ -1043,6 +1075,7 @@ VmClass* Vm::intrinsic(std::string_view className) {
 
 void Vm::registerNative(std::string_view qualifiedName, NativeFn fn) {
     natives_[lower(qualifiedName)] = std::move(fn);
+    ++nativeGeneration_;
 }
 
 // --- The interpreter -----------------------------------------------------------------------
@@ -1066,7 +1099,9 @@ public:
         Value result;
         std::vector<Iteration> iterations;
         Value switchValue;
-        std::deque<Value> temps; // values that aren't variables, for references to them
+        // Values that aren't variables, for references to them; made when
+        // first needed (most frames have none).
+        std::unique_ptr<std::deque<Value>> temps;
         uint64_t statements = 0;
     };
     enum class Flow { Return, Stop, Wait, Restart };
@@ -1089,7 +1124,8 @@ public:
                 return Flow::Return;
             }
             ++vm_.stats.statements;
-            f.temps.clear();
+            if (f.temps)
+                f.temps->clear();
             const int si = code.statements[size_t(pc)];
             if (si < 0)
                 return Flow::Return;
@@ -1389,11 +1425,19 @@ public:
                             where(f));
             return Value();
         }
+        if (fn->logicOp < 0) {
+            fn->logicOp = fn->qualified == "Object.AndAnd_BoolBool" ? 1 : fn->qualified == "Object.OrOr_BoolBool" ? 2 : 0;
+            fn->hasOut = std::any_of(fn->params.begin(), fn->params.end(),
+                                     [](const VmProperty* p) { return p->flags & propflag::OutParm; });
+        }
         std::vector<Value> args(fn->params.size());
-        std::vector<Value*> outs(fn->params.size(), nullptr);
+        static const std::vector<Value*> noOuts;
+        std::vector<Value*> outs;
+        if (fn->hasOut)
+            outs.assign(fn->params.size(), nullptr);
         std::vector<bool> given(fn->params.size(), false);
         // && and || leave their right side unevaluated when the left decides.
-        const bool andOp = fn->qualified == "Object.AndAnd_BoolBool", orOp = fn->qualified == "Object.OrOr_BoolBool";
+        const bool andOp = fn->logicOp == 1, orOp = fn->logicOp == 2;
         for (size_t k = 0; k < fn->params.size(); ++k) {
             const int a = k < x.args.size() ? x.args[k] : -1;
             const VmProperty& p = *fn->params[k];
@@ -1416,7 +1460,7 @@ public:
                 args[k] = vm_.convert(eval(f, a, f.self), p);
             }
         }
-        return invoke(fn, target, std::move(args), outs, given, nullptr);
+        return invoke(fn, target, std::move(args), fn->hasOut ? outs : noOuts, std::move(given), nullptr);
     }
 
     Value invoke(VmFunction* fn, VmObject* self, std::vector<Value> args, const std::vector<Value*>& outs,
@@ -1431,8 +1475,12 @@ public:
         Value result = fn->returnValue ? fn->returnValue->zero() : Value();
         if (fn->flags & funcflag::Native) {
             ++vm_.stats.nativeCalls;
-            auto it = vm_.natives_.find(lower(fn->qualified));
-            if (it == vm_.natives_.end()) {
+            if (fn->nativeGeneration != vm_.nativeGeneration_) {
+                auto it = vm_.natives_.find(lower(fn->qualified));
+                fn->nativeFn = it != vm_.natives_.end() ? &it->second : nullptr;
+                fn->nativeGeneration = vm_.nativeGeneration_;
+            }
+            if (!fn->nativeFn) {
                 ++vm_.stats.missingNatives[fn->qualified];
                 // A latent one still waits a tick, so state code that
                 // loops round it doesn't spin.
@@ -1440,9 +1488,9 @@ public:
                     vm_.pendingLatent_ = 0;
                 return result;
             }
-            NativeCall c{vm_, self, fn, std::move(args), std::move(given), result, -1, {}};
+            NativeCall c{vm_, self, fn, std::move(args), std::move(given), result, -1, {}, {}};
             ++vm_.depth_;
-            it->second(c);
+            (*fn->nativeFn)(c);
             --vm_.depth_;
             for (size_t k = 0; k < outs.size() && k < c.args.size(); ++k)
                 if (outs[k])
@@ -1576,8 +1624,10 @@ private:
 
     int arg(const Expr& x, size_t k) const { return k < x.args.size() ? x.args[k] : -1; }
     Value* temp(Frame& f, Value v) {
-        f.temps.push_back(std::move(v));
-        return &f.temps.back();
+        if (!f.temps)
+            f.temps = std::make_unique<std::deque<Value>>();
+        f.temps->push_back(std::move(v));
+        return &f.temps->back();
     }
     int at(Frame& f, uint32_t offset) {
         auto it = f.owner->statementAt.find(offset);

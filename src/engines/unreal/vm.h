@@ -36,6 +36,8 @@ class Vm;
 struct VmClass;
 struct VmFunction;
 struct VmObject;
+struct NativeCall;
+using NativeFn = std::function<void(NativeCall&)>;
 struct VmState;
 struct VmStruct;
 
@@ -52,6 +54,32 @@ struct Value {
     std::string s;         // String
     const VmStruct* st = nullptr; // Struct: which
     std::vector<Value> fields;    // Struct: one per field slot
+
+    Value() = default;
+    // Copied, the string and fields only if there are any: values are
+    // copied all the time, and most are numbers.
+    Value(const Value& v) : type(v.type), i(v.i), f(v.f), o(v.o), st(v.st) {
+        if (!v.s.empty())
+            s = v.s;
+        if (!v.fields.empty())
+            fields = v.fields;
+    }
+    Value& operator=(const Value& v) {
+        if (this == &v)
+            return *this;
+        type = v.type, i = v.i, f = v.f, o = v.o, st = v.st;
+        if (v.s.empty())
+            s.clear();
+        else
+            s = v.s;
+        if (v.fields.empty())
+            fields.clear();
+        else
+            fields = v.fields;
+        return *this;
+    }
+    Value(Value&&) noexcept = default;
+    Value& operator=(Value&&) noexcept = default;
 
     static Value byteValue(int v);
     static Value intValue(int32_t v);
@@ -102,6 +130,12 @@ struct VmStruct {
 
     virtual ~VmStruct() = default;
     VmProperty* findProperty(NameId name) const;
+
+private:
+    // findProperty's index by name, the most derived of each; built again
+    // when properties are added.
+    mutable std::unordered_map<NameId, VmProperty*> byName_;
+    mutable size_t indexed_ = 0;
 };
 
 struct VmFunction : VmStruct {
@@ -112,6 +146,14 @@ struct VmFunction : VmStruct {
     std::vector<VmProperty*> params;
     VmProperty* returnValue = nullptr;
     std::string qualified; // "Class.Name", for natives and messages
+    // Its native's code, found once (again if natives are registered
+    // after: the VM's nativeGeneration_).
+    mutable const NativeFn* nativeFn = nullptr;
+    mutable int nativeGeneration = -1;
+    // Found once: whether it's && or || (their right side may be left
+    // unevaluated: 1 and, 2 or, 0 neither) and has out parameters.
+    mutable int8_t logicOp = -1;
+    mutable bool hasOut = false;
 };
 
 struct VmState : VmStruct {
@@ -174,8 +216,6 @@ struct NativeCall {
     const std::string& s(size_t k) const;
     VmObject* o(size_t k) const { return k < args.size() ? args[k].asObject() : nullptr; }
 };
-using NativeFn = std::function<void(NativeCall&)>;
-
 class Vm {
 public:
     explicit Vm(const PackageSet& packages);
@@ -238,6 +278,8 @@ public:
     // Core's structs, and values of them.
     const VmStruct* coreStruct(std::string_view name);
     Value vectorValue(float x, float y, float z);
+    // A vector value set in place (no new value made, if it's a vector).
+    void setVector(Value& v, float x, float y, float z);
     Value rotatorValue(int32_t pitch, int32_t yaw, int32_t roll);
     static std::array<float, 3> vectorOf(const Value& v);
     static std::array<int32_t, 3> rotatorOf(const Value& v);
@@ -307,7 +349,12 @@ private:
 
     const PackageSet& packages_;
     std::vector<std::string> names_;
-    std::unordered_map<std::string, NameId> nameIds_;
+    // By lower-case text, looked up by a string_view without a copy.
+    struct NameHash {
+        using is_transparent = void;
+        size_t operator()(std::string_view s) const { return std::hash<std::string_view>{}(s); }
+    };
+    std::unordered_map<std::string, NameId, NameHash, std::equal_to<>> nameIds_;
     std::map<std::pair<const Package*, int>, std::unique_ptr<VmStruct>> structs_;
     using IniFile = std::map<std::string, std::map<std::string, std::string>>; // section, key (lower case): value
     std::map<std::string, IniFile> iniFiles_;
@@ -320,6 +367,9 @@ private:
     std::vector<std::unique_ptr<VmObject>> objects_;
 
     std::map<std::string, NativeFn> natives_;
+    int nativeGeneration_ = 0;
+    const VmStruct* vectorStruct_ = nullptr;
+    const VmStruct* rotatorStruct_ = nullptr;
     int depth_ = 0;
 };
 

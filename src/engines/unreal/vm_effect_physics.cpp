@@ -88,6 +88,9 @@ int32_t units(float radians) { return int32_t(std::lround(radians * 32768 / kPi)
 
 } // namespace
 
+// Each level starts the same, whatever ran before it (ue-run -all).
+void reseedEffectPhysicsRandom() { random().seed(24680); }
+
 // --- An effect's copies ---------------------------------------------------------------------
 
 // A copy's field, read and written.
@@ -105,7 +108,7 @@ void ScriptLevel::setCopyFloat(VmObject* mm, const char* name, float v) {
 }
 void ScriptLevel::setCopyVec(VmObject* mm, const char* name, const Vec& v) {
     if (Value* p = prop(mm, name))
-        *p = vm_.vectorValue(v[0], v[1], v[2]);
+        vm_.setVector(*p, v[0], v[1], v[2]);
 }
 
 // How much of a copy's life is gone (0-1): its LifeSpan against what it
@@ -134,11 +137,11 @@ bool ScriptLevel::stepCopy(VmObject* mm, float dt, bool accelerate, bool move, c
             a = add(a, copyVec(mm, "Acceleration"));
         if (a[0] != 0 || a[1] != 0 || a[2] != 0) {
             v = add(v, mul(a, dt));
-            *vel = vm_.vectorValue(v[0], v[1], v[2]);
+            vm_.setVector(*vel, v[0], v[1], v[2]);
         }
         if (move && (v[0] != 0 || v[1] != 0 || v[2] != 0)) {
             const Vec l = add(Vm::vectorOf(*loc), mul(v, dt));
-            *loc = vm_.vectorValue(l[0], l[1], l[2]);
+            vm_.setVector(*loc, l[0], l[1], l[2]);
         }
     }
     return ageCopy(mm, dt);
@@ -400,7 +403,7 @@ void ScriptLevel::moveMultiMeshes(VmObject* actor, float dt) {
                     *e = Value::boolValue(true);
                 if (Value* e = prop(owner, "MMEventLocation")) {
                     const Vec l = vec(mm, "Location");
-                    *e = vm_.vectorValue(l[0], l[1], surface);
+                    vm_.setVector(*e, l[0], l[1], surface);
                 }
                 copyStarts_.erase(mm);
                 vm_.callEvent(mm, "Delete");
@@ -494,7 +497,7 @@ void ScriptLevel::fallenPhysics(VmObject* a, int physics, float dt) {
         const Value* prePivot = prop(a, "bTrailerPrePivot");
         if (prePivot && prePivot->asBool())
             to = add(to, prop(a, "PrePivot") ? Vm::vectorOf(*prop(a, "PrePivot")) : Vec{});
-        *loc = vm_.vectorValue(to[0], to[1], to[2]);
+        vm_.setVector(*loc, to[0], to[1], to[2]);
         updateRegion(a);
         const Value* same = prop(a, "bTrailerSameRotation");
         if (same && same->asBool())
@@ -523,7 +526,7 @@ void ScriptLevel::fallenPhysics(VmObject* a, int physics, float dt) {
         if (const Value* mm = prop(a, "MultiMesh"); mm && mm->asObject())
             return;
         v = add(v, mul(accel, dt));
-        *velocityValue = vm_.vectorValue(v[0], v[1], v[2]);
+        vm_.setVector(*velocityValue, v[0], v[1], v[2]);
         if (length(v) < 1e-3f)
             return;
         const MoveHit h = moveActor(a, mul(v, dt));
@@ -543,7 +546,7 @@ void ScriptLevel::fallenPhysics(VmObject* a, int physics, float dt) {
         const float most = f("AirSpeed", 0);
         if (most > 0 && length(v) > most)
             v = mul(normal(v), most);
-        *velocityValue = vm_.vectorValue(v[0], v[1], v[2]);
+        vm_.setVector(*velocityValue, v[0], v[1], v[2]);
         if (length(v) > 1e-3f)
             hitWall(moveSmooth(a, mul(v, dt)));
         return;
@@ -557,7 +560,7 @@ void ScriptLevel::fallenPhysics(VmObject* a, int physics, float dt) {
         v = add(mul(v, std::max(0.0f, 1 - dt)), mul(push, dt));
         if (length(v) > most)
             v = mul(normal(v), most);
-        *velocityValue = vm_.vectorValue(v[0], v[1], v[2]);
+        vm_.setVector(*velocityValue, v[0], v[1], v[2]);
         if (length(v) < 1e-3f)
             return;
         hitWall(moveSmooth(a, mul(v, dt)));
@@ -574,10 +577,10 @@ void ScriptLevel::fallenPhysics(VmObject* a, int physics, float dt) {
         // An explosion's trail flies by its velocity and acceleration,
         // through everything.
         v = add(v, mul(accel, dt));
-        *velocityValue = vm_.vectorValue(v[0], v[1], v[2]);
+        vm_.setVector(*velocityValue, v[0], v[1], v[2]);
         {
             const Vec l = add(Vm::vectorOf(*loc), mul(v, dt));
-            *loc = vm_.vectorValue(l[0], l[1], l[2]);
+            vm_.setVector(*loc, l[0], l[1], l[2]);
             updateRegion(a);
         }
         return;
@@ -640,7 +643,7 @@ void ScriptLevel::interpolate(VmObject* a, float dt) {
     if (toLoc)
         at = add(at, mul(sub(Vm::vectorOf(*toLoc), at), t));
     if (Value* l = prop(a, "Location")) {
-        *l = vm_.vectorValue(at[0], at[1], at[2]);
+        vm_.setVector(*l, at[0], at[1], at[2]);
         updateRegion(a);
     }
     const Value* fromRot = prop(from, "Rotation");

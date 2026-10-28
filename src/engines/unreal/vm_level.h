@@ -465,6 +465,9 @@ public:
         float ledge = 0, reach = 0, seconds = 0, startFrame = -1, lastFrame = 0, done = 0;
         std::array<float, 3> to(float height) const;
     };
+    // A script changed an actor's collision (SetCollision): the list of
+    // those that collide is made again.
+    void collisionChanged() { collidingDirty_ = true; }
     // One actor's tick on its own (ScriptTick: the HUD's portrait, kept
     // going while the game's paused): its scripts and its animation.
     void tickActor(VmObject* actor, float seconds);
@@ -490,6 +493,7 @@ private:
     struct BrushBox {
         std::array<float, 3> min{}, max{}; // in the brush's own coordinates
         std::array<float, 3> prePivot{}, mainScale{1, 1, 1}, postScale{1, 1, 1};
+        float radius = 0; // how far its brush reaches from where the mover is, however it's turned
         std::shared_ptr<Model> model; // its own BSP, if it has one
         std::shared_ptr<LevelCollision> collision;
     };
@@ -498,6 +502,8 @@ private:
     // BSP if it has one, else its box.
     struct MoverSpace;
     bool moverSpace(VmObject* mover, MoverSpace& space);
+    bool moverNear(VmObject* mover, const std::array<float, 3>& start, const std::array<float, 3>& delta,
+                   const std::array<float, 3>& extent);
     bool moverOverlaps(VmObject* mover, const std::array<float, 3>& centre, const std::array<float, 3>& extent);
     bool moverHit(VmObject* mover, const std::array<float, 3>& start, const std::array<float, 3>& delta,
                   const std::array<float, 3>& extent, float& time, std::array<float, 3>& normal);
@@ -525,6 +531,7 @@ private:
         }
     };
     std::unordered_map<SlotKey, int, SlotHash> slots_;
+
 public:
     struct CollideSlots {
         int location = -1, radius = -1, height = -1, collideActors = -1, blockActors = -1, blockPlayers = -1,
@@ -535,8 +542,16 @@ private:
     const CollideSlots& collideSlots(VmObject* a);
     std::unordered_map<const VmClass*, CollideSlots> collideSlots_;
     const std::vector<std::pair<VmObject*, const CollideSlots*>>& colliders();
+    // Of those, the ones that collide with actors (bCollideActors) as the
+    // tick began, with any spawned since and any whose collision a script
+    // changed (SetCollision): the moves' loops go through only these.
+    const std::vector<std::pair<VmObject*, const CollideSlots*>>& collidingActors();
     std::vector<std::pair<VmObject*, const CollideSlots*>> colliders_;
     int collidersTick_ = -1;
+    std::vector<std::pair<VmObject*, const CollideSlots*>> colliding_;
+    int collidingTick_ = -1;
+    size_t collidingCount_ = 0;
+    bool collidingDirty_ = true;
     size_t collidersCount_ = 0;
     std::map<VmObject*, std::vector<VmObject*>> touching_;
     std::map<VmObject*, Goal> goals_;
@@ -744,6 +759,10 @@ void registerSaveNatives(Vm& vm);
 void registerSoundNatives(Vm& vm);
 // The Fallen's effects: arcs, beams, decals (vm_effects.cpp).
 void registerEffectNatives(Vm& vm);
+// Their random numbers started again, as each level starts (and Core's).
+void reseedEffectRandom();
+void reseedEffectPhysicsRandom();
+void reseedCoreRandom();
 // A map's reach list as stored (object references, not yet actors).
 struct RawReachSpec {
     int distance = 0, start = 0, end = 0, radius = 0, height = 0, flags = 0;

@@ -50,6 +50,9 @@ std::array<int32_t, 3> rotatorOf(const Vec& d) {
 
 } // namespace
 
+// Each level starts the same, whatever ran before it (ue-run -all).
+void reseedEffectRandom() { random().seed(54321); }
+
 // An actor's copies (its MultiMesh list): the ones in use, in order.
 std::vector<VmObject*> ScriptLevel::multiMeshes(VmObject* actor) {
     std::vector<VmObject*> out;
@@ -92,7 +95,7 @@ void ScriptLevel::chainSparkTick(VmObject* spark, float seconds) {
     };
     auto setVec = [&](VmObject* o, const char* name, const Vec& v) {
         if (Value* p = prop(o, name))
-            *p = vm_.vectorValue(v[0], v[1], v[2]);
+            vm_.setVector(*p, v[0], v[1], v[2]);
     };
     auto setFloat = [&](VmObject* o, const char* name, float v) {
         if (Value* p = prop(o, name))
@@ -230,7 +233,7 @@ void ScriptLevel::updateBeamSections(VmObject* beam, float seconds) {
             at = add(at, mul(side, amplitude * std::sin(phase)));
         }
         if (Value* l = prop(section, "Location"))
-            *l = vm_.vectorValue(at[0], at[1], at[2]);
+            vm_.setVector(*l, at[0], at[1], at[2]);
         if (Value* r = prop(section, "Rotation"); r && rotation)
             *r = *rotation;
         if (Value* s = prop(section, "AxisScale")) {
@@ -244,7 +247,7 @@ void ScriptLevel::updateBeamSections(VmObject* beam, float seconds) {
                 x = std::clamp(reach, 0.0f, 1.0f) * scale[0];
             }
             (void)now;
-            *s = vm_.vectorValue(x, thick(scale[1]), thick(scale[2]));
+            vm_.setVector(*s, x, thick(scale[1]), thick(scale[2]));
         }
     }
     if (Value* count = prop(beam, "FrameCount"))
@@ -372,13 +375,13 @@ void ScriptLevel::weatherTick(VmObject* weather, float seconds, bool fill) {
     if (wind && destWind) {
         if (frand() < f("WindActivity") * seconds * 10) {
             const float angle = frand() * 6.2831853f, strength = frand() * lateral;
-            *destWind = vm_.vectorValue(std::cos(angle) * strength, std::sin(angle) * strength, fall);
+            vm_.setVector(*destWind, std::cos(angle) * strength, std::sin(angle) * strength, fall);
         }
         Vec w = Vm::vectorOf(*wind);
         const Vec d = Vm::vectorOf(*destWind);
         const float k = std::min(1.0f, seconds * 0.5f);
         w = {w[0] + (d[0] - w[0]) * k, w[1] + (d[1] - w[1]) * k, fall};
-        *wind = vm_.vectorValue(w[0], w[1], w[2]);
+        vm_.setVector(*wind, w[0], w[1], w[2]);
     }
     const Vec windNow = wind ? Vm::vectorOf(*wind) : Vec{0, 0, fall};
 

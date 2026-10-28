@@ -183,7 +183,7 @@ void ScriptLevel::climbCheck(VmObject* a, bool falling, float dt) {
         return;
     setLocation(a, hangAt);
     if (Value* v = prop(a, "Velocity"))
-        *v = vm_.vectorValue(0, 0, 0);
+        vm_.setVector(*v, 0, 0, 0);
     if (Value* p = prop(a, "Rotation")) {
         auto now = Vm::rotatorOf(*p);
         const Vec in = mul(l.normal, -1);
@@ -203,11 +203,11 @@ void ScriptLevel::setLocation(VmObject* a, const Vec& to) {
     if (!loc)
         return;
     const Vec from = Vm::vectorOf(*loc);
-    *loc = vm_.vectorValue(to[0], to[1], to[2]);
+    vm_.setVector(*loc, to[0], to[1], to[2]);
     updateRegion(a);
     if (Value* off = prop(a, "LocationOffset")) {
         const Vec o = sub(Vm::vectorOf(*off), sub(to, from));
-        *off = vm_.vectorValue(o[0], o[1], o[2]);
+        vm_.setVector(*off, o[0], o[1], o[2]);
     }
 }
 
@@ -227,7 +227,7 @@ void ScriptLevel::climbPhysics(VmObject* a, int physics, float dt) {
         // Up and down the ladder as the input asks (the scripts' climbing
         // speed is its Acceleration).
         const Vec v{0, 0, accel[2]};
-        *velocity = vm_.vectorValue(v[0], v[1], v[2]);
+        vm_.setVector(*velocity, v[0], v[1], v[2]);
         if (std::fabs(v[2]) < 0.01f || length(in) < 0.5f)
             return;
         const Vec at = Vm::vectorOf(*loc);
@@ -240,7 +240,7 @@ void ScriptLevel::climbPhysics(VmObject* a, int physics, float dt) {
                     tellLedge(a, l);
                     vm_.callEvent(a, "ChangePhysics", {Value::byteValue(kPhysClambering)});
                 } else {
-                    *velocity = vm_.vectorValue(0, 0, 0); // nothing to climb onto
+                    vm_.setVector(*velocity, 0, 0, 0); // nothing to climb onto
                 }
                 return;
             }
@@ -260,7 +260,7 @@ void ScriptLevel::climbPhysics(VmObject* a, int physics, float dt) {
         // Along the ledge as the input asks, while there's ledge to hold.
         const Vec side{-in[1], in[0], 0};
         const Vec v = mul(side, dot(accel, side));
-        *velocity = vm_.vectorValue(v[0], v[1], v[2]);
+        vm_.setVector(*velocity, v[0], v[1], v[2]);
         if (length(v) < 0.01f)
             return;
         const Vec before = Vm::vectorOf(*loc);
@@ -272,9 +272,9 @@ void ScriptLevel::climbPhysics(VmObject* a, int physics, float dt) {
         const Vec now = Vm::vectorOf(*loc);
         const float hands = now[2] + height + arm;
         if (!findLedge(a, in, 2 * height + arm + kReach, l) || !l.ledge || std::fabs(l.height - hands) > 8) {
-            *loc = vm_.vectorValue(before[0], before[1], before[2]);
+            vm_.setVector(*loc, before[0], before[1], before[2]);
             updateRegion(a);
-            *velocity = vm_.vectorValue(0, 0, 0);
+            vm_.setVector(*velocity, 0, 0, 0);
         }
         return;
     }
@@ -283,7 +283,7 @@ void ScriptLevel::climbPhysics(VmObject* a, int physics, float dt) {
     // ledge. From where it started to standing on the ledge's top, past
     // the wall; the rise over the animation's first two thirds, the step
     // forward over the rest.
-    *velocity = vm_.vectorValue(0, 0, 0);
+    vm_.setVector(*velocity, 0, 0, 0);
     auto it = clambers_.find(a);
     if (it == clambers_.end()) {
         Clamber c;

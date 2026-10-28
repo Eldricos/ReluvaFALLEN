@@ -58,6 +58,9 @@ std::string lower(const std::string& s) { return fs::toLower(s); }
 
 } // namespace
 
+// Each level starts the same, whatever ran before it (ue-run -all).
+void reseedCoreRandom() { random().seed(12345); }
+
 void registerCoreNatives(Vm& vm) {
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(std::string("Object.") + name, std::move(fn)); };
     auto I = [](int32_t v) { return Value::intValue(v); };
