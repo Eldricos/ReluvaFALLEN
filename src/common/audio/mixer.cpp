@@ -89,6 +89,12 @@ void Mixer::setPitch(SoundHandle handle, double pitch) {
         c->pitch = std::clamp(pitch, 0.05, 8.0);
 }
 
+void Mixer::setMuffle(SoundHandle handle, float muffle) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (Channel* c = find(handle))
+        c->muffle = std::clamp(muffle, 0.0f, 1.0f);
+}
+
 void Mixer::seek(SoundHandle handle, double frame) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (Channel* c = find(handle))
@@ -122,6 +128,11 @@ void Mixer::mix(int16_t* out, int frames) {
         const int64_t gainL = c.pan > 0 ? gain * (kMaxPan - c.pan) / kMaxPan : gain;
         const int64_t gainR = c.pan < 0 ? gain * (kMaxPan + c.pan) / kMaxPan : gain;
         auto sample = [&](size_t frame, size_t channel) { return double(s.samples[frame * ch + channel]); };
+        // Muffled: a one-pole low-pass, its cutoff from the full band
+        // down to about 1 kHz (k = 1 - e^(-2 pi fc / rate)).
+        const bool muffled = c.muffle > 0;
+        const double cutoff = 20000.0 * std::pow(1000.0 / 20000.0, double(c.muffle));
+        const double k = 1 - std::exp(-2 * 3.14159265358979 * cutoff / double(outputRate_));
         for (int i = 0; i < frames; ++i) {
             if (c.position >= double(n)) {
                 if (!c.loop) {
@@ -135,8 +146,17 @@ void Mixer::mix(int16_t* out, int frames) {
             const size_t f = size_t(c.position);
             const size_t g = f + 1 < n ? f + 1 : (c.loop ? 0 : f);
             const double t = c.position - double(f);
-            const double l = sample(f, 0) * (1 - t) + sample(g, 0) * t;
-            const double r = ch > 1 ? sample(f, 1) * (1 - t) + sample(g, 1) * t : l;
+            double l = sample(f, 0) * (1 - t) + sample(g, 0) * t;
+            double r = ch > 1 ? sample(f, 1) * (1 - t) + sample(g, 1) * t : l;
+            if (muffled) { // one pole: each output moves part way to the input
+                c.lowL += k * (l - c.lowL);
+                c.lowR += k * (r - c.lowR);
+                l = c.lowL;
+                r = c.lowR;
+            } else { // kept with the sound, so muffling starts smoothly
+                c.lowL = l;
+                c.lowR = r;
+            }
             accumulator_[size_t(i) * 2] += int32_t(std::lround(l * double(gainL) / 65536.0));
             accumulator_[size_t(i) * 2 + 1] += int32_t(std::lround(r * double(gainR) / 65536.0));
             c.position += step;

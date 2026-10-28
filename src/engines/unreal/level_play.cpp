@@ -18,7 +18,8 @@ LevelPlay::LevelPlay(const PackageSet& packages, const Package& map)
     const char* names[FieldCount] = {"Location", "PrePivot", "Rotation", "DrawScale", "DrawType",
                                      "bHidden",  "Mesh",     "Skin",     "Texture",   "MultiSkins",
                                      "AnimSequence", "AnimFrame", "AnimRate", "bAnimLoop", "Style", "ScaleGlow",
-                                     "LastRenderTime"};
+                                     "LastRenderTime", "bUnlit", "bMultiMeshRenderInitial", "Region",
+                                     "AmbientSound", "SoundRadius", "SoundVolume", "SoundPitch"};
     for (size_t k = 0; k < FieldCount; ++k)
         names_[k] = vm_->name(names[k]);
 }
@@ -225,11 +226,15 @@ bool LevelPlay::locationOf(VmObject* actor, Vec3f& out) {
 // units, at SoundVolume / 255, its pitch SoundPitch / 64.
 void LevelPlay::ambientSounds(std::vector<Ambient>& out) {
     out.clear();
-    Vm& vm = *vm_;
     for (VmObject* a : level_->actors()) {
-        if (a->deleted)
+        if (a->deleted || !a->cls)
             continue;
-        const Value* s = a->find(vm, "AmbientSound");
+        const std::array<int, FieldCount>& slot = slotsOf(a->cls);
+        auto at = [&](Field f) -> const Value* {
+            const int k = slot[size_t(f)];
+            return k >= 0 && size_t(k) < a->values.size() ? &a->values[size_t(k)] : nullptr;
+        };
+        const Value* s = at(AmbientSoundField);
         VmObject* sound = s ? s->asObject() : nullptr;
         if (!sound || !sound->package || sound->exportIndex < 0)
             continue;
@@ -238,13 +243,13 @@ void LevelPlay::ambientSounds(std::vector<Ambient>& out) {
         am.sound = {sound->package, sound->exportIndex};
         am.streamed = level_->streamedSound(sound);
         locationOf(a, am.at);
-        auto byte = [&](const char* name, int otherwise) {
-            const Value* v = a->find(vm, name);
+        auto byte = [&](Field f, int otherwise) {
+            const Value* v = at(f);
             return v ? v->asInt() : otherwise;
         };
-        am.radius = 25.0f * float(byte("SoundRadius", 32) + 1);
-        am.volume = float(byte("SoundVolume", 128)) / 255;
-        am.pitch = float(byte("SoundPitch", 64)) / 64;
+        am.radius = 25.0f * float(byte(SoundRadius, 32) + 1);
+        am.volume = float(byte(SoundVolume, 128)) / 255;
+        am.pitch = float(byte(SoundPitch, 64)) / 64;
         out.push_back(am);
     }
 }
@@ -346,20 +351,50 @@ ObjectRef LevelPlay::refOf(const Value* v) const {
     return {v->o->package, v->o->exportIndex};
 }
 
+// Where each property look() reads is in a class's values, found once.
+const std::array<int, LevelPlay::FieldCount>& LevelPlay::slotsOf(const VmClass* cls) {
+    auto it = slots_.find(cls);
+    if (it == slots_.end()) {
+        std::array<int, FieldCount> slots{};
+        for (size_t k = 0; k < FieldCount; ++k) {
+            const VmProperty* p = cls->findProperty(names_[k]);
+            slots[k] = p ? p->slot : -1;
+            if (k == Region && p && p->structType && regionZoneField_ < 0)
+                if (const VmProperty* z = p->structType->findProperty(vm_->name("ZoneNumber")))
+                    regionZoneField_ = z->slot;
+        }
+        it = slots_.emplace(cls, slots).first;
+    }
+    return it->second;
+}
+
+bool LevelPlay::mayBeSeen(VmObject* a, uint64_t zones) {
+    if (!a || a->deleted || !a->cls)
+        return false;
+    const std::array<int, FieldCount>& slot = slotsOf(a->cls);
+    auto at = [&](Field f) -> const Value* {
+        const int k = slot[size_t(f)];
+        return k >= 0 && size_t(k) < a->values.size() ? &a->values[size_t(k)] : nullptr;
+    };
+    if (const Value* v = at(Hidden); v && v->asBool())
+        return false;
+    if (const Value* r = at(Region); r && regionZoneField_ >= 0 && size_t(regionZoneField_) < r->fields.size()) {
+        const int zone = r->fields[size_t(regionZoneField_)].asInt();
+        if (zone >= 0 && zone < 64 && !((zones >> zone) & 1))
+            return false;
+    }
+    return true;
+}
+
+bool LevelPlay::wallBetween(const Vec3f& from, const Vec3f& to) {
+    return level_->worldBetween({from[0], from[1], from[2]}, {to[0], to[1], to[2]}, 24);
+}
+
 bool LevelPlay::look(VmObject* a, Look& out) {
     if (!a || a->deleted || !a->cls)
         return false;
     Vm& vm = *vm_;
-    auto it = slots_.find(a->cls);
-    if (it == slots_.end()) {
-        std::array<int, FieldCount> slots{};
-        for (size_t k = 0; k < FieldCount; ++k) {
-            const VmProperty* p = a->cls->findProperty(names_[k]);
-            slots[k] = p ? p->slot : -1;
-        }
-        it = slots_.emplace(a->cls, slots).first;
-    }
-    const std::array<int, FieldCount>& slot = it->second;
+    const std::array<int, FieldCount>& slot = slotsOf(a->cls);
     auto at = [&](Field f) -> Value* {
         const int k = slot[size_t(f)];
         return k >= 0 && size_t(k) < a->values.size() ? &a->values[size_t(k)] : nullptr;
@@ -400,9 +435,9 @@ bool LevelPlay::look(VmObject* a, Look& out) {
         out.style = uint8_t(v->asInt());
     if (const Value* v = at(ScaleGlow))
         out.scaleGlow = v->asFloat();
-    if (const Value* v = a->find(vm, "bUnlit"))
+    if (const Value* v = at(Unlit))
         out.unlit = v->asBool();
-    if (const Value* v = a->find(vm, "bMultiMeshRenderInitial"))
+    if (const Value* v = at(RenderInitial))
         out.renderInitial = v->asBool();
     out.tweenFrom.clear();
     if (out.animFrame < 0)

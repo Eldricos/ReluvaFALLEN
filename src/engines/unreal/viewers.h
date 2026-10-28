@@ -299,7 +299,7 @@ public:
     // Playing: the camera let loose, in front of the live actor of that
     // name looking at it; false if there's none.
     bool watchActor(const std::string& name);
-    float liveLightLevel(const LightSource& l);
+    float liveLightLevel(const LightSource& l, bool whole = true);
     // The player put by an actor (`offset` from it, facing `yaw` degrees),
     // falling; and where it is, its state and physics (ue-play's tests).
     bool teleportPlayer(const std::string& name, const Vec3f& offset, float yaw);
@@ -493,7 +493,11 @@ private:
     void updateLightmaps(float dt);
     std::vector<gfx::TextureId> lightmapPages_;
     std::vector<LightSource> changingLights_;
-    std::vector<float> lightLevels_; // each one's brightness as last drawn
+    std::vector<float> lightLevels_; // each one's brightness now, as a whole (meshes are lit by it)
+    std::vector<float> mapLevels_;   // as the lightmaps were last drawn with it (less a pattern)
+    std::vector<PatternNow> patternNow_; // each one's pattern this frame
+    std::vector<bool> staleLightmaps_;  // changed while out of sight: drawn once seen
+    std::map<int, MeshTopology> posedTopology_; // by meshes_ index: those posed each frame
     std::vector<AnimatedLightmap> animatedLightmaps_;
     float lightTime_ = 0;
     // Fire, water, wet, ice and FLC textures, playing.

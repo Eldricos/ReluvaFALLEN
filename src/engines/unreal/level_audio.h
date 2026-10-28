@@ -58,6 +58,7 @@ private:
         float radius = 0, volume = 1;
         bool everywhere = false; // a voice: not placed
         ObjectRef sound;
+        float muffle = 0; // how muffled it's heard now (walls in the way)
     };
     std::vector<Playing> playing_;
     std::vector<std::string> recent_; // the last one-off sounds started, oldest first
@@ -65,7 +66,13 @@ private:
     struct Ambient {
         audio::SoundHandle handle = audio::kNoSound;
         std::pair<const Package*, int> sound{};
+        float muffle = 0;
     };
+    // Eases `muffle` toward whether the level's walls stand between the
+    // listener and `at` (a sound in hearing: `volume` > 0), and scales
+    // the volume by it; then sets it on the sound.
+    void muffle(LevelPlay& play, const Vec3f& at, float seconds, float& muffle, int& volume,
+                audio::SoundHandle handle);
     std::map<VmObject*, Ambient> ambient_;
     std::vector<LevelPlay::Ambient> ambientNow_;
 

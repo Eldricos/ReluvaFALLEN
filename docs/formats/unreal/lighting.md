@@ -108,13 +108,24 @@ curves (to be compared with the original running):
 
 Light effects that change over time (`LightEffect`), on The Fallen 255
 watery shimmers, 224 fire wavers, 45 torch wavers, 30 slow and fast
-waves, and a few shocks, discos and rotors, change the light's
-brightness as a whole, times its type's curve: torch waver 0.85-1 and
-fire waver 0.7-1 (smooth random, 6 and 10 changes a second), shimmer
-two sines round 0.8, the waves a sine 0.7-1 (0.5 and 2 a second), shock
-dropping to 0.2 at random, disco and rotor a sine over their period. In
-UE1 these move across the surfaces (a waver's ripple, a wave rolling
-by); those patterns aren't drawn. Reluva's reading of their names.
+waves, and a few shocks, discos and rotors. In UE1 these move across
+the surfaces; here too, as patterns worked out texel by texel from each
+texel's place against the light (`lightPattern`; Reluva's reading of the
+names, the original's code isn't known):
+
+| Effect | Across the surfaces |
+|---|---|
+| Torch waver, fire waver | brighter and darker by direction from the flame (0.85-1, 0.7-1), the directions' shares changing at random 6 and 10 times a second |
+| Watery shimmer | two ripples crossing over the surfaces, drifting (0.6-1) |
+| Slow wave, fast wave | rings rolling out from the light, half and two a second, half its radius apart (lightmap texels are tens of units: closer rings fell between them) (0.7-1) |
+| Rotor | four beams turning round it once a period |
+| Disco | spots on a grid of directions, turning the same way |
+| Shock | the whole light dropping to 0.2 at random, as before |
+
+What moves (meshes, movers) is lit by each such light as a whole, by the
+same effect's curve over time: torch waver 0.85-1 and fire waver 0.7-1
+(smooth random, 6 and 10 changes a second), shimmer two sines round
+0.8, the waves a sine 0.7-1, disco and rotor a sine over their period.
 
 Lights the scripts may change (any class but plain `Light`, like
 `TriggerLight`, or one with a Tag a trigger can name) are kept apart
@@ -129,7 +140,9 @@ The light a sample gets is linear in each light's brightness, so a
 lightmap reached by changing lights is kept as its light without them
 plus each one's at full brightness (`AnimatedLightmap`), and redrawn as
 `base + sum(level * share)` (capped as above) whenever one of them
-changes by a step of the 255. The Maps page uploads only those
+changes by a step of the 255; a light with a pattern keeps each texel's
+place against it too, and its share is times the pattern there now, so
+its lightmaps are drawn again every frame, while their zone is seen. The Maps page uploads only those
 lightmaps' rectangles (`Renderer3D::updateTextures()`), all in one copy
 each frame. On The Fallen a map has up to 49 such lights over at most
 about 89000 texels (291,000 with the scripted lights and effects).

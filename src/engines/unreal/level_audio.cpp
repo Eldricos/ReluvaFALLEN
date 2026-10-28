@@ -35,10 +35,11 @@ std::vector<std::string> LevelAudio::describe() const {
     };
     if (music_)
         line("music", music_, musicSound_ && musicSound_->package ? name(musicSound_->package, musicSound_->exportIndex) : "?");
+    auto muffled = [](float m) { return m > 0 ? " (muffled " + std::to_string(int(m * 100 + 0.5f)) + "%)" : std::string(); };
     for (const auto& [actor, a] : ambient_)
-        line("ambient", a.handle, name(a.sound.first, a.sound.second));
+        line("ambient", a.handle, name(a.sound.first, a.sound.second) + muffled(a.muffle));
     for (const Playing& p : playing_)
-        line(p.everywhere ? "voice" : "sound", p.handle, name(p.sound.package, p.sound.exportIndex));
+        line(p.everywhere ? "voice" : "sound", p.handle, name(p.sound.package, p.sound.exportIndex) + muffled(p.muffle));
     std::string last = std::to_string(started_) + " started; last:";
     for (const std::string& r : recent_)
         last += " " + r;
@@ -88,6 +89,23 @@ void LevelAudio::place(const Vec3f& at, float radius, float volume, int& outVolu
     if (reverse_)
         side = -side;
     outPan = stereo_ ? std::clamp(int(std::lround(side * audio::kMaxPan)), -audio::kMaxPan, audio::kMaxPan) : 0;
+}
+
+// Heard through a wall: the level's BSP between the listener and the
+// sound (movers aren't counted, so a door's own sounds aren't muffled by
+// the door), within the last 24 units not counted (sounds placed in a
+// wall's face). Half as loud and low-passed, eased in and out over a
+// quarter of a second. Reluva's reading: how the original muffled
+// sounds isn't known.
+void LevelAudio::muffle(LevelPlay& play, const Vec3f& at, float seconds, float& muffle, int& volume,
+                        audio::SoundHandle handle) {
+    if (volume > 0) {
+        const float target = play.wallBetween(listener_, at) ? 1.0f : 0.0f;
+        const float step = std::max(seconds, 0.0f) * 4;
+        muffle = target > muffle ? std::min(target, muffle + step) : std::max(target, muffle - step);
+    }
+    volume = int(float(volume) * (1 - 0.5f * muffle));
+    mixer_.setMuffle(handle, muffle);
 }
 
 void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& facing, float seconds) {
@@ -169,6 +187,7 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
             p.actor = nullptr; // gone: heard where it was
         int volume = 0, pan = 0;
         place(p.at, p.radius, p.volume, volume, pan);
+        muffle(play, p.at, seconds, p.muffle, volume, p.handle);
         mixer_.setVolume(p.handle, volume);
         mixer_.setPan(p.handle, pan);
     }
@@ -209,6 +228,7 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
                 mixer_.setPitch(am.handle, a.pitch);
             ambient_[a.actor] = am;
         } else {
+            muffle(play, a.at, seconds, it->second.muffle, volume, it->second.handle);
             mixer_.setVolume(it->second.handle, volume);
             mixer_.setPan(it->second.handle, pan);
             mixer_.setPitch(it->second.handle, a.pitch);

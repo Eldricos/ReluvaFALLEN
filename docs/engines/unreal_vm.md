@@ -317,7 +317,27 @@ What's left before play, by what `ue-run` reports:
   The Fallen's own physics modes are Reluva's reading of the scripts
   (see Movement and Effects).
 - **Speed**: the biggest map, M03_KiraL2 (4,263 actors), runs 20 seconds
-  of play in about 10.7 s without drawing (21.6 s before the work below).
+  of play in about 5.7 s without drawing (21.6 s before the work below,
+  10.7 before the last of it); all 74 maps take 371 s together, 800
+  before the last of it, the slowest (M10_WorfL1A) 11.5. The last of
+  it:
+  - Only actors that may be seen are looked at to draw: not hidden, in a
+    zone seen through the portals (`LevelPlay::mayBeSeen`). The rest
+    aren't drawn, so they don't get `C3DPreRender` or `LastRenderTime`
+    either, as in UE1 (whose scripts read `LastRenderTime` to know
+    they're seen). Before, every actor got both every frame.
+  - A script function that only returns, with nothing to give back
+    (Actor's `C3DPreRender` and other empty events), isn't run
+    (`VmFunction::doesNothing`).
+  - `Value`'s readings of numbers and objects are inline; what an actor
+    looks like and its ambient sound are read through each class's
+    slots, not by name.
+  - A character posed each frame is uploaded with its triangles' layout
+    worked out once (`MeshTopology`), only its vertices new.
+  - Lightmaps that changing lights reach are redrawn only while their
+    zone is seen (once seen again if they changed meanwhile), and a light
+    effect's pattern takes what it needs of the time once a frame
+    (`PatternNow`) and of each texel once at load (`PatternPoint`).
 - **The game's own mistakes**: `DS9_GrigariSentryDrone` (and its kin)
   `goto 'DetermineAction'` in their `DefensiveStance` state, where it's
   a function, not a label, `DS9_Grigari` `goto 'CheckCloak'` in
@@ -824,6 +844,15 @@ scripts use it; the engine's own code isn't known.
   one. Heard as far as 25 × (`SoundRadius` + 1) units, at
   `SoundVolume` / 255, its pitch `SoundPitch` / 64. It starts once the
   camera is in reach.
+- **Through walls:** a sound in hearing (one played, or ambient) with the
+  level's walls between it and the camera is heard half as loud and
+  muffled: the mixer's low-pass (`Mixer::setMuffle`, its cutoff falling
+  from the full band to about a kilohertz). Only the BSP counts (a
+  door's own sounds aren't muffled by the door), and not the last 24
+  units before the sound nor a sound placed inside solid (ambient sounds
+  set into a wall or ceiling sound from its face). It eases in and out
+  over a quarter of a second. Voices and music aren't placed, so never
+  muffled. `ue-play`'s `sounds` marks those muffled.
 - **Music** is The Fallen's streamed sounds, the MP3s in `mp3/`
   ([sound.md](../formats/unreal/sound.md)):
   - The player's `CurrentMusic` names the track. The start sets it

@@ -18,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace reluva::unreal {
@@ -75,6 +76,9 @@ public:
     // gone), the actors' ambient sounds, and the music.
     std::vector<ScriptLevel::SoundRequest> takeSounds();
     bool locationOf(VmObject* actor, Vec3f& out);
+    // Whether the level's walls (its BSP, not movers) stand between two
+    // points, short of the last 24 units to `to`.
+    bool wallBetween(const Vec3f& from, const Vec3f& to);
     struct Ambient {
         VmObject* actor = nullptr;
         ObjectRef sound;
@@ -144,6 +148,10 @@ public:
         LayeredPoser::Adjust adjust;
     };
     bool look(VmObject* actor, Look& out);
+    // Whether an actor may be seen: not hidden, and in one of `zones` (a
+    // bit for each of the level's zones seen) if its zone is known. Cheap,
+    // to pass over the rest before look().
+    bool mayBeSeen(VmObject* actor, uint64_t zones);
     // Its copies (The Fallen's MultiMesh: particles, sparks, a beam's
     // sections), each drawn as it is, in its place, turned and scaled
     // (AxisScale, along its own axes), glowing and in its style; with its
@@ -193,8 +201,11 @@ private:
     // once per class (looking properties up by name for every actor every
     // frame took as long as the scripts' ticks).
     enum Field { Location, PrePivot, Rotation, DrawScale, DrawType, Hidden, MeshField, Skin, Texture, MultiSkins,
-                 AnimSequence, AnimFrame, AnimRate, AnimLoop, Style, ScaleGlow, LastRenderTime, FieldCount };
-    std::map<const VmClass*, std::array<int, FieldCount>> slots_;
+                 AnimSequence, AnimFrame, AnimRate, AnimLoop, Style, ScaleGlow, LastRenderTime, Unlit,
+                 RenderInitial, Region, AmbientSoundField, SoundRadius, SoundVolume, SoundPitch, FieldCount };
+    const std::array<int, FieldCount>& slotsOf(const VmClass* cls);
+    int regionZoneField_ = -1; // ZoneNumber's place in PointRegion
+    std::unordered_map<const VmClass*, std::array<int, FieldCount>> slots_;
     std::array<NameId, FieldCount> names_{};
 
     const PackageSet& packages_;

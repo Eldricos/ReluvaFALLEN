@@ -161,12 +161,15 @@ float smoothNoise(uint32_t seed, float time, float rate) {
     return noise(seed, step) * (1 - s) + noise(seed, step + 1) * s;
 }
 
-// The share a light's LightEffect gives, 0-1, `time` seconds in. In UE1
-// these move across the surfaces (a torch's waver, water's shimmer, a
-// wave rolling by); here each changes the light's brightness as a whole,
-// at the rates their names suggest. Reluva's reading.
+uint32_t lightSeed(const LightSource& l) {
+    return uint32_t(int32_t(l.position[0] * 3 + l.position[1] * 5 + l.position[2] * 11)) ^ 0x5bd1e995u;
+}
+
+// The share a light's LightEffect gives as a whole, 0-1, `time` seconds
+// in: what moving actors get, and (shock) the lightmaps too. Reluva's
+// reading of the names, at the rates they suggest.
 float effectLevel(const LightSource& l, float time) {
-    const uint32_t seed = uint32_t(int32_t(l.position[0] * 3 + l.position[1] * 5 + l.position[2] * 11)) ^ 0x5bd1e995u;
+    const uint32_t seed = lightSeed(l);
     switch (l.effect) {
     case kEffectTorchWaver: return 0.85f + 0.15f * smoothNoise(seed, time, 6);
     case kEffectFireWaver: return 0.7f + 0.3f * smoothNoise(seed, time, 10);
@@ -186,8 +189,80 @@ float effectLevel(const LightSource& l, float time) {
 
 } // namespace
 
-float lightLevel(const LightSource& l, uint8_t type, float time) {
-    return effectLevel(l, time) * [&] {
+bool hasLightPattern(const LightSource& l) {
+    return l.effect == kEffectTorchWaver || l.effect == kEffectFireWaver || l.effect == kEffectWateryShimmer ||
+           l.effect == kEffectSlowWave || l.effect == kEffectFastWave || l.effect == kEffectDisco ||
+           l.effect == kEffectRotor;
+}
+
+// The patterns, by what the names describe (UE1's own aren't known; these
+// are Reluva's reading), each in the same range as the effect as a whole:
+// - the wavers: brighter and darker by direction from the flame, the
+//   directions' shares changing at random (6 and 10 times a second), so
+//   the light flickers across a wall rather than all at once;
+// - the shimmer: two ripples crossing over the surfaces, drifting;
+// - the waves: rings rolling out from the light (half and two a second),
+//   half its radius apart (lightmap texels are tens of units: closer
+//   rings would fall between them);
+// - the rotor: four beams turning round it once a period; disco: spots
+//   on a grid of directions, turning the same way.
+PatternPoint patternPoint(const Vec3f& o) {
+    PatternPoint p;
+    p.offset = o;
+    const float flat = std::sqrt(o[0] * o[0] + o[1] * o[1]);
+    p.yaw = std::atan2(o[1], o[0]);
+    p.pitch = std::atan2(o[2], flat);
+    p.distance = std::sqrt(flat * flat + o[2] * o[2]);
+    return p;
+}
+
+PatternNow patternNow(const LightSource& l, float time) {
+    PatternNow n;
+    n.time = time;
+    const uint32_t seed = lightSeed(l);
+    if (l.effect == kEffectTorchWaver || l.effect == kEffectFireWaver) {
+        const float rate = l.effect == kEffectTorchWaver ? 6.0f : 10.0f;
+        n.a = smoothNoise(seed, time, rate);
+        n.b = smoothNoise(seed ^ 0x9e3779b9u, time, rate);
+    }
+    n.turn = 2 * kPi * (time / std::max(l.period, 0.05f) + l.phase);
+    return n;
+}
+
+float lightPattern(const LightSource& l, const PatternNow& now, const PatternPoint& p) {
+    const Vec3f& o = p.offset;
+    switch (l.effect) {
+    case kEffectTorchWaver:
+    case kEffectFireWaver: {
+        const float s = 0.5f + 0.25f * std::sin(5 * p.yaw + 3 * p.pitch + 2 * kPi * now.a) +
+                        0.25f * std::sin(9 * p.yaw - 4 * p.pitch + 2 * kPi * now.b);
+        return l.effect == kEffectTorchWaver ? 0.85f + 0.15f * s : 0.7f + 0.3f * s;
+    }
+    case kEffectWateryShimmer: {
+        const float s = 0.5f + 0.25f * std::sin((o[0] + o[1]) / 40 + now.time * 5.1f) +
+                        0.25f * std::sin((o[0] - o[1]) / 27 + o[2] / 33 - now.time * 7.3f);
+        return 0.6f + 0.4f * s;
+    }
+    case kEffectSlowWave:
+    case kEffectFastWave: {
+        const float rate = l.effect == kEffectSlowWave ? 0.5f : 2.0f;
+        const float wavelength = std::max(l.radius / 2, 64.0f);
+        return 0.7f + 0.3f * (0.5f + 0.5f * std::sin(2 * kPi * (p.distance / wavelength - now.time * rate - l.phase)));
+    }
+    case kEffectRotor: {
+        const float s = 0.5f + 0.5f * std::cos(4 * (p.yaw - now.turn));
+        return 0.3f + 0.7f * s * s;
+    }
+    case kEffectDisco: {
+        const float s = std::sin(6 * (p.yaw - now.turn)) * std::sin(6 * p.pitch);
+        return s > 0.5f ? 1.0f : 0.35f;
+    }
+    default: return 1;
+    }
+}
+
+float lightLevel(const LightSource& l, uint8_t type, float time, bool whole) {
+    return (whole || !hasLightPattern(l) ? effectLevel(l, time) : 1.0f) * [&] {
     // How far through its cycle it is, 0-1.
     const float cycles = time / std::max(l.period, 1e-3f) + l.phase;
     const float at = cycles - std::floor(cycles);
@@ -248,13 +323,19 @@ LevelLights gatherLights(const PackageSet& packages, const Package& package, con
     return out;
 }
 
-void AnimatedLightmap::draw(const std::vector<float>& levels, std::vector<uint8_t>& rgba) const {
+void AnimatedLightmap::draw(const std::vector<float>& levels, std::vector<uint8_t>& rgba,
+                            const std::vector<LightSource>* sources, const std::vector<PatternNow>* now) const {
     rgba.resize(base.size() * 4);
     for (size_t t = 0; t < base.size(); ++t) {
         Vec3f light = base[t];
-        for (const auto& [index, share] : lights) {
-            const float level = size_t(index) < levels.size() ? levels[size_t(index)] : 1;
-            light = add(light, scale(share[t], level));
+        for (const Light& l : lights) {
+            const Vec3f& share = l.share[t];
+            if (share[0] == 0 && share[1] == 0 && share[2] == 0)
+                continue;
+            float level = size_t(l.index) < levels.size() ? levels[size_t(l.index)] : 1;
+            if (!l.points.empty() && sources && now && size_t(l.index) < sources->size() && size_t(l.index) < now->size())
+                level *= lightPattern((*sources)[size_t(l.index)], (*now)[size_t(l.index)], l.points[t]);
+            light = add(light, scale(share, level));
         }
         for (size_t k = 0; k < 3; ++k)
             rgba[t * 4 + k] = uint8_t(std::clamp(light[k], 0.0f, kMaxLight) / 2 * 255 + 0.5f);
@@ -397,7 +478,10 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
     // reach redrawn with them as they do (drawn at time 0 here).
     std::vector<float> startLevels;
     for (const LightSource& l : lights.animated)
-        startLevels.push_back(lightLevel(l, 0));
+        startLevels.push_back(lightLevel(l, l.type, 0, false));
+    std::vector<PatternNow> startNow;
+    for (const LightSource& l : lights.animated)
+        startNow.push_back(patternNow(l, 0));
     std::vector<uint8_t> rgba;
     for (size_t gi = 0; gi < grids.size(); ++gi) {
         const Grid& g = grids[gi];
@@ -468,10 +552,17 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
                             auto it = animIndex.find(src.animated);
                             if (it == animIndex.end()) {
                                 it = animIndex.emplace(src.animated, anim.lights.size()).first;
-                                anim.lights.push_back({src.animated, std::vector<Vec3f>(anim.base.size(), Vec3f{})});
+                                AnimatedLightmap::Light l;
+                                l.index = src.animated;
+                                l.share.assign(anim.base.size(), Vec3f{});
+                                if (hasLightPattern(src))
+                                    l.points.assign(anim.base.size(), PatternPoint{});
+                                anim.lights.push_back(std::move(l));
                             }
-                            Vec3f& c = anim.lights[it->second].second[at(i, j)];
-                            c = add(c, scale(src.color, amount));
+                            AnimatedLightmap::Light& al = anim.lights[it->second];
+                            al.share[at(i, j)] = add(al.share[at(i, j)], scale(src.color, amount));
+                            if (!al.points.empty())
+                                al.points[at(i, j)] = patternPoint(sub(p, src.position));
                         }
                     }
                     anim.base[at(i, j)] = light;
@@ -487,15 +578,23 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
                             v[at(i, j)] = v[at(std::clamp(i, 0, g.w - 1), std::clamp(j, 0, g.h - 1))];
             };
             border(anim.base);
-            for (auto& l : anim.lights)
-                border(l.second);
+            for (auto& l : anim.lights) {
+                border(l.share);
+                if (!l.points.empty()) {
+                    for (int j = -1; j <= g.h; ++j)
+                        for (int i = -1; i <= g.w; ++i)
+                            if (i < 0 || i >= g.w || j < 0 || j >= g.h)
+                                l.points[at(i, j)] = l.points[at(std::clamp(i, 0, g.w - 1), std::clamp(j, 0, g.h - 1))];
+                }
+            }
         }
         anim.page = placed[gi][0];
         anim.x = x0 - 1;
         anim.y = y0 - 1;
         anim.w = bw;
         anim.h = bh;
-        anim.draw(startLevels, rgba);
+        anim.zone = g.surf < 0 ? g.zone : zones[size_t(g.surf)];
+        anim.draw(startLevels, rgba, &lights.animated, &startNow);
         for (int j = 0; j < bh; ++j)
             std::copy_n(rgba.data() + size_t(j) * size_t(bw) * 4, size_t(bw) * 4, img.pixel(anim.x, anim.y + j));
         if (!anim.lights.empty())

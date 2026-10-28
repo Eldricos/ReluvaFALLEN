@@ -95,14 +95,10 @@ Vec3f placeMeshScaled(const Mesh& mesh, const Vec3f& v, MeshTurn turn, int yawQu
     return turnScaled(mesh, v, turn, yawQuarters);
 }
 
-Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn, int yawQuarters) {
-    out = GpuMesh{};
-    // The mesh's own placement: less Origin, scaled by Scale, turned by RotOrigin.
-    auto place = [&](const Vec3f& v) { return placeMeshVertex(mesh, v, turn, yawQuarters); };
-
+Error buildMeshTopology(const Mesh& mesh, MeshTopology& out) {
+    out = MeshTopology{};
     // Each (vertex, texture coordinates) pair once; triangles by texture and flags.
     std::map<std::tuple<int32_t, float, float>, uint32_t> cornerOf;
-    std::vector<std::pair<int32_t, std::array<float, 2>>> corners;
     std::map<std::pair<int32_t, uint32_t>, std::vector<uint32_t>> groups;
     for (const MeshTri& t : mesh.tris) {
         if (t.polyFlags & polyflag::Invisible)
@@ -112,25 +108,41 @@ Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, Mesh
             const auto key = std::make_tuple(t.vertex[k], t.uv[k][0], t.uv[k][1]);
             auto it = cornerOf.find(key);
             if (it == cornerOf.end()) {
-                it = cornerOf.emplace(key, uint32_t(corners.size())).first;
-                corners.push_back({t.vertex[k], t.uv[k]});
+                it = cornerOf.emplace(key, uint32_t(out.corners.size())).first;
+                out.corners.push_back({t.vertex[k], t.uv[k]});
             }
             list.push_back(it->second);
         }
     }
-    std::vector<uint32_t> indices;
     for (const auto& [key, list] : groups) {
         GpuMesh::Batch b;
         b.textureIndex = key.first;
         b.polyFlags = key.second;
-        b.firstIndex = uint32_t(indices.size());
+        b.firstIndex = uint32_t(out.indices.size());
         b.indexCount = uint32_t(list.size());
-        indices.insert(indices.end(), list.begin(), list.end());
+        out.indices.insert(out.indices.end(), list.begin(), list.end());
         out.batches.push_back(b);
     }
-    if (indices.empty())
+    if (out.indices.empty())
         return Error::fail("the mesh has no visible triangles");
+    return Error::success();
+}
 
+Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn, int yawQuarters) {
+    MeshTopology topology;
+    if (Error err = buildMeshTopology(mesh, topology))
+        return err;
+    return uploadMesh(renderer, mesh, topology, out, turn, yawQuarters);
+}
+
+Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, const MeshTopology& topology, GpuMesh& out,
+                 MeshTurn turn, int yawQuarters) {
+    out = GpuMesh{};
+    // The mesh's own placement: less Origin, scaled by Scale, turned by RotOrigin.
+    auto place = [&](const Vec3f& v) { return placeMeshVertex(mesh, v, turn, yawQuarters); };
+    const auto& corners = topology.corners;
+    const auto& indices = topology.indices;
+    out.batches = topology.batches;
     out.frameVertices = int32_t(corners.size());
     out.frames = mesh.animFrames;
     std::vector<gfx::Vertex> vertices;

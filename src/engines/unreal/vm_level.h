@@ -107,6 +107,10 @@ public:
     void physics(VmObject* actor, float seconds);
     // A line or box traced through the level (and, if asked, its actors):
     // what it hit (the LevelInfo for the world), where and facing which way.
+    // Whether the level's BSP is in the way from `start` to `end`, short
+    // of the last `slack` units (movers aren't counted); not if `end` is
+    // in solid space.
+    bool worldBetween(const std::array<float, 3>& start, const std::array<float, 3>& end, float slack = 0);
     VmObject* trace(VmObject* self, const std::array<float, 3>& start, const std::array<float, 3>& end,
                     const std::array<float, 3>& extent, bool actors, std::array<float, 3>& hitLocation,
                     std::array<float, 3>& hitNormal);

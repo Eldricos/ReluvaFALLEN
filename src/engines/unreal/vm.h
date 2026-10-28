@@ -91,10 +91,22 @@ struct Value {
 
     // Read as a type, converting as UnrealScript does (None reads as 0,
     // false, "" or None).
-    int32_t asInt() const;
-    float asFloat() const;
-    bool asBool() const;
-    VmObject* asObject() const;
+    // Inline for numbers and objects (read all the time); a string's
+    // reading, and the rest, out of line. (Byte to Name takes in Float,
+    // so it's tested first.)
+    int32_t asInt() const {
+        return type == VType::Float ? int32_t(f) : (type >= VType::Byte && type <= VType::Name) ? i : asIntSlow();
+    }
+    float asFloat() const {
+        return type == VType::Float ? f : (type >= VType::Byte && type <= VType::Bool) ? float(i) : asFloatSlow();
+    }
+    bool asBool() const {
+        return type == VType::Float ? f != 0 : (type >= VType::Byte && type <= VType::Name) ? i != 0 : asBoolSlow();
+    }
+    inline VmObject* asObject() const;
+    int32_t asIntSlow() const;
+    float asFloatSlow() const;
+    bool asBoolSlow() const;
 };
 
 struct VmProperty {
@@ -154,6 +166,9 @@ struct VmFunction : VmStruct {
     // unevaluated: 1 and, 2 or, 0 neither) and has out parameters.
     mutable int8_t logicOp = -1;
     mutable bool hasOut = false;
+    // Found once: a script function that only returns, with nothing to
+    // give back (Actor's C3DPreRender, its empty events): not run.
+    mutable int8_t doesNothing = -1;
 };
 
 struct VmState : VmStruct {
@@ -196,6 +211,8 @@ struct VmObject {
 
     Value* find(Vm& vm, std::string_view property);
 };
+
+inline VmObject* Value::asObject() const { return type == VType::Object && o && !o->deleted ? o : nullptr; }
 
 // A native function's call: its arguments (by parameter, converted to
 // their types; out parameters are written back after), what it returns.

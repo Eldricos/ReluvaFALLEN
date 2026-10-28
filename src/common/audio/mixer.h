@@ -52,6 +52,9 @@ public:
     void setPan(SoundHandle handle, int pan);
     // Its speed and pitch together: 1 as recorded, 2 an octave up.
     void setPitch(SoundHandle handle, double pitch);
+    // How muffled it is, 0 (as recorded) to 1: a low-pass filter whose
+    // cutoff falls to about a kilohertz (a sound heard through a wall).
+    void setMuffle(SoundHandle handle, float muffle);
     // Moves it to `frame` of its own frames (past the end: it ends, or
     // wraps if it loops).
     void seek(SoundHandle handle, double frame);
@@ -73,6 +76,8 @@ private:
         bool loop;
         double position = 0; // in the sound's frames
         double pitch = 1;
+        float muffle = 0;
+        double lowL = 0, lowR = 0; // the low-pass filter's last output
         bool done = false;
     };
     Channel* find(SoundHandle handle);

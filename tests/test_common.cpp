@@ -220,6 +220,21 @@ static void testMixer() {
     m.mix(out.data(), 2);
     CHECK(out[0] == 100 && out[2] == 300 && m.position(p) == 5.0);
     m.stopAll();
+    // Muffled: a tone at the top of the band (alternating samples) all but
+    // goes; a steady level passes once the filter settles.
+    std::vector<int16_t> high(2000), steady(2000, 1000);
+    for (size_t k = 0; k < high.size(); ++k)
+        high[k] = k % 2 ? -1000 : 1000;
+    std::vector<int16_t> big(4000);
+    const SoundHandle h = m.play(make(22050, 1, high), SoundType::Effects);
+    m.setMuffle(h, 1);
+    m.mix(big.data(), 2000);
+    CHECK(std::abs(big[3000]) < 200 && std::abs(big[3002]) < 200); // a seventh, at 22 kHz
+    const SoundHandle st = m.play(make(22050, 1, steady), SoundType::Effects);
+    m.setMuffle(st, 1);
+    m.mix(big.data(), 2000);
+    CHECK(std::abs(big[3000] - 1000) < 5);
+    m.stopAll();
     // Nothing to play.
     CHECK(m.play(nullptr, SoundType::Effects) == kNoSound && m.play(make(22050, 1, {}), SoundType::Effects) == kNoSound);
 }

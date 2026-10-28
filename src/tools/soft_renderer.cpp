@@ -119,6 +119,8 @@ void SoftRenderer3D::beginFrame(const gfx::Mat4& viewProj, const gfx::Vec3& eye,
     vh_ = h_;
     depthRange_ = 1;
     draws_ = triangles_ = 0;
+    if (!drawing) // nothing will be drawn or looked at: no need to clear
+        return;
     for (int y = 0; y < h_; ++y) {
         uint8_t* p = color_.row(y);
         for (int x = 0; x < w_; ++x) {
@@ -355,6 +357,8 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
 }
 
 void SoftRenderer3D::endFrame(const Surface* overlay) {
+    if (!drawing)
+        return;
     std::array<uint8_t, 256> curve{};
     for (int i = 0; i < 256; ++i)
         curve[size_t(i)] = uint8_t(std::clamp(std::pow(float(i) / 255.0f, 1 / gamma_), 0.0f, 1.0f) * 255.0f + 0.5f);

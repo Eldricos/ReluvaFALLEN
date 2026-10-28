@@ -773,6 +773,18 @@ void ScriptLevel::swapSurfaceTexture(int surf, VmObject* texture, bool wholeWorl
     ++surfaceSwaps_.serial;
 }
 
+bool ScriptLevel::worldBetween(const Vec& start, const Vec& end, float slack) {
+    // An end inside solid (an ambient sound placed in a wall or ceiling)
+    // sounds from the wall's face: nothing between.
+    if (!collision_ || collision_->solid(Vec3f{end[0], end[1], end[2]}))
+        return false;
+    const LevelCollision::Hit h =
+        collision_->trace(Vec3f{start[0], start[1], start[2]}, Vec3f{end[0], end[1], end[2]}, Vec3f{0, 0, 0});
+    const Vec d = sub(end, start);
+    const float length = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    return h.hit() && h.time * length < length - slack;
+}
+
 VmObject* ScriptLevel::trace(VmObject* self, const Vec& start, const Vec& end, const Vec& extent, bool actors,
                              Vec& hitLocation, Vec& hitNormal) {
     float time = 1;

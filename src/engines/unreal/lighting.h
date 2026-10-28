@@ -47,9 +47,9 @@ struct LightSource {
     uint8_t type = kLightSteady;
     float period = 1, phase = 0;
     // Its LightEffect (Engine.Actor's ELightEffect). Cylinder (17) lights
-    // to its radius across, at any height; the wavers, shimmer and waves
-    // change its brightness over time (here as a whole: their patterns
-    // across a surface aren't drawn).
+    // to its radius across, at any height; the wavers, shimmer, waves,
+    // disco and rotor make patterns that move across the surfaces it
+    // lights (lightPattern), shock flashes it as a whole.
     uint8_t effect = 0;
     bool cylinder = false;
     // Its actor (an object reference in the level's package), its own
@@ -65,8 +65,28 @@ struct LightSource {
 // The share of its brightness (0-1) a light gives `time` seconds in: its
 // LightType's curve times its LightEffect's.
 float lightLevel(const LightSource& light, float time);
-// As lightLevel, for a light now of type `type`.
-float lightLevel(const LightSource& light, uint8_t type, float time);
+// As lightLevel, for a light now of type `type`. Not `whole`: without its
+// effect's share where that's a pattern across the surfaces (lightPattern
+// gives it texel by texel).
+float lightLevel(const LightSource& light, uint8_t type, float time, bool whole = true);
+// Whether a light's effect is a pattern across what it lights.
+bool hasLightPattern(const LightSource& light);
+// A point a pattern is drawn at: its place less the light's, and its
+// direction (yaw and pitch, radians) and distance from it, found once.
+struct PatternPoint {
+    Vec3f offset{};
+    float yaw = 0, pitch = 0, distance = 0;
+};
+PatternPoint patternPoint(const Vec3f& offset);
+// What a pattern needs of the time, worked out once a frame for each light.
+struct PatternNow {
+    float a = 0, b = 0;    // the wavers' random shares
+    float turn = 0;        // the rotor's and disco's, radians
+    float time = 0;
+};
+PatternNow patternNow(const LightSource& light, float time);
+// That pattern's share (0-1) at a point.
+float lightPattern(const LightSource& light, const PatternNow& now, const PatternPoint& at);
 // How far a point is from a light, as its light falls off: straight, or
 // across for a cylinder.
 float lightDistance(const LightSource& light, const Vec3f& point);
@@ -112,9 +132,18 @@ struct LightmapPlacement {
 struct AnimatedLightmap {
     int page = 0, x = 0, y = 0, w = 0, h = 0;
     std::vector<Vec3f> base; // w * h, rows top to bottom
-    std::vector<std::pair<int, std::vector<Vec3f>>> lights; // LevelLights::animated index, its light
-    // Its texels with each light at levels[its index], as the pages hold them.
-    void draw(const std::vector<float>& levels, std::vector<uint8_t>& rgba) const;
+    struct Light {
+        int index = 0;              // in LevelLights::animated
+        std::vector<Vec3f> share;   // its light at full brightness, per texel
+        std::vector<PatternPoint> points; // each texel's place against it, if its effect is a pattern
+    };
+    std::vector<Light> lights;
+    int zone = 0; // its surface's (redrawn only while that's seen)
+    // Its texels with each light at levels[its index], as the pages hold
+    // them; a light with a pattern also by lightPattern (`sources` its
+    // LightSource, `now` its PatternNow, by the same index).
+    void draw(const std::vector<float>& levels, std::vector<uint8_t>& rgba,
+              const std::vector<LightSource>* sources = nullptr, const std::vector<PatternNow>* now = nullptr) const;
 };
 
 struct LightmapAtlas {

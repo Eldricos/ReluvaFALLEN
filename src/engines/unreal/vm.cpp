@@ -85,7 +85,7 @@ Value Value::objectValue(VmObject* v) {
     return x;
 }
 
-int32_t Value::asInt() const {
+int32_t Value::asIntSlow() const {
     switch (type) {
     case VType::Float: return int32_t(f);
     case VType::Byte:
@@ -96,7 +96,7 @@ int32_t Value::asInt() const {
     default: return 0;
     }
 }
-float Value::asFloat() const {
+float Value::asFloatSlow() const {
     switch (type) {
     case VType::Float: return f;
     case VType::Byte:
@@ -106,7 +106,7 @@ float Value::asFloat() const {
     default: return 0;
     }
 }
-bool Value::asBool() const {
+bool Value::asBoolSlow() const {
     switch (type) {
     case VType::Float: return f != 0;
     case VType::Object: return asObject() != nullptr;
@@ -116,7 +116,6 @@ bool Value::asBool() const {
     default: return i != 0;
     }
 }
-VmObject* Value::asObject() const { return type == VType::Object && o && !o->deleted ? o : nullptr; }
 
 Value VmProperty::zero() const {
     Value v;
@@ -1798,7 +1797,17 @@ Value Vm::callEvent(VmObject* self, std::string_view function, std::vector<Value
     if (self->disabled.count(n))
         return Value();
     VmFunction* f = findFunction(self, n);
-    return f ? invoke(f, self, std::move(args)) : Value();
+    if (!f)
+        return Value();
+    if (f->doesNothing < 0) {
+        const Code& c = f->code;
+        const bool empty = !f->native && !(f->flags & funcflag::Native) && !f->returnValue && !c.statements.empty() &&
+                           c.exprs[size_t(c.statements[0])].token == token::Return &&
+                           (c.exprs[size_t(c.statements[0])].args.empty() ||
+                            c.exprs[size_t(c.exprs[size_t(c.statements[0])].args[0])].token == token::Nothing);
+        f->doesNothing = empty ? 1 : 0;
+    }
+    return f->doesNothing ? Value() : invoke(f, self, std::move(args));
 }
 
 VmState* Vm::findState(VmClass* cls, NameId stateName) {

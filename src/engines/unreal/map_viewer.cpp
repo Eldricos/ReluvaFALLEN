@@ -127,6 +127,7 @@ void MapViewer::unload() {
             renderer_->destroyMesh(g.mesh);
     gpuMeshes_.clear();
     meshes_.clear();
+    posedTopology_.clear();
     liveMeshes_.clear(); // indexes into meshes_
     meshActors_.clear();
     jump_ = -1;
@@ -237,9 +238,13 @@ void MapViewer::load(int index) {
     lightmapPages_ = pages;
     changingLights_ = lights.animated;
     lightLevels_.clear();
-    for (const LightSource& l : changingLights_)
+    mapLevels_.clear();
+    for (const LightSource& l : changingLights_) {
         lightLevels_.push_back(lightLevel(l, 0));
+        mapLevels_.push_back(lightLevel(l, l.type, 0, false));
+    }
     animatedLightmaps_ = std::move(atlas.animated);
+    staleLightmaps_.assign(animatedLightmaps_.size(), false);
     lightTime_ = 0;
 
     // Group the polygons by texture, drawing flags and lightmap page.
@@ -1310,9 +1315,9 @@ void MapViewer::updateAnimatedTextures(float dt) {
 // playing, a light the scripts may change as its live actor is (its
 // LightType and LightBrightness: a TriggerLight fading, a light turned
 // off, or destroyed).
-float MapViewer::liveLightLevel(const LightSource& l) {
+float MapViewer::liveLightLevel(const LightSource& l, bool whole) {
     if (!play_ || !l.scripted || !l.ref)
-        return lightLevel(l, lightTime_);
+        return lightLevel(l, l.type, lightTime_, whole);
     VmObject* a = play_->actorAt(l.ref);
     if (!a)
         return 0;
@@ -1320,35 +1325,51 @@ float MapViewer::liveLightLevel(const LightSource& l) {
     const Value* type = a->find(vm, "LightType");
     const Value* brightness = a->find(vm, "LightBrightness");
     const float share = brightness && l.brightness ? float(brightness->asInt()) / float(l.brightness) : 1;
-    return std::clamp(lightLevel(l, type ? uint8_t(type->asInt()) : l.type, lightTime_) * share, 0.0f, 2.0f);
+    return std::clamp(lightLevel(l, type ? uint8_t(type->asInt()) : l.type, lightTime_, whole) * share, 0.0f, 2.0f);
 }
 
 // Redraws the lightmaps that pulsing, flickering... lights reach, where
-// those lights' brightness changed.
+// those lights' brightness changed, and those with a light effect's
+// pattern on them every frame (it moves across them). Meshes take each
+// light's level as a whole (lightLevels_); the lightmaps theirs less a
+// pattern, which lightPattern gives texel by texel (mapLevels_). Only
+// lightmaps in a zone seen are drawn; the others are drawn when it is.
 void MapViewer::updateLightmaps(float dt) {
     lightTime_ += dt;
     std::vector<bool> changed(changingLights_.size(), false);
-    bool any = false;
+    patternNow_.resize(changingLights_.size());
     for (size_t i = 0; i < changingLights_.size(); ++i) {
-        const float level = liveLightLevel(changingLights_[i]);
-        if (std::fabs(level - lightLevels_[i]) * 255 >= 1) {
-            lightLevels_[i] = level;
-            changed[i] = any = true;
+        lightLevels_[i] = liveLightLevel(changingLights_[i]);
+        const float level = liveLightLevel(changingLights_[i], false);
+        const bool pattern = hasLightPattern(changingLights_[i]) && level > 0;
+        if (pattern)
+            patternNow_[i] = patternNow(changingLights_[i], lightTime_);
+        if (pattern || std::fabs(level - mapLevels_[i]) * 255 >= 1) {
+            mapLevels_[i] = level;
+            changed[i] = true;
         }
     }
-    if (!any)
-        return;
+    staleLightmaps_.resize(animatedLightmaps_.size(), false);
     std::vector<std::vector<uint8_t>> pixels;
     std::vector<gfx::TextureRegion> regions;
-    for (const AnimatedLightmap& m : animatedLightmaps_) {
-        const bool redraw = std::any_of(m.lights.begin(), m.lights.end(),
-                                        [&](const auto& l) { return changed[size_t(l.first)]; });
+    for (size_t k = 0; k < animatedLightmaps_.size(); ++k) {
+        const AnimatedLightmap& m = animatedLightmaps_[k];
+        const bool redraw = staleLightmaps_[k] || std::any_of(m.lights.begin(), m.lights.end(), [&](const AnimatedLightmap::Light& l) {
+                                return changed[size_t(l.index)];
+                            });
         if (!redraw || size_t(m.page) >= lightmapPages_.size() || !lightmapPages_[size_t(m.page)])
             continue;
+        if (m.zone >= 0 && m.zone < 64 && !((zonesSeen_ >> m.zone) & 1)) {
+            staleLightmaps_[k] = true;
+            continue;
+        }
+        staleLightmaps_[k] = false;
         pixels.emplace_back();
-        m.draw(lightLevels_, pixels.back());
+        m.draw(mapLevels_, pixels.back(), &changingLights_, &patternNow_);
         regions.push_back({lightmapPages_[size_t(m.page)], m.x, m.y, m.w, m.h, nullptr});
     }
+    if (regions.empty())
+        return;
     for (size_t i = 0; i < regions.size(); ++i)
         regions[i].rgba = pixels[i].data();
     renderer_->updateTextures(regions);
@@ -1888,8 +1909,11 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
             renderer_->destroyMesh(g.mesh);
     posedMeshes_.clear();
     std::vector<SpriteDraw> sprites;
+    // Only those that may be seen: not hidden, in a zone seen (the rest
+    // aren't drawn, so their scripts aren't asked to get them ready).
     for (VmObject* a : play_->level().actors())
-        drawLiveActor(a, sprites);
+        if (play_->mayBeSeen(a, zonesSeen_))
+            drawLiveActor(a, sprites);
     addDecals(sprites);
     drawSprites(sprites, forward, right);
 }
@@ -2136,7 +2160,15 @@ bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4
     const int32_t frames = mesh.animFrames;
     mesh.animFrames = 1;
     GpuMesh gpu;
-    const Error err = uploadMesh(*renderer_, mesh, gpu, ctx_.meshTurn, ctx_.meshYawQuarters);
+    auto topology = posedTopology_.find(at);
+    if (topology == posedTopology_.end()) {
+        MeshTopology t;
+        buildMeshTopology(mesh, t); // none: the upload below fails as uploadMesh's would
+        topology = posedTopology_.emplace(at, std::move(t)).first;
+    }
+    const Error err = topology->second.indices.empty()
+                          ? Error::fail("the mesh has no visible triangles")
+                          : uploadMesh(*renderer_, mesh, topology->second, gpu, ctx_.meshTurn, ctx_.meshYawQuarters);
     mesh.animFrames = frames;
     std::swap(mesh.verts, verts);
     if (err)

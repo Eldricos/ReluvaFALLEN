@@ -39,6 +39,16 @@ struct GpuMesh {
 enum class MeshTurn { None, FloatCopy, Reverse };
 const char* meshTurnName(MeshTurn turn);
 
+// What uploading a mesh needs of its triangles alone (each vertex and
+// texture coordinates once, the triangles by texture and flags): the
+// same for every frame, so worked out once for a mesh posed each frame.
+struct MeshTopology {
+    std::vector<std::pair<int32_t, std::array<float, 2>>> corners;
+    std::vector<uint32_t> indices;
+    std::vector<GpuMesh::Batch> batches;
+};
+Error buildMeshTopology(const Mesh& mesh, MeshTopology& out);
+
 // Uploads a mesh; positions are placed by its Scale, Origin and RotOrigin.
 // Imported meshes are also turned about Z by `yawQuarters` quarter turns
 // (each 16384 of yaw): with only the turn above, The Fallen's face their
@@ -46,6 +56,9 @@ const char* meshTurnName(MeshTurn turn);
 constexpr int kImportYawQuarters = 3;
 Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, MeshTurn turn = MeshTurn::Reverse,
                  int yawQuarters = kImportYawQuarters);
+// The same with its topology already worked out.
+Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, const MeshTopology& topology, GpuMesh& out,
+                 MeshTurn turn = MeshTurn::Reverse, int yawQuarters = kImportYawQuarters);
 
 // Where a mesh's packed vertex is, as uploadMesh places it (by Scale and
 // Origin, the import turn, RotOrigin), before the actor's own placement;
