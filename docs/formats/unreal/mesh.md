@@ -129,7 +129,12 @@ mesh's name and textures' file names, after it its body parts' names
 A rotation key's 6 bytes are a quaternion: x, y and z packed as 11, 11
 and 10 bits (0 to the top of each standing for -1 to 1, as packed
 vertices are), then w - 1 as a signed 16-bit fraction of 32767
-(x²+y²+z²+w² comes to 1 on every key).
+(x²+y²+z²+w² comes to 1 on every key). w - 1 runs from -2 to 0, more
+than 16 bits hold: for a negative w it wraps round, so a positive value
+v stands for v - 65536 (w = 1 + (v - 65536) / 32767). Read as plain
+signed, those keys came out with w near 1.5 (x, y and z leaving 0.46 for
+it) and the bone flipped half a turn between them and the keys round
+them: knees in the runs, FireRunR's right elbow.
 
 **Posing.** A bone's place at time t of a clip: turned by its rotation
 key's quaternion taken as rows of a matrix (i.e. by its conjugate, as row
@@ -257,7 +262,7 @@ They're in the skeleton's units (Scale applied, from the origin, the
 import turn not applied), not the float copy's. Checked: JemHaddar has a
 GunTip of its own (type 1, on its gun). Posed through each firing
 animation, the tip comes within 2 to 5.4 units of six of its seven places
-(the seventh, `FireRunRGunTipLoc`, below). Read in the float copy's
+(the seventh, `FireRunRGunTipLoc`, is now within 2.1 too). Read in the float copy's
 space, it is 18 to 100 units off every one.
 
 Checked:
@@ -271,10 +276,11 @@ Checked:
   name a type 1 point and an animation (`<Animation><Point>Loc`; two
   more name a `Fire` their meshes haven't). With each animation posed
   through its frames, the point comes 5.8 units from its place on
-  average, 31 within 5. The exception is `FireRunRGunTipLoc`, 10 to 17
-  units off on every mesh, nearly all of it the tip being lower than the
-  place: the game's pose for that shot held the gun higher than the
-  animation's keys do here, for a reason not found. Its X, the barrel,
+  average 3.6 units from its place, 47 of the 65 within 5, on every
+  mesh at the same point of each animation (FireRunF, B, L and R all 5%
+  in). `FireRunRGunTipLoc` was 10 to 17 units under its place until the
+  rotation keys' w was read with its wrap (below): its right elbow
+  flipped half a turn between keys. Its X, the barrel,
   lies along the place's X (within 0.95, either way) in 28 of the 65
   taken in the bone's axes, and in 1 taken in the triangle's own (X
   along its first edge, Z its normal, as before). The other two axes are

@@ -571,11 +571,18 @@ Mat43 then(const Mat43& a, const Mat43& b) {
 
 // A rotation key's 6 bytes: x, y and z as 11, 11 and 10 bits (0 to the
 // top of each standing for -1 to 1, as packed vertices' are), then w - 1
-// as a signed 16-bit fraction of 32767. Checked: x^2+y^2+z^2+w^2 comes to
-// 1 on every key looked at, and a bone's keys turn it smoothly.
+// as a signed 16-bit fraction of 32767. w - 1 runs from -2 to 0, so for a
+// negative w (past -1) it wraps round: a positive number stands for that
+// less 65536. Read without the wrap, those keys had w over 1 (1.5 where
+// x, y and z leave 0.46 for it), and a bone flipped half a turn between
+// them and its neighbours: FireRunR's right elbow, the gun swinging down
+// and back, its tip 10 to 17 units under the meshes' own precomputed
+// place. Checked: x^2+y^2+z^2+w^2 comes to 1 on every key looked at, and a
+// bone's keys turn it smoothly.
 std::array<float, 4> rotationKey(const uint8_t* p) {
     const uint32_t xyz = uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
-    const auto w = int16_t(uint16_t(p[4] | p[5] << 8));
+    const int32_t raw = int32_t(uint16_t(p[4] | p[5] << 8));
+    const int32_t w = raw == 0 ? 0 : raw - 65536; // w - 1: 0, or below (wrapped or not, the same)
     return {float(xyz & 0x7ff) / 2047 * 2 - 1, float((xyz >> 11) & 0x7ff) / 2047 * 2 - 1,
             float(xyz >> 22) / 1023 * 2 - 1, 1 + float(w) / 32767};
 }
