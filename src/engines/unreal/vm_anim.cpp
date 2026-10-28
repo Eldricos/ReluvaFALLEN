@@ -96,6 +96,7 @@ void ScriptLevel::startAnim(VmObject* a, NameId sequence, float rate, float twee
             r->f = rate * s->rate / float(std::max(1, s->numFrames));
         return;
     }
+    noteTweenFrom(a, tween > 0 && s);
     seqValue->i = sequence;
     auto set = [&](const char* name, float v) {
         if (Value* p = prop(a, name))
@@ -131,6 +132,7 @@ void ScriptLevel::tweenAnim(VmObject* a, NameId sequence, float seconds) {
     Value* seqValue = prop(a, "AnimSequence");
     if (!seqValue)
         return;
+    noteTweenFrom(a, seconds > 0);
     seqValue->i = sequence;
     const MeshAnimSeq* s = findAnim(vm_, a, sequence);
     const float n = s ? float(std::max(1, s->numFrames)) : 1;
@@ -147,6 +149,28 @@ void ScriptLevel::tweenAnim(VmObject* a, NameId sequence, float seconds) {
         p->f = seconds > 0 ? 1 / seconds : 1e6f;
     if (Value* p = prop(a, "AnimFrame"))
         p->f = -1 / n;
+}
+
+// Where a tween about to begin starts from: the animation showing now. One
+// begun mid-tween starts from where that one started (the pose between
+// isn't kept).
+void ScriptLevel::noteTweenFrom(VmObject* a, bool tweening) {
+    if (!tweening) {
+        tweenFrom_.erase(a);
+        return;
+    }
+    const Value* seq = prop(a, "AnimSequence");
+    const Value* frame = prop(a, "AnimFrame");
+    if (!seq || !seq->i || !frame)
+        return;
+    if (frame->asFloat() < 0 && tweenFrom_.count(a))
+        return;
+    tweenFrom_[a] = {seq->i, std::max(0.0f, frame->asFloat()), boolOf(prop(a, "bAnimLoop"))};
+}
+
+const ScriptLevel::TweenFrom* ScriptLevel::tweenFromOf(VmObject* a) const {
+    auto it = tweenFrom_.find(a);
+    return it == tweenFrom_.end() ? nullptr : &it->second;
 }
 
 bool ScriptLevel::animating(VmObject* a) {
@@ -291,6 +315,15 @@ void ScriptLevel::playLayer(VmObject* a, NameId group, NameId sequence, float ra
         l.rate = std::max(0.0f, rate) * s->rate / n; // looping it already: only its speed changes
         return;
     }
+    // Replacing one that shows: it stays as it is under this one, which
+    // fades in over it from nothing.
+    l.fromSequence = 0;
+    if (tween > 0 && l.sequence && l.weight > 0 && (l.sequence != sequence || l.bone != bone)) {
+        l.fromSequence = l.sequence;
+        l.fromFrame = std::max(0.0f, l.frame);
+        l.fromWeight = l.weight;
+        l.weight = 0;
+    }
     l.sequence = sequence;
     l.bone = bone;
     l.rest = fs::toLower(vm_.nameText(group)).find("lower") != std::string::npos;
@@ -327,6 +360,7 @@ void ScriptLevel::tweenOutLayer(VmObject* a, NameId group, float seconds) {
     if (l == it->second.end())
         return;
     l->second.weightRate = seconds > 0 ? -1 / seconds : -1e6f;
+    l->second.fromSequence = 0;
 }
 
 bool ScriptLevel::layerAnimating(VmObject* a, NameId group) {
@@ -366,8 +400,10 @@ void ScriptLevel::animateLayers(VmObject* a, float dt) {
             gone.push_back(group);
             continue;
         }
-        if (l.weightRate > 0 && l.weight >= 1)
+        if (l.weightRate > 0 && l.weight >= 1) {
             l.weightRate = 0;
+            l.fromSequence = 0; // faded in: what it replaced is gone
+        }
         if (l.finished)
             continue;
         if (l.rate <= 0) {

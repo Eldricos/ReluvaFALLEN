@@ -249,6 +249,14 @@ public:
     void tweenAnim(VmObject* actor, NameId sequence, float seconds);
     bool animating(VmObject* actor);
     void waitForAnim(VmObject* actor);
+    // While an actor tweens into an animation (AnimFrame below 0): the
+    // animation it was showing when the tween began, and where in it.
+    struct TweenFrom {
+        NameId sequence = 0;
+        float frame = 0;
+        bool loop = false;
+    };
+    const TweenFrom* tweenFromOf(VmObject* actor) const;
 
     // The Fallen's layered animation (vm_anim.cpp, C3DPlayAnim and kin):
     // an animation on part of a skeleton (a group, 'UpperTorso': a bone
@@ -262,6 +270,10 @@ public:
         float frame = 0, rate = 0; // as AnimFrame (below 0: tweening into it) and AnimRate
         bool loop = false, finished = false;
         float weight = 0, weightRate = 0; // how much it shows (0-1), and its change a second
+        // The layer it replaced, held where it was under this one while
+        // this one fades in over it.
+        NameId fromSequence = 0;
+        float fromFrame = 0, fromWeight = 0;
     };
     struct SkinChannel {
         NameId sequence = 0;
@@ -576,6 +588,8 @@ private:
     std::map<VmObject*, int> animWaits_; // actors in a latent FinishAnim, by their state serial then
     std::map<VmObject*, std::map<NameId, AnimLayer>> layers_;
     std::map<VmObject*, std::map<NameId, SkinChannel>> skins_;
+    std::map<VmObject*, TweenFrom> tweenFrom_;
+    void noteTweenFrom(VmObject* actor, bool tweening);
     std::map<VmObject*, std::pair<NameId, int>> layerWaits_; // in C3DFinishAnim: the group, the state serial
     struct ActorMesh;
     ActorMesh* actorMesh(VmObject* actor);

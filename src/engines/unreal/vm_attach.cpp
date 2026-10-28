@@ -153,15 +153,21 @@ std::vector<LayeredPoser::Layer> ScriptLevel::posedLayers(VmObject* a, ActorMesh
     if (!ls || !m.poser)
         return layers;
     names.clear();
-    names.reserve(ls->size()); // (the layers point into it)
+    // (The layers point into it.)
+    names.reserve(ls->size() * 2);
     for (const auto& [group, l] : *ls) {
-        if (l.weight <= 0 || !l.sequence)
+        if ((l.weight <= 0 && !l.fromSequence) || !l.sequence)
             continue;
         auto part = m.parts.find({l.bone, l.rest});
         if (part == m.parts.end())
             part = m.parts.emplace(std::make_pair(l.bone, l.rest), m.poser->part(vm_.nameText(l.bone), l.rest)).first;
         if (part->second.empty())
             continue;
+        // What it replaced first, held under it.
+        if (l.fromSequence) {
+            names.push_back(vm_.nameText(l.fromSequence));
+            layers.push_back({names.back(), l.fromFrame, &part->second, l.fromWeight});
+        }
         names.push_back(vm_.nameText(l.sequence));
         layers.push_back({names.back(), l.frame, &part->second, l.weight});
     }

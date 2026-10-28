@@ -404,12 +404,24 @@ bool LevelPlay::look(VmObject* a, Look& out) {
         out.unlit = v->asBool();
     if (const Value* v = a->find(vm, "bMultiMeshRenderInitial"))
         out.renderInitial = v->asBool();
+    out.tweenFrom.clear();
+    if (out.animFrame < 0)
+        if (const ScriptLevel::TweenFrom* from = level_->tweenFromOf(a)) {
+            out.tweenFrom = vm.nameText(from->sequence);
+            out.tweenFromFrame = from->frame;
+            out.tweenFromLoop = from->loop;
+        }
     out.layers.clear();
     if (const auto* layers = level_->layersOf(a))
-        for (const auto& [group, l] : *layers)
-            if (l.weight > 0 && l.sequence)
-                out.layers.push_back({vm.nameText(l.sequence), l.bone ? vm.nameText(l.bone) : std::string(), l.rest,
-                                      l.frame, l.weight});
+        for (const auto& [group, l] : *layers) {
+            if (!l.sequence || (l.weight <= 0 && !l.fromSequence))
+                continue;
+            const std::string bone = l.bone ? vm.nameText(l.bone) : std::string();
+            // What it replaced first, held under it while it fades in.
+            if (l.fromSequence)
+                out.layers.push_back({vm.nameText(l.fromSequence), bone, l.rest, l.fromFrame, l.fromWeight});
+            out.layers.push_back({vm.nameText(l.sequence), bone, l.rest, l.frame, l.weight});
+        }
     out.faces.clear();
     if (const auto* skins = level_->skinsOf(a))
         for (const auto& [tag, c] : *skins)

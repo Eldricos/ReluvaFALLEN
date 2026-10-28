@@ -1876,11 +1876,20 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
         asAsked();
         if ((look.hidden && !evenHidden) || look.drawType != kDrawMesh || !look.mesh)
             return;
+        if (!look.tweenFrom.empty())
+            liveMesh(look.mesh, look.tweenFrom); // borrowed too, if it's from the shared sets
         const int at = liveMesh(look.mesh, look.animSequence);
         if (at < 0)
             return;
         const Mesh& mesh = meshes_[size_t(at)];
         const MeshAnimSeq* anim = mesh.findAnim(look.animSequence);
+        MeshPose pose = poseAtFraction(mesh, anim, look.animFrame, look.animLoop);
+        // Tweening into it: from the frame it was showing to its first.
+        if (const MeshAnimSeq* from = look.tweenFrom.empty() ? nullptr : mesh.findAnim(look.tweenFrom);
+            from && anim && look.animFrame < 0) {
+            const MeshPose old = poseAtFraction(mesh, from, look.tweenFromFrame, look.tweenFromLoop);
+            pose = {old.lerp < 0.5f ? old.frame : old.next, pose.frame, tweenProgress(look, *anim)};
+        }
         std::vector<gfx::TextureId> skins;
         for (size_t k = 0; k < std::max<size_t>(mesh.textures.size(), 8); ++k) {
             ObjectRef tex = k < look.multiSkins.size() ? look.multiSkins[k] : ObjectRef{};
@@ -1895,8 +1904,7 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
         const MeshLight light = meshLightAt(look.location);
         if ((look.layers.empty() && look.adjust.empty() && look.faces.empty()) || !mesh.bones ||
             !drawLayered(look, at, placement, skins, light))
-            drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, poseAtFraction(mesh, anim, look.animFrame, look.animLoop),
-                     skins, light, kExposure, look.style);
+            drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, pose, skins, light, kExposure, look.style);
     } else if ((look.drawType == kDrawSprite || look.drawType == kDrawVerticalSprite ||
                 look.drawType == kDrawSpriteAnimOnce) && look.texture) {
         const auto [texture, size] = textureOf(look.texture);
@@ -1999,6 +2007,12 @@ void MapViewer::addDecals(std::vector<SpriteDraw>& sprites) {
     }
 }
 
+// How far through its tween into its animation an actor is (0 at the
+// start, 1 there): AnimFrame rises from -1/frames to 0.
+float MapViewer::tweenProgress(const LevelPlay::Look& look, const MeshAnimSeq& anim) {
+    return std::clamp(1 + look.animFrame * float(std::max(1, anim.numFrames)), 0.0f, 1.0f);
+}
+
 // A mesh with layered animations playing on parts of it, its bones bent
 // by its scripts, or its face moved: posed now from its own animation and theirs, uploaded as one frame (kept until the next
 // frame is drawn) and drawn. False if it can't be (no skeleton, an
@@ -2030,6 +2044,18 @@ bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4
     if ((layers.empty() && look.adjust.empty() && faces.empty()) ||
         !p.poser->pose(look.animSequence, look.animFrame, layers, verts, &look.adjust, &faces))
         return false;
+    // Tweening into its animation: from the pose it was in.
+    const Mesh& own = meshes_[size_t(at)];
+    if (const MeshAnimSeq* anim = own.findAnim(look.animSequence); anim && look.animFrame < 0 && !look.tweenFrom.empty()) {
+        std::vector<Vec3f> old;
+        if (p.poser->pose(look.tweenFrom, look.tweenFromFrame, layers, old, &look.adjust, &faces) &&
+            old.size() == verts.size()) {
+            const float t = tweenProgress(look, *anim);
+            for (size_t v = 0; v < verts.size(); ++v)
+                for (size_t k = 0; k < 3; ++k)
+                    verts[v][k] = old[v][k] + (verts[v][k] - old[v][k]) * t;
+        }
+    }
     // One frame of the mesh: its vertices swapped for the posed ones while
     // it's uploaded.
     Mesh& mesh = meshes_[size_t(at)];

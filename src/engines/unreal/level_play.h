@@ -117,6 +117,10 @@ public:
         std::string animSequence;
         float animFrame = 0, animRate = 0;
         bool animLoop = false;
+        // Tweening into it (animFrame below 0): what it's tweening from.
+        std::string tweenFrom;
+        float tweenFromFrame = 0;
+        bool tweenFromLoop = false;
         uint8_t style = 1;
         float scaleGlow = 1;
         bool unlit = false;            // bUnlit: as bright as its ScaleGlow, not the light where it is

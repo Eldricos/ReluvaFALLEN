@@ -333,6 +333,7 @@ private:
     uint64_t zonesSeen_ = ~uint64_t(0);
     bool zoneCulling_ = true;
     void seeZonesFrom(const gfx::Vec3& eye, const gfx::Mat4& viewProj);
+    static float tweenProgress(const LevelPlay::Look& look, const MeshAnimSeq& anim);
     // Actors drawn as meshes, each mesh uploaded once.
     struct MeshDraw {
         size_t mesh = 0; // into meshes_ / gpuMeshes_
