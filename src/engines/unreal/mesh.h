@@ -198,8 +198,17 @@ public:
     // every bone placed as `base` has it `fraction` through, then the
     // bones of each layer's part blended towards where its animation has
     // them, then `adjust`. False if an animation isn't the mesh's.
+    // A face channel (C3DSetSkinAnim): one of the face's vertex-key clips
+    // (Blink, EyeBrows, Phonemes) `seconds` into it, by `weight`.
+    struct Face {
+        std::string_view anim;
+        float seconds = 0, weight = 1;
+    };
+    // ... and the face's channels over that.
     bool pose(std::string_view base, float fraction, const std::vector<Layer>& layers, std::vector<Vec3f>& out,
-              const Adjust* adjust = nullptr) const;
+              const Adjust* adjust = nullptr, const std::vector<Face>* faces = nullptr) const;
+    // Whether it has a face (clips of vertex keys) to pose.
+    bool hasFace() const;
     // A bone's place in the same pose: its origin and axes (rows X, Y, Z),
     // in packed units as the vertices. False if there's no such bone or an
     // animation isn't the mesh's.

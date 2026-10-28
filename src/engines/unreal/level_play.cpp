@@ -410,6 +410,12 @@ bool LevelPlay::look(VmObject* a, Look& out) {
             if (l.weight > 0 && l.sequence)
                 out.layers.push_back({vm.nameText(l.sequence), l.bone ? vm.nameText(l.bone) : std::string(), l.rest,
                                       l.frame, l.weight});
+    out.faces.clear();
+    if (const auto* skins = level_->skinsOf(a))
+        for (const auto& [tag, c] : *skins)
+            // At its start a channel is the neutral face: nothing to add.
+            if (c.sequence && c.weight > 0.01f && c.frame > 0.001f)
+                out.faces.push_back({vm.nameText(c.sequence), c.frame, c.weight});
     out.adjust = level_->boneAdjust(a);
     return true;
 }

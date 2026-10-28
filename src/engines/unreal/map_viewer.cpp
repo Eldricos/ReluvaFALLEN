@@ -1893,7 +1893,7 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
         play_->drawn(a);
         const gfx::Mat4 placement = meshPlacement(look.location, look.rotation, look.drawScale, look.prePivot);
         const MeshLight light = meshLightAt(look.location);
-        if ((look.layers.empty() && look.adjust.empty()) || !mesh.bones ||
+        if ((look.layers.empty() && look.adjust.empty() && look.faces.empty()) || !mesh.bones ||
             !drawLayered(look, at, placement, skins, light))
             drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, poseAtFraction(mesh, anim, look.animFrame, look.animLoop),
                      skins, light, kExposure, look.style);
@@ -1999,8 +1999,8 @@ void MapViewer::addDecals(std::vector<SpriteDraw>& sprites) {
     }
 }
 
-// A mesh with layered animations playing on parts of it, or its bones bent
-// by its scripts: posed now from its own animation and theirs, uploaded as one frame (kept until the next
+// A mesh with layered animations playing on parts of it, its bones bent
+// by its scripts, or its face moved: posed now from its own animation and theirs, uploaded as one frame (kept until the next
 // frame is drawn) and drawn. False if it can't be (no skeleton, an
 // animation it hasn't): drawn as its own animation alone then.
 bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4& placement,
@@ -2022,9 +2022,13 @@ bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4
         if (!part->second.empty())
             layers.push_back({l.anim, l.frame, &part->second, l.weight});
     }
+    std::vector<LayeredPoser::Face> faces;
+    if (p.poser->hasFace())
+        for (const LevelPlay::Look::Face& f : look.faces)
+            faces.push_back({f.anim, f.seconds, f.weight});
     std::vector<Vec3f> verts;
-    if ((layers.empty() && look.adjust.empty()) ||
-        !p.poser->pose(look.animSequence, look.animFrame, layers, verts, &look.adjust))
+    if ((layers.empty() && look.adjust.empty() && faces.empty()) ||
+        !p.poser->pose(look.animSequence, look.animFrame, layers, verts, &look.adjust, &faces))
         return false;
     // One frame of the mesh: its vertices swapped for the posed ones while
     // it's uploaded.

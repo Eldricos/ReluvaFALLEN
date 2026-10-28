@@ -128,6 +128,13 @@ public:
             float frame = 0, weight = 0;
         };
         std::vector<Layer> layers;
+        // Its face's channels away from the neutral face (C3DSetSkinAnim:
+        // Blink, EyeBrows, Phonemes), seconds into each.
+        struct Face {
+            std::string anim;
+            float seconds = 0, weight = 0;
+        };
+        std::vector<Face> faces;
         // What its scripts do to its bones on top (a back bent, a hand on a gun).
         LayeredPoser::Adjust adjust;
     };

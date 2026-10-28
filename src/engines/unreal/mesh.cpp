@@ -1642,11 +1642,20 @@ struct LayeredPoser::Impl {
     const std::vector<AnimationSet>* sets = nullptr;
     // Each set's bone for each of the mesh's, by name, worked out once.
     mutable std::map<const AnimationSet*, std::vector<const BoneRecord*>> keys;
+    // The face's clips (those with vertex keys: Blink, EyeBrows,
+    // Phonemes), the neutral face they start from (packed units), and
+    // each bone's place in the pose that face is in.
+    std::vector<NamedClip> faceClips;
+    std::vector<Vec3f> neutral;
+    std::vector<Mat43> faceWorlds;
+    // Each vertex's bones and weights.
+    std::vector<std::vector<std::pair<uint32_t, float>>> vertexBones;
 
     BoneReader reader() const { return BoneReader{data, base, from, base + data.size()}; }
     bool locals(std::string_view base, float fraction, const std::vector<Layer>& layers,
                 std::vector<std::array<float, 12>>& out, const Adjust* adjust = nullptr) const;
     void adjusted(std::vector<Mat43>& local, const Adjust& adjust) const;
+    void addFaces(const std::vector<Face>& faces, const std::vector<Mat43>& world, std::vector<Vec3f>& out) const;
     // Each bone's place in the skeleton (its parents' placements and its own).
     std::vector<Mat43> worlds(const std::vector<Mat43>& local) const {
         std::vector<Mat43> world(local.size());
@@ -1726,6 +1735,37 @@ std::unique_ptr<LayeredPoser> LayeredPoser::open(const Package& package, int ind
     for (size_t c = 0; c < impl->bones[0].clipList.size(); ++c) {
         impl->clipStart.push_back(start);
         start += poser.clipFrames(c);
+    }
+    const auto frame = size_t(impl->mesh.frameVerts);
+    const std::vector<NamedClip> clips = findClipTable(r, frame);
+    for (const NamedClip& c : clips)
+        if (!c.keys.empty())
+            impl->faceClips.push_back(c);
+    if (!impl->faceClips.empty()) {
+        const size_t at = impl->faceClips[0].keys[0].second;
+        for (size_t v = 0; v < frame; ++v)
+            impl->neutral.push_back(unpackVertex(r.u32(at + 4 * v)));
+        impl->vertexBones.resize(frame);
+        for (size_t i = 0; i < impl->bones.size(); ++i) {
+            const BoneRecord& b = impl->bones[i];
+            for (uint32_t j = 0; j < b.vertices; ++j) {
+                const size_t v = r.u32(b.indices + 4 * size_t(j));
+                const float w = r.f32(b.weights + 4 * size_t(j));
+                if (v < frame && sane(w) && w > 0)
+                    impl->vertexBones[v].push_back({uint32_t(i), w});
+            }
+        }
+        // The neutral face is in BaseReference's pose (to within a few
+        // units at the hands, on Quark), else the bones' own placements.
+        std::vector<Mat43> ref(impl->bones.size());
+        size_t refClip = SIZE_MAX;
+        for (size_t c = 0; c < clips.size(); ++c)
+            if (fs::toLower(clips[c].name) == "basereference")
+                refClip = c;
+        for (size_t i = 0; i < ref.size(); ++i)
+            ref[i] = refClip < impl->bones[i].clipList.size() ? poser.local(impl->bones[i], refClip, 0)
+                                                               : impl->bones[i].placement;
+        impl->faceWorlds = impl->worlds(ref);
     }
     auto out = std::make_unique<LayeredPoser>();
     out->impl = std::move(impl);
@@ -1908,7 +1948,7 @@ void LayeredPoser::Impl::adjusted(std::vector<Mat43>& local, const Adjust& adjus
 }
 
 bool LayeredPoser::pose(std::string_view base, float fraction, const std::vector<Layer>& layers,
-                        std::vector<Vec3f>& out, const Adjust* adjust) const {
+                        std::vector<Vec3f>& out, const Adjust* adjust, const std::vector<Face>* faces) const {
     const Impl& m = *impl;
     std::vector<Mat43> local;
     if (!m.locals(base, fraction, layers, local, adjust))
@@ -1916,7 +1956,79 @@ bool LayeredPoser::pose(std::string_view base, float fraction, const std::vector
     const auto frame = size_t(m.mesh.frameVerts);
     out.assign(frame, Vec3f{});
     poseVertices(m.reader(), m.bones, frame, m.mesh.scale, m.mesh.origin, out.data(), [&](size_t i) { return local[i]; });
+    if (faces && !faces->empty() && !m.faceClips.empty())
+        m.addFaces(*faces, m.worlds(local), out);
     return true;
+}
+
+bool LayeredPoser::hasFace() const { return !impl->faceClips.empty(); }
+
+// The face: each channel's key at its time (between two, blended) less
+// the neutral face, by its weight; each vertex's share turned as its bones
+// are turned from the neutral face's pose to this one, and added.
+void LayeredPoser::Impl::addFaces(const std::vector<Face>& faces, const std::vector<Mat43>& world,
+                                  std::vector<Vec3f>& out) const {
+    const BoneReader r = reader();
+    const size_t frame = out.size();
+    std::vector<Vec3f> delta(frame, Vec3f{});
+    bool any = false;
+    for (const Face& f : faces) {
+        if (f.weight <= 0)
+            continue;
+        const std::string wanted = fs::toLower(f.anim);
+        const NamedClip* clip = nullptr;
+        for (const NamedClip& c : faceClips)
+            if (fs::toLower(c.name) == wanted)
+                clip = &c;
+        if (!clip)
+            continue;
+        size_t i = 0;
+        while (i + 1 < clip->keys.size() && clip->keys[i + 1].first <= f.seconds)
+            ++i;
+        float blend = 0;
+        if (i + 1 < clip->keys.size() && clip->keys[i + 1].first > clip->keys[i].first && f.seconds > clip->keys[i].first)
+            blend = std::min(1.0f, (f.seconds - clip->keys[i].first) / (clip->keys[i + 1].first - clip->keys[i].first));
+        const float w = std::min(1.0f, f.weight);
+        for (size_t v = 0; v < frame && v < neutral.size(); ++v) {
+            Vec3f p = unpackVertex(r.u32(clip->keys[i].second + 4 * v));
+            if (blend > 0) {
+                const Vec3f q = unpackVertex(r.u32(clip->keys[i + 1].second + 4 * v));
+                p = vadd(p, vmul(vsub(q, p), blend));
+            }
+            const Vec3f d = vsub(p, neutral[v]);
+            if (vdot(d, d) > 1e-6f) {
+                delta[v] = vadd(delta[v], vmul(d, w));
+                any = true;
+            }
+        }
+    }
+    if (!any)
+        return;
+    // Each bone's turn from the neutral face's pose to this one.
+    std::vector<Mat43> turn(world.size());
+    for (size_t b = 0; b < world.size() && b < faceWorlds.size(); ++b) {
+        turn[b] = then(inverseOf(faceWorlds[b]), world[b]);
+        turn[b][9] = turn[b][10] = turn[b][11] = 0;
+    }
+    const Vec3f& scale = mesh.scale;
+    for (size_t v = 0; v < frame; ++v) {
+        if (vdot(delta[v], delta[v]) <= 0 || v >= vertexBones.size())
+            continue;
+        // In the skeleton's units, turned, back into packed ones.
+        const Vec3f d{delta[v][0] * scale[0], delta[v][1] * scale[1], delta[v][2] * scale[2]};
+        Vec3f sum{};
+        float weight = 0;
+        for (const auto& [b, w] : vertexBones[v]) {
+            if (b >= turn.size())
+                continue;
+            sum = vadd(sum, vmul(times(turn[b], d), w));
+            weight += w;
+        }
+        if (weight <= 0)
+            continue;
+        for (size_t c = 0; c < 3; ++c)
+            out[v][c] += sum[c] / weight / scale[c];
+    }
 }
 
 bool LayeredPoser::boneInParent(std::string_view base, float fraction, const std::vector<Layer>& layers,
