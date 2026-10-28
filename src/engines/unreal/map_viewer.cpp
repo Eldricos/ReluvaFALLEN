@@ -634,6 +634,58 @@ bool MapViewer::watchActor(const std::string& name) {
     return false;
 }
 
+bool MapViewer::teleportPlayer(const std::string& name, const Vec3f& offset, float yaw) {
+    if (!play_ || !play_->player())
+        return false;
+    Vm& vm = play_->vm();
+    for (VmObject* a : play_->level().actors()) {
+        if (a->deleted || fs::toLower(vm.nameText(a->name)) != fs::toLower(name))
+            continue;
+        const Value* at = a->find(vm, "Location");
+        if (!at)
+            return false;
+        const auto l = Vm::vectorOf(*at);
+        VmObject* p = play_->player();
+        play_->level().setLocation(p, {l[0] + offset[0], l[1] + offset[1], l[2] + offset[2]});
+        const int32_t units = int32_t(std::lround(yaw * 65536 / 360)) & 0xffff;
+        for (const char* rot : {"Rotation", "ViewRotation"})
+            if (Value* r = p->find(vm, rot))
+                *r = vm.rotatorValue(0, units, 0);
+        if (Value* v = p->find(vm, "Velocity"))
+            *v = vm.vectorValue(0, 0, 0);
+        if (Value* ph = p->find(vm, "Physics"))
+            ph->i = 2; // falling, onto whatever's under it
+        return true;
+    }
+    return false;
+}
+
+std::string MapViewer::describePlayer() {
+    if (!play_ || !play_->player())
+        return "no player";
+    Vm& vm = play_->vm();
+    VmObject* p = play_->player();
+    auto vec = [&](const char* name) {
+        const Value* v = p->find(vm, name);
+        if (!v)
+            return std::string("?");
+        const auto a = Vm::vectorOf(*v);
+        char buf[96];
+        std::snprintf(buf, sizeof buf, "%.1f %.1f %.1f", double(a[0]), double(a[1]), double(a[2]));
+        return std::string(buf);
+    };
+    const Value* physics = p->find(vm, "Physics");
+    const Value* seq = p->find(vm, "AnimSequence");
+    const Value* frame = p->find(vm, "AnimFrame");
+    char buf[64];
+    std::snprintf(buf, sizeof buf, " %.2f", double(frame ? frame->asFloat() : 0));
+    const Value* rot = p->find(vm, "Rotation");
+    const int yaw = rot ? int(std::lround(double(Vm::rotatorOf(*rot)[1] & 0xffff) * 360 / 65536)) : 0;
+    return "at " + vec("Location") + ", yaw " + std::to_string(yaw) + ", velocity " + vec("Velocity") + ", state " + play_->playerState() +
+           ", physics " + std::to_string(physics ? physics->asInt() : -1) + ", anim " +
+           (seq ? vm.nameText(seq->i) : std::string("?")) + buf;
+}
+
 bool MapViewer::selectMap(const std::string& name) {
     for (size_t i = 0; i < names_.size(); ++i)
         if (fs::toLower(names_[i]) == fs::toLower(name)) {

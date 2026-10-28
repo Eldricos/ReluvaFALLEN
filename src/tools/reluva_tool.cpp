@@ -4724,13 +4724,15 @@ private:
 // (what's playing),
 // hold <key> <s> (w a s d left right up down space enter escape f), down <key> and
 // up <key> (held across other steps), press <key>, watch <actor> (the
-// camera let loose in front of it),
+// camera let loose in front of it), teleport <actor> <dx> <dy> <dz> <yaw>
+// (the player put by it, facing yaw degrees), where (the player's place,
+// state, physics and animation),
 // drag <dx> <dy>, click <x> <y> (the left button, there), shot <file.ppm>
 // (the next frame, saved).
 int cmdUePlay(int argc, char** argv) {
     if (argc < 4) {
         std::fprintf(stderr, "usage: reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | "
-                             "down <key> | up <key> | press <key> | travel <url> | saves <dir> | watch <actor> | "
+                             "teleport <actor> <dx> <dy> <dz> <yaw> | where | down <key> | up <key> | press <key> | travel <url> | saves <dir> | watch <actor> | "
                              "drag <dx> <dy> | click <x> <y> | shot <file.ppm>]...\n");
         return 2;
     }
@@ -4848,6 +4850,16 @@ int cmdUePlay(int argc, char** argv) {
             const std::string who = argv[++i];
             std::printf("watch %s: %s\n", who.c_str(), page.watchActor(who) ? "looking at it" : "no such actor");
             frame();
+        } else if (step == "teleport" && i + 5 < argc) {
+            const std::string who = argv[++i];
+            const reluva::unreal::Vec3f off{float(std::atof(argv[i + 1])), float(std::atof(argv[i + 2])),
+                                            float(std::atof(argv[i + 3]))};
+            const float yaw = float(std::atof(argv[i + 4]));
+            i += 4;
+            std::printf("teleport %s: %s\n", who.c_str(), page.teleportPlayer(who, off, yaw) ? "there" : "no such actor");
+            frame();
+        } else if (step == "where") {
+            std::printf("where: %s\n", page.describePlayer().c_str());
         } else if ((step == "down" || step == "up") && i + 1 < argc) {
             send(step == "down" ? reluva::EventType::KeyDown : reluva::EventType::KeyUp, keyOf(argv[++i]));
         } else if (step == "press" && i + 1 < argc) {
@@ -5654,7 +5666,7 @@ int main(int argc, char** argv) {
                  "  reluva-tool ue-probe <package | game folder> <export> [-all | -at <offset> <bytes>]\n"
                  "  reluva-tool ue-script <game folder> <class | Class.Function | -all <dir>>\n"
                  "  reluva-tool ue-run <game folder> <map | -all> [seconds]\n"
-                 "  reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | down <key> | up <key> | press <key> | watch <actor> | drag <dx> <dy> | shot <file.ppm>]...\n"
+                 "  reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | teleport ... | where | down <key> | up <key> | press <key> | watch <actor> | drag <dx> <dy> | shot <file.ppm>]...\n"
 #endif
                  "");
     return 2;

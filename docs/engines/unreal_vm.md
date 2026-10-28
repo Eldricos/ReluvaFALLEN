@@ -252,8 +252,8 @@ The movement: 187,000 moves, 6,837 landings, 8,341 touches.
 What's left before play, by what `ue-run` reports:
 
 - **Natives not written**: none that a map calls in its first seconds.
-  The Fallen's effects' own physics modes are still only moved by their
-  copies' velocity (see Effects).
+  The Fallen's own physics modes are Reluva's reading of the scripts
+  (see Movement and Effects).
 - **Speed**: values are copied freely and calls looked up by name; the
   biggest maps tick at half real time.
 - **The game's own mistakes**: `DS9_GrigariSentryDrone` (and its kin)
@@ -311,9 +311,45 @@ Physics each tick, after the actor's scripts:
 | Rotating | `RotationRate` each second. Any physics also turns toward `DesiredRotation` with `bRotateToDesired` (not a player's pawn: its input turns it). |
 | Moving brush | While its script has it going (`InterpolateTo` sets `bInterpolating`): a mover from its old key toward its next by `PhysAlpha`, eased in and out if it glides by time. It carries the actors based on it and sends `InterpolateEnd` at the end. |
 
-The Fallen's own physics modes (its effects', past 32: about forty, one
-for each kind of effect) do nothing yet; the effects' copies move on
-their own (see Effects).
+The Fallen added its own modes (past 10): the player's climbing,
+free flight, fish, interpolation and one for each kind of effect.
+`vm_climbing.cpp` and `vm_effect_physics.cpp` work them; the original
+code isn't known, so each is Reluva's reading of what the scripts set
+and leave undone.
+
+| Physics | What it does |
+|---|---|
+| Interpolating, CTVE_Interpolating | Along a path of interpolation points (`SpecialEvent`'s player paths, the intro's camera): from `Target` to its `Next` by `PhysAlpha`, at `PhysRate` times the point's `RateModifier`, placed and turned between them. At each point, `InterpolateEnd` on the point and the actor (their scripts end the path), then on to the next (past one with `bSkipNextPath`). |
+| Trailer | At its owner's place (and turned as it, with `bTrailerSameRotation`), as UE1's. |
+| Climbing | Up and down a ladder at its `Acceleration.Z` (the scripts': `aForward` x 0.02, 120 a second). At the top, with no ladder at the chest, the ledge found there and `ChangePhysics(Clambering)`; down onto a floor, `Landed` and walking. |
+| Hanging | Along the ledge at its acceleration (`aStrafe` x 0.008), while there's ledge under its hands. |
+| Clambering | Up onto the ledge as its animation (`ledgeu`, `BigStep`) plays: the rise over its first two thirds, then forward past the wall. At the end, falling the last bit, so its scripts' `Landed` walks again (their `AnimEnd` would only start the animation again). |
+| RotatingYaw, RotatingPitch | Turning about the one axis by `RotationRate`. |
+| Particle | No gravity: its velocity changed by its acceleration (a ship lifting off, debris settled), moved against the world, `Landed` or `HitWall`. One that makes copies stays where its scripts put it. |
+| Newtonian | Free flight by momentum (the Vulture, the Wraith, the Arachnid): its acceleration changes its velocity, up to `AirSpeed`; no gravity, no friction. |
+| Fish | Toward its goal at `AccelRate` up to `WaterSpeed`, against the water's friction, facing the way it swims; it can leave the water (its scripts send it back). |
+| EXP_Trail | An explosion's trail: by its velocity and acceleration, through everything. |
+| The rest | Only their copies move (see Effects). |
+
+**Finding a ledge or a ladder** (`climbCheck`, after each walking or
+falling move of a `CTVE_PlayerPawn` pushing forward): a wall straight
+ahead, just above a step's height or at the chest. A ladder if its
+texture's `TexTag` says so (`TT_Ladder`): `ChangePhysics(Climbing)`.
+Else its top, traced down onto from above just past its face, as long
+as nothing's in the way up there. Its height goes in `LedgeHeight`, how
+deep it is in `LedgeDepth`, the room over it (as a half-height, which
+the scripts compare with theirs) in `HeadRoom`, the wall's normal in
+`LedgeNormal`. The scripts' `ChangePhysics` does the rest:
+- A ledge up to 100 above the feet, deep enough and with room, pushed
+  into for 0.15 seconds (at once in a jump): `Clambering`.
+- A higher one while falling, within the hands' reach (`ArmCollisionHeight`
+  over the head, up to 30 more): the player is put hanging from it,
+  facing the wall, and asked to hang (`Hanging`). Forward from there
+  climbs up (the scripts' `PlayerHanging`); jump or back lets go.
+
+The input axes are 20 times the bindings' speeds (`aBaseY` 6000 for a
+held MoveForward), as UE1's input scales a held key's axis. The
+climbing speeds above are the scripts' factors of those.
 Natives: `Move`, `MoveSmooth`, `SetLocation`, `SetPhysics`, `Trace`
 (the world and actors' cylinders), `FastTrace`, `PointCheck`, `Pawn`'s
 latent `MoveTo`, `MoveToward`, `TurnTo`, `TurnToward`, `WaitForLanding`
@@ -697,13 +733,49 @@ moves them and works the effects' natives. All of this is Reluva's
 reading of what the scripts set and expect; the original code isn't
 known.
 
-- **Copies**: each tick, each moves by its `Velocity`, which its
-  `Acceleration` changes. One with a `LifeSpan` is let go when it runs
-  out. An actor with a copy list is drawn as its copies only (even none
+- **Copies**: each tick, as the actor's physics mode has them (below).
+  Most move by their `Velocity`, which their `Acceleration` changes,
+  and are let go when their `LifeSpan` runs out (none: they last). An actor with a copy list is drawn as its copies only (even none
   yet), unless it asks to be drawn as well (`bMultiMeshRenderInitial`).
   Each copy is drawn as the actor's mesh or sprite, in its place, with
   its rotation, `DrawScale`, `AxisScale` (along its own axes),
   `ScaleGlow`, style and texture.
+- **Copies by physics mode** (`moveMultiMeshes`):
+  - Placed by their own natives or scripts, only aged: arcs (`Spark`),
+    beams (`BeamSustain`), the M4 rifle's gas cloud (`GasCloudM4`,
+    fading).
+  - Particle, Smoke, SteamJet: with a generator (`CTVE_Generator`, the
+    holder's owner), growing by its `DeltaSize` a second, fading with
+    `bFadeGlow`, shrinking away with `bFadeSize` if they don't grow,
+    blown by its `WindForce` when `bIsWindy`. A steam puff stops when
+    it has slowed to nothing and hangs there (`bUse`).
+  - Bubble: rising to the water's surface (the generator's
+    `SeedLocation`), where it pops: the generator's `bMMEvent` and
+    `MMEventLocation` (its scripts spawn a ripple).
+  - WaterRing: spreading by its `Angle` a second, fading.
+  - FanParticle: along the fan's axis from a point on its disc (`Phase`
+    -1 to 1 of its reach, the side the fan's `Acceleration.X` says, at
+    its `Acceleration.Z`), fading toward the end.
+  - SpiralJet: out along the steam's X axis on a widening, turning
+    circle; growing and fading by its base's `Use1` and `Use2`.
+  - ExhaustJet, PlasmaThrower, EXP_Smoke, EXP_Column, HotSpark,
+    CTVE_Sparks, DisintigrationPhaser: flying, growing and fading each
+    by its own fields (the exhaust's base `Use1`, the smoke's `Phase`,
+    the column's `Angle`...).
+  - EXP_Particle, EXP_Cinder: falling by the explosion's
+    `ParticleForces` (rising by the cinders' `wind`, jostled by their
+    chaos), fading; some flicker to the base's colour.
+  - EXP_Trail: fire's colour to smoke's (the base's `Vect1` to `Vect2`).
+  - EMPulseRifle: still, growing by the shot's power (its
+    `Acceleration.Z`, not an acceleration) and fading; EMPulseRifleQuad:
+    flaring and fading over its life.
+  - Fire_Gas: a fire's smoke, growing from nothing to the fire's size
+    as it rises, fading (half as bright: many overlap).
+  - FishInTank: each fish wanders to a place in the tank (the base's
+    `Vect1`-`Vect2` box) and on to another, darting while startled (the
+    base's `bUse`), facing the way it swims.
+  - SwarmObject, Lava, Weather and the rest: by their velocity and
+    acceleration (the swarm's scripts steer each by its acceleration).
 - **Arcs** (`CTVE_ChainSpark`): `SpawnChain` makes `NumSegments` copies.
   `ChainSparkTick` lays them along a cubic Bezier from `StartLoc` to
   `FinishLoc`, leaving along `startPath` and arriving along
@@ -860,9 +932,12 @@ playing.
 
 `ScriptLevel::controls` (forward, strafe, turn, look up, each −1 to 1)
 is what the keys would say. Each tick it sets the input axes the way the
-engine does from DefUser.ini's bindings: `aBaseY` ±300 for
-`MoveForward`, `aStrafe` ±300, `aBaseX` ±150 for `TurnLeft`/`TurnRight`,
-`aLookUp`, and the rest 0. Then come `PlayerInput` and `PlayerTick`. The
+engine does from DefUser.ini's bindings, 20 times their speeds as UE1's
+input scales a held key: `aBaseY` ±6000 for `MoveForward` (Speed 300),
+`aStrafe` ±6000, `aBaseX` ±3000 for `TurnLeft`/`TurnRight` (150),
+`aLookUp`, and the rest 0. Walking caps its acceleration, so only
+turning and the scripts' own factors (climbing) feel the scale; at 1x
+the keys turned 20 times too slowly and ladders climbed at 6 a second. Then come `PlayerInput` and `PlayerTick`. The
 Fallen's scripts work out the rest:
 - `CTVE_PlayerPawn.PlayerInput` turns `aBaseY` into `aForward` and
   `aBaseX` into `aTurn`. It zeroes them all while the HUD's letterbox is
@@ -1260,6 +1335,9 @@ blended triangles, enough to see a frame), driven by steps:
 `savegame <name>` (saved now: `QuickSave`, else the next `Save<n>`),
 `wav <file>` (the sound heard since the last, mixed offline), `sounds`,
 `watch <actor>` (the camera let loose in front of a live actor),
+`teleport <actor> <dx> <dy> <dz> <yaw>` (the player put by an actor,
+facing yaw degrees, falling), `where` (the player's place, velocity,
+state, physics and animation),
 `drag <dx> <dy>`, `click <x> <y>`, `shot <file.ppm>`. Checked that way:
 - **M01_KiraL2:** Kira runs down the stone corridor from behind, the
   camera swinging to her side, and turns into the wall with the camera

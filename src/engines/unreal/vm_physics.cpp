@@ -27,7 +27,8 @@ using Vec = std::array<float, 3>;
 constexpr float kPi = 3.14159265358979f;
 constexpr float kWalkable = 0.7f; // floors face up at least this much (about 45 degrees)
 constexpr int kPhysNone = 0, kPhysWalking = 1, kPhysFalling = 2, kPhysSwimming = 3, kPhysFlying = 4,
-              kPhysRotating = 5, kPhysProjectile = 6, kPhysMovingBrush = 10, kPhysSimpleWalking = 32;
+              kPhysRotating = 5, kPhysProjectile = 6, kPhysMovingBrush = 10, kPhysClambering = 13,
+              kPhysClimbing = 14, kPhysHanging = 15, kPhysSimpleWalking = 32;
 
 Vec add(const Vec& a, const Vec& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
 Vec sub(const Vec& a, const Vec& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
@@ -892,6 +893,8 @@ void ScriptLevel::physics(VmObject* a, float dt) {
     const int physics = physicsValue ? physicsValue->asInt() : 0;
     if (physics != kPhysFalling)
         fallers_.erase(a);
+    if (physics != kPhysClambering && clambers_.count(a))
+        endClamber(a);
     steer(a, dt);
     if (physics == kPhysNone && !boolOf(prop(a, "bRotateToDesired")))
         return;
@@ -966,6 +969,8 @@ void ScriptLevel::physics(VmObject* a, float dt) {
                 base->o = nullptr;
             vm_.callEvent(a, "Falling");
         }
+        if (!a->deleted && physicsValue->asInt() == kPhysWalking)
+            climbCheck(a, false, dt);
         break;
     }
     case kPhysFalling: {
@@ -995,7 +1000,9 @@ void ScriptLevel::physics(VmObject* a, float dt) {
             delta = mul(sub(delta, mul(h.normal, dot(delta, h.normal))), 1 - h.time);
             h = length(delta) > 1e-3f ? moveActor(a, delta) : MoveHit{};
         }
-        if (a->deleted || !h.hit())
+        if (!a->deleted && physicsValue->asInt() == kPhysFalling && (!h.hit() || h.normal[2] < kWalkable))
+            climbCheck(a, true, dt);
+        if (a->deleted || !h.hit() || physicsValue->asInt() != kPhysFalling)
             break;
         if (h.normal[2] >= kWalkable) {
             ++movement.landings;
@@ -1046,8 +1053,14 @@ void ScriptLevel::physics(VmObject* a, float dt) {
             vm_.callEvent(a, "HitWall", {vm_.vectorValue(h.normal[0], h.normal[1], h.normal[2]), Value::objectValue(levelInfo_)});
         break;
     }
+    case kPhysClambering:
+    case kPhysClimbing:
+    case kPhysHanging:
+        climbPhysics(a, physics, dt);
+        break;
     default:
-        break; // PHYS_Rotating (above), and The Fallen's own effect physics, not done yet
+        fallenPhysics(a, physics, dt); // PHYS_Rotating's done above
+        break;
     }
 }
 

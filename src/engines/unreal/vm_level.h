@@ -421,7 +421,11 @@ public:
     // The Fallen's effects (vm_effects.cpp). An actor's copies (its
     // MultiMesh list), in use, in order; each tick they move and age.
     std::vector<VmObject*> multiMeshes(VmObject* actor);
-    void moveMultiMeshes(VmObject* actor, float seconds);
+    void moveMultiMeshes(VmObject* actor, float seconds); // as its physics mode has them (vm_effect_physics.cpp)
+    // The Fallen's physics modes that move the actor itself (trailing its
+    // owner, drifting, free flight, fish, interpolation...).
+    void fallenPhysics(VmObject* a, int physics, float dt);
+    void interpolate(VmObject* a, float dt);
     void chainSparkTick(VmObject* spark, float seconds);
     void updateBeamSections(VmObject* beam, float seconds);
     void sparkTick(VmObject* sparks, float seconds);
@@ -440,6 +444,26 @@ public:
     VmObject* attachDecal(VmObject* decal, float distance, const std::array<float, 3>& direction);
     void detachDecal(VmObject* decal) { decals_.erase(decal); }
     const std::map<VmObject*, Decal>& decals() const { return decals_; }
+    // The Fallen's player climbing (vm_climbing.cpp): what's ahead (a
+    // wall, a ladder on it, a ledge on top), checked as it walks or falls,
+    // and the hanging, climbing and clambering physics.
+    struct Ledge {
+        bool ledge = false, ladder = false;
+        std::array<float, 3> wall{}, normal{}; // where the wall was met, and its normal (flat)
+        float height = 0, depth = 0, headRoom = 0;
+    };
+    bool findLedge(VmObject* a, const std::array<float, 3>& dir, float highest, Ledge& out);
+    void tellLedge(VmObject* a, const Ledge& l);
+    void climbCheck(VmObject* a, bool falling, float dt);
+    void climbPhysics(VmObject* a, int physics, float dt);
+    void endClamber(VmObject* a);
+    // Moved there at once, the camera's smoothing told (LocationOffset).
+    void setLocation(VmObject* a, const std::array<float, 3>& to);
+    struct Clamber {
+        std::array<float, 3> from{}, forward{};
+        float ledge = 0, reach = 0, seconds = 0, startFrame = -1, lastFrame = 0, done = 0;
+        std::array<float, 3> to(float height) const;
+    };
     // One actor's tick on its own (ScriptTick: the HUD's portrait, kept
     // going while the game's paused): its scripts and its animation.
     void tickActor(VmObject* actor, float seconds);
@@ -613,6 +637,17 @@ private:
     SurfaceSwaps surfaceSwaps_;
     std::map<VmObject*, Decal> decals_;
     std::map<VmObject*, float> sparkFlash_; // sparks' lights, on for this long yet
+    std::map<VmObject*, float> ledgePush_;  // the player pushing into a ledge, this long
+    std::map<VmObject*, Clamber> clambers_; // pulls up onto ledges under way
+    std::map<VmObject*, float> copyStarts_; // effects' copies: the life each started with
+    float copyFloat(VmObject* mm, const char* name, float otherwise = 0);
+    std::array<float, 3> copyVec(VmObject* mm, const char* name);
+    void setCopyFloat(VmObject* mm, const char* name, float v);
+    void setCopyVec(VmObject* mm, const char* name, const std::array<float, 3>& v);
+    float copyAge(VmObject* mm);
+    float copyAgeBefore(VmObject* mm, float age, float dt);
+    bool stepCopy(VmObject* mm, float dt, bool accelerate, bool move, const std::array<float, 3>& extra);
+    bool ageCopy(VmObject* mm, float dt);
     float time_ = 0;
     std::set<int> keysDown_;
     std::string travel_;

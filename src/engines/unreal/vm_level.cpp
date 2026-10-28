@@ -352,12 +352,17 @@ void ScriptLevel::tick(float seconds) {
             // The input axes, as the engine sets them each frame: those
             // the keys are bound to (DefUser.ini's MoveForward is "Axis
             // aBaseY Speed=+300", TurnRight "Axis aBaseX Speed=+150"...),
-            // the rest 0; PlayerInput works out the others from them.
+            // the rest 0; PlayerInput works out the others from them. A
+            // held key adds its speed times the frame's time, and the
+            // engine then scales the axes by 20 over the frame's time: 20
+            // times the speed in all (the scripts' climbing speed,
+            // aForward x 0.02, is 120 a second).
+            constexpr float kHeld = 20;
             const std::pair<const char*, float> axes[] = {
-                {"aBaseY", controls.forward * 300}, {"aStrafe", controls.strafe * 300},
-                {"aBaseX", controls.turn * 150},    {"aLookUp", controls.lookUp * 300},
+                {"aBaseY", controls.forward * 300 * kHeld}, {"aStrafe", controls.strafe * 300 * kHeld},
+                {"aBaseX", controls.turn * 150 * kHeld},    {"aLookUp", controls.lookUp * 300 * kHeld},
                 {"aMouseX", controls.mouseX}, {"aMouseY", controls.mouseY},
-                {"aUp", controls.jump ? 300.0f : 0.0f},
+                {"aUp", controls.jump ? 300.0f * kHeld : 0.0f},
                 {"aForward", 0}, {"aTurn", 0}, {"aBaseZ", 0},
             };
             for (const auto& [axis, value] : axes)
@@ -451,6 +456,8 @@ void ScriptLevel::destroy(VmObject* a) {
     ghosts_.erase(std::remove(ghosts_.begin(), ghosts_.end(), a), ghosts_.end());
     decals_.erase(a);
     sparkFlash_.erase(a);
+    ledgePush_.erase(a);
+    clambers_.erase(a);
 }
 
 void ScriptLevel::makeGhost(VmObject* a, bool ghost) {

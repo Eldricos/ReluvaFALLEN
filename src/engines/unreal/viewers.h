@@ -256,6 +256,10 @@ public:
     // Playing: the camera let loose, in front of the live actor of that
     // name looking at it; false if there's none.
     bool watchActor(const std::string& name);
+    // The player put by an actor (`offset` from it, facing `yaw` degrees),
+    // falling; and where it is, its state and physics (ue-play's tests).
+    bool teleportPlayer(const std::string& name, const Vec3f& offset, float yaw);
+    std::string describePlayer();
 
 private:
     void load(int index);

@@ -67,39 +67,6 @@ std::vector<VmObject*> ScriptLevel::multiMeshes(VmObject* actor) {
     return out;
 }
 
-// Each tick, each copy moves by its Velocity, which its Acceleration
-// changes (a swarm's scripts steer them by it, explosions' particles fly
-// off by it); one with a life (LifeSpan above 0) is let go (Delete) when it
-// runs out.
-void ScriptLevel::moveMultiMeshes(VmObject* actor, float seconds) {
-    for (VmObject* mm : multiMeshes(actor)) {
-        Value* loc = prop(mm, "Location");
-        Value* vel = prop(mm, "Velocity");
-        const Value* acc = prop(mm, "Acceleration");
-        if (loc && vel) {
-            Vec v = Vm::vectorOf(*vel);
-            if (acc) {
-                const Vec a = Vm::vectorOf(*acc);
-                if (a[0] != 0 || a[1] != 0 || a[2] != 0) {
-                    v = add(v, mul(a, seconds));
-                    *vel = vm_.vectorValue(v[0], v[1], v[2]);
-                }
-            }
-            if (v[0] != 0 || v[1] != 0 || v[2] != 0) {
-                const Vec l = add(Vm::vectorOf(*loc), mul(v, seconds));
-                *loc = vm_.vectorValue(l[0], l[1], l[2]);
-            }
-        }
-        if (Value* life = prop(mm, "LifeSpan"); life && life->asFloat() > 0) {
-            life->f -= seconds;
-            if (life->f <= 0) {
-                life->f = 0;
-                vm_.callEvent(mm, "Delete");
-            }
-        }
-    }
-}
-
 // An arc of sparks (CTVE_ChainSpark): a curve from StartLoc to FinishLoc,
 // leaving along startPath and arriving along FinishPath (a cubic Bezier
 // through StartLoc + startPath and FinishLoc + FinishPath, kept in P1-P3),
@@ -315,15 +282,6 @@ void ScriptLevel::sparkTick(VmObject* sparks, float seconds) {
         if (Value* p = prop(o, name))
             *p = v;
     };
-    // The ones flying fade as their lives run out (Use1: the life each
-    // started with).
-    const float glow = f("MaxScaleGlow");
-    for (VmObject* mm : multiMeshes(sparks)) {
-        const Value* life = prop(mm, "LifeSpan");
-        const Value* start = prop(mm, "Use1");
-        if (life && start && start->asFloat() > 0)
-            set(mm, "ScaleGlow", Value::floatValue(glow * std::clamp(life->asFloat() / start->asFloat(), 0.0f, 1.0f)));
-    }
     if (auto it = sparkFlash_.find(sparks); it != sparkFlash_.end() && (it->second -= seconds) <= 0) {
         set(sparks, "LightType", Value::byteValue(0));
         sparkFlash_.erase(it);
@@ -360,8 +318,7 @@ void ScriptLevel::sparkTick(VmObject* sparks, float seconds) {
         set(mm, "Rotation", vm_.rotatorValue(rot[0], rot[1], rot[2]));
         set(mm, "DrawScale", Value::floatValue(std::max(0.01f, vary(f("Size"), f("SizeVariance")))));
         set(mm, "LifeSpan", Value::floatValue(life));
-        set(mm, "Use1", Value::floatValue(life));
-        set(mm, "ScaleGlow", Value::floatValue(glow));
+        set(mm, "ScaleGlow", Value::floatValue(f("MaxScaleGlow")));
     }
     const float average = f("AverageBurstTime");
     delay->f = average > 0 ? average * (0.5f + frand()) : std::max(0.05f, frand() * f("MaxWaitTime"));
