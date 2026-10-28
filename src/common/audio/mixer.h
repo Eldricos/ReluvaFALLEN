@@ -50,6 +50,11 @@ public:
 
     void setVolume(SoundHandle handle, int volume);
     void setPan(SoundHandle handle, int pan);
+    // Its speed and pitch together: 1 as recorded, 2 an octave up.
+    void setPitch(SoundHandle handle, double pitch);
+    // Moves it to `frame` of its own frames (past the end: it ends, or
+    // wraps if it loops).
+    void seek(SoundHandle handle, double frame);
     void setTypeVolume(SoundType type, int volume);
     int typeVolume(SoundType type) const;
 
@@ -67,6 +72,7 @@ private:
         int volume, pan;
         bool loop;
         double position = 0; // in the sound's frames
+        double pitch = 1;
         bool done = false;
     };
     Channel* find(SoundHandle handle);

@@ -594,6 +594,7 @@ void registerEngineNatives(Vm& vm) {
     registerCanvasNatives(vm);
     registerConsoleNatives(vm);
     registerSaveNatives(vm);
+    registerSoundNatives(vm);
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     auto B = [](bool v) { return Value::boolValue(v); };
 
@@ -664,9 +665,9 @@ void registerEngineNatives(Vm& vm) {
         if (Value* v = c.self ? c.self->find(c.vm, "Base") : nullptr)
             v->o = c.o(0);
     });
-    // Sound: not played by scripts yet.
-    for (const char* quiet : {"Actor.PlaySound", "Actor.PlayOwnedSound", "Actor.DemoPlaySound", "Actor.MakeNoise",
-                              "Actor.PlayDummySound"})
+    // Not heard yet: a demo's sounds, and the noises the AI hears (MakeNoise,
+    // PlayDummySound). Sounds themselves are vm_sound.cpp's.
+    for (const char* quiet : {"Actor.DemoPlaySound", "Actor.MakeNoise", "Actor.PlayDummySound"})
         reg(quiet, [](NativeCall&) {});
     reg("Actor.GetRegion", [](NativeCall& c) { // GetRegion(Vector Point, out PointRegion Region)
         if (c.vm.level)

@@ -70,6 +70,30 @@ public:
     // The HUD told of something (HudEvent: 1010, no game to quick load).
     void hudEvent(int code);
 
+    // Sounds, for the page to play (level_audio.cpp): what the scripts
+    // asked for since last time, where an actor is now (false once it's
+    // gone), the actors' ambient sounds, and the music.
+    std::vector<ScriptLevel::SoundRequest> takeSounds();
+    bool locationOf(VmObject* actor, Vec3f& out);
+    struct Ambient {
+        VmObject* actor = nullptr;
+        ObjectRef sound;
+        bool streamed = false; // one of the MP3s: music
+        Vec3f at{};
+        float radius = 0, volume = 0, pitch = 1;
+    };
+    void ambientSounds(std::vector<Ambient>& out);
+    VmObject* currentMusic() { return level_->currentMusic(); }
+    const ScriptLevel::Music& music() { return level_->music(); }
+    void musicEnded(VmObject* sound) { level_->musicEnded(sound); }
+    // The audio settings (the .ini's AudioDevice: MasterVolume,
+    // SFXVolume, MusicVolume, SpeechVolume 0-255; UseStereo,
+    // ReverseStereo) as the options leave them; the master volume as
+    // SetMasterVolume has it for now.
+    std::string audioSetting(const std::string& key);
+    float masterVolume();
+    bool takeKillSounds();
+
     // Where the camera is, as the game puts it each frame
     // (PlayerCalcView): behind the player, or a cut scene's camera.
     struct View {

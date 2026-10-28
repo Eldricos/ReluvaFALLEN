@@ -147,7 +147,8 @@ LevelCollision::Hit LevelCollision::trace(const Vec3f& start, const Vec3f& end, 
         hit.location = start;
         return hit;
     }
-    const BspNode& n = model_.nodes[size_t(std::abs(s.bestEntry) - 1)];
+    hit.node = std::abs(s.bestEntry) - 1;
+    const BspNode& n = model_.nodes[size_t(hit.node)];
     const float sign = s.bestEntry > 0 ? 1.0f : -1.0f;
     hit.normal = {n.plane[0] * sign, n.plane[1] * sign, n.plane[2] * sign};
     // Stopped a little short of the surface (0.1 units from its plane, not

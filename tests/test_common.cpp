@@ -213,6 +213,13 @@ static void testMixer() {
     m.stopType(SoundType::Music);
     m.mix(out.data(), 2);
     CHECK(!m.isPlaying(l) && out[0] == 0);
+    // Pitch: 2 plays every other frame; seek starts it further in.
+    const SoundHandle p = m.play(make(22050, 1, {0, 100, 200, 300, 400, 500}), SoundType::Effects);
+    m.setPitch(p, 2);
+    m.seek(p, 1);
+    m.mix(out.data(), 2);
+    CHECK(out[0] == 100 && out[2] == 300 && m.position(p) == 5.0);
+    m.stopAll();
     // Nothing to play.
     CHECK(m.play(nullptr, SoundType::Effects) == kNoSound && m.play(make(22050, 1, {}), SoundType::Effects) == kNoSound);
 }

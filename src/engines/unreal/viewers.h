@@ -34,6 +34,7 @@
 
 #include "engines/unreal/actors.h"
 #include "engines/unreal/games.h"
+#include "engines/unreal/level_audio.h"
 #include "engines/unreal/level_play.h"
 #include "engines/unreal/lighting.h"
 #include "engines/unreal/mesh_render.h"
@@ -243,6 +244,8 @@ public:
     // Shows the map of that name (once active); false if there's none.
     bool selectMap(const std::string& name);
     bool playing() const { return play_ != nullptr; }
+    // What the level being played has playing (LevelAudio::describe).
+    std::vector<std::string> sounds() const { return audio_ ? audio_->describe() : std::vector<std::string>{}; }
     // The level being played saved now, as the game's SaveGame command does.
     Error saveGame(const std::string& name);
     // The game's ClientTravel ("CM01a_SW/CM01_A_Sisko01?options"): that
@@ -353,6 +356,7 @@ private:
     // index into meshes_ / gpuMeshes_, -1 if it doesn't read.
     int liveMesh(const ObjectRef& mesh, const std::string& anim);
     std::unique_ptr<LevelPlay> play_;
+    std::unique_ptr<LevelAudio> audio_; // its sounds, when there's a mixer
     std::string playError_;
     std::string portal_; // the start playing began at, for the game's ?RESTART
     std::vector<VmObject*> moverActors_; // each of movers_'s live actor

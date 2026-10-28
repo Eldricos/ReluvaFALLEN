@@ -556,6 +556,58 @@ void ScriptLevel::updateTouching(VmObject* a) {
     }
 }
 
+// The surface a line meets: the node whose plane stopped it, or another
+// in the same plane (UnrealEd's coplanar nodes, linked by planeNode) whose
+// polygon holds the point.
+VmObject* ScriptLevel::surfaceTexture(const Vec& start, const Vec& end) {
+    if (!collision_)
+        return nullptr;
+    const LevelCollision::Hit hit = collision_->trace({start[0], start[1], start[2]}, {end[0], end[1], end[2]});
+    if (!hit.hit() || hit.node < 0)
+        return nullptr;
+    const Vec3f& p = hit.location;
+    auto holds = [&](const BspNode& n) {
+        if (n.vertexCount < 3 || size_t(n.vertPool) + n.vertexCount > model_.verts.size())
+            return false;
+        int sign = 0;
+        for (int k = 0; k < n.vertexCount; ++k) {
+            const int32_t ia = model_.verts[size_t(n.vertPool + k)].point;
+            const int32_t ib = model_.verts[size_t(n.vertPool + (k + 1) % n.vertexCount)].point;
+            if (ia < 0 || ib < 0 || size_t(ia) >= model_.points.size() || size_t(ib) >= model_.points.size())
+                return false;
+            const Vec3f& a = model_.points[size_t(ia)];
+            const Vec3f& b = model_.points[size_t(ib)];
+            const float ex = b[0] - a[0], ey = b[1] - a[1], ez = b[2] - a[2];
+            const float px = p[0] - a[0], py = p[1] - a[1], pz = p[2] - a[2];
+            const float side = (ey * pz - ez * py) * n.plane[0] + (ez * px - ex * pz) * n.plane[1] +
+                               (ex * py - ey * px) * n.plane[2];
+            if (std::fabs(side) < 0.01f)
+                continue;
+            const int s = side > 0 ? 1 : -1;
+            if (sign && s != sign)
+                return false;
+            sign = s;
+        }
+        return true;
+    };
+    int32_t found = hit.node;
+    for (int32_t at = hit.node, guard = 0; at >= 0 && size_t(at) < model_.nodes.size() && guard < 1000; ++guard) {
+        const BspNode& n = model_.nodes[size_t(at)];
+        if (holds(n)) {
+            found = at;
+            break;
+        }
+        if (n.planeNode <= 0 || n.planeNode == at)
+            break;
+        at = n.planeNode;
+    }
+    const int32_t surf = model_.nodes[size_t(found)].surf;
+    if (surf < 0 || size_t(surf) >= model_.surfs.size() || model_.surfs[size_t(surf)].texture == 0)
+        return nullptr;
+    const ObjectRef tex = vm_.packages().resolve(map_, model_.surfs[size_t(surf)].texture);
+    return tex ? vm_.objectAt(*tex.package, tex.exportIndex + 1) : nullptr;
+}
+
 VmObject* ScriptLevel::trace(VmObject* self, const Vec& start, const Vec& end, const Vec& extent, bool actors,
                              Vec& hitLocation, Vec& hitNormal) {
     float time = 1;
@@ -950,6 +1002,13 @@ void registerMovementNatives(Vm& vm) {
         c.args[0] = c.vm.vectorValue(where[0], where[1], where[2]);
         c.args[1] = c.vm.vectorValue(n[0], n[1], n[2]);
         c.result = Value::objectValue(hit);
+    });
+    // GetSurfaceTexture(Vector Start, Vector End): the texture of the
+    // level's surface between them (the footsteps' sound goes by its
+    // TexMaterial).
+    reg("Actor.GetSurfaceTexture", [](NativeCall& c) {
+        c.result = Value::objectValue(
+            c.vm.level ? c.vm.level->surfaceTexture(Vm::vectorOf(c.args[0]), Vm::vectorOf(c.args[1])) : nullptr);
     });
     reg("Actor.FastTrace", [](NativeCall& c) { // true if nothing in the world is in the way
         if (!c.vm.level || !c.self)

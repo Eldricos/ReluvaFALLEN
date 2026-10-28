@@ -132,6 +132,18 @@ std::string command(NativeCall& c, const std::string& text) {
                 c.vm.logger("SaveGame: " + err.message);
         return {};
     }
+    // The sound's: every sound stopped (KillSound, as a level fades out),
+    // the master volume for now (SetMasterVolume 0-255, as it fades).
+    if (verb == "killsound") {
+        if (c.vm.level)
+            c.vm.level->killSounds() = true;
+        return {};
+    }
+    if (verb == "setmastervolume" && w.size() >= 2) {
+        if (c.vm.level)
+            c.vm.level->masterVolume() = std::strtof(w[1].c_str(), nullptr);
+        return {};
+    }
     if (verb == "exit" || verb == "quit") {
         if (c.vm.level)
             c.vm.level->quitAsked() = true;
@@ -147,7 +159,7 @@ std::string command(NativeCall& c, const std::string& text) {
     }
     if (verb == "getcurrentcolordepth" || verb == "getcolordepths")
         return "32";
-    // The rest (sound, detail settings) do nothing yet.
+    // The rest (sound providers, detail settings) do nothing.
     return {};
 }
 

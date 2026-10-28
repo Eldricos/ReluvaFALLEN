@@ -5,8 +5,10 @@ Maps page plays a level (Enter), its scripts live, the player moved by
 the keyboard and mouse, seen from the game's own camera, the AI finding
 its way along the level's paths and the characters' lines shown as
 they're said, and its own HUD and menus drawn over it, the menus
-travelling from map to map, and games saved and loaded. It isn't the
-game yet: nothing makes a sound. Every class of the game loads (`vm.cpp`), every default
+travelling from map to map, games saved and loaded, and its sounds and
+music heard. It isn't the
+game yet: some of The Fallen's own engine functions are still missing
+(below). Every class of the game loads (`vm.cpp`), every default
 property converts to its type, and all 74 maps start: their actors made,
 the game type spawned, the start-up events sent, the player logged in as
 the level's character, then twenty seconds of ticks, with no crash. The
@@ -249,7 +251,7 @@ The movement: 187,000 moves, 6,837 landings, 8,341 touches.
 
 What's left before play, by what `ue-run` reports:
 
-- **Natives not written** (20): The Fallen's `ListActors` iterator (an AI's list of known actors, not yet
+- **Natives not written** (15): The Fallen's `ListActors` iterator (an AI's list of known actors, not yet
   understood), `GetRendererFlags`, and The Fallen's per-tick hooks and
   effects (`ScriptTick`, `ChainSparkTick`, `UpdateBeamSections`...).
 - **Speed**: values are copied freely and calls looked up by name; the
@@ -433,7 +435,7 @@ the natives.
   (`TRAIN01`), CM11_LabRitual's `START_G11B`, and a speech trigger on
   M04_SiskoL1 with no type.
 
-Not done: the voices aren't played (nothing makes a sound yet);
+Each line's voice plays as it starts (below, Sound). Not done:
 RETURNLINE (the communicator's menus) and the CAMERA column; the AI's
 own lines.
 
@@ -618,6 +620,71 @@ units above the floor, the player falls hidden from it, and the landing
 costs 6 (`TakeFallingDamage`, past −850 a second). Nothing at that start
 stops the fall, so this is the game's own doing; the menu hides it, and
 New Game starts a new player.
+
+### Sound
+
+`vm_sound.cpp` takes what the scripts play, and the page plays it
+(`level_audio.cpp`, through `common/audio`'s mixer). Where it's heard
+from, how it fades and what's what is Reluva's reading of how the
+scripts use it; the engine's own code isn't known.
+
+- **`PlaySound(Sound, Slot, Volume, bNoOverride, Radius, Pitch,
+  bNoHearNoise)`** and `PlayOwnedSound`:
+  - Heard from the actor, following it while it plays.
+  - Loudest where it is, fading to nothing at `Radius`, on the side the
+    camera hears it.
+  - Left out: `Volume` and `Pitch` are the actor's `TransientSound` ones,
+    `Radius` its `TransientSoundRadius`, else 25 × (`SoundRadius` + 1).
+  - A slot (all but none) holds one sound an actor. A new one stops the
+    old, unless `bNoOverride`, when it isn't played while the old one
+    is.
+  - Not done: the noise the AI hears (`bNoHearNoise`, `MakeNoise`).
+- **Ambient sounds:** each actor's `AmbientSound`, looping while it has
+  one. Heard as far as 25 × (`SoundRadius` + 1) units, at
+  `SoundVolume` / 255, its pitch `SoundPitch` / 64. It starts once the
+  camera is in reach.
+- **Music** is The Fallen's streamed sounds, the MP3s in `mp3/`
+  ([sound.md](../formats/unreal/sound.md)):
+  - The player's `CurrentMusic` names the track. The start sets it
+    (`OpeningSoundTrack`).
+  - A music trigger (`CTVE_MusicEvent`) plays a track through the HUD's
+    `PlaySound`. Playing a streamed sound makes it the music, at that
+    volume, started where the HUD's `StartTimeOffset` says. Each play
+    starts it again.
+  - Setting `CurrentMusic` to None fades it out over a second.
+  - When a track ends, `CurrentMusic` is None again. The filler music
+    (`CTVE_FillerMusic`) waits for that, then plays its own as an
+    ambient sound that it moves towards or away from the player to fade.
+  - A loaded game starts its music from the beginning.
+- **Voices:** a dialogue line's Sound (its record, in the package of its
+  table's name) plays as the line starts. It's heard everywhere, over
+  the communicator too, one at a time (a new line's stops the last).
+- **`GetSoundDuration(Sound)`** is its length; `CTVE_Dialog` times its
+  lines by it.
+- **Footsteps** go by the floor's material: `GetSurfaceTexture(Start,
+  End)` is the texture of the level's surface a line meets (`TexMaterial`:
+  cement, carpet, metal, water...). The surface is the node whose plane
+  the trace stopped at, or the coplanar one whose polygon holds the
+  point.
+- **The volumes** are the game's settings (`[Engine.Engine]
+  AudioDevice`'s section: Miles, in Default.ini `MasterVolume=160`,
+  `SFXVolume=190`, `MusicVolume=255`, `SpeechVolume=255`, each out of
+  255). Each kind's is under the master's, and the options page changes
+  them as it goes. So do `UseStereo` and `ReverseStereo`.
+  `SetMasterVolume` sets the master for now (a level fading out), and
+  `KillSound` stops every sound.
+
+On M04_KiraL1, in the first seconds:
+- the vents' and engines' hums and the lights' buzz (37 ambient sounds);
+- the lift, footsteps on cement, carpet and metal, the consoles'
+  telemetry, the communicator's chirp and Kira's line.
+
+M01_KiraL1A opens with its music ("evil"), and CM01a_SW, the Defiant
+at warp, with the tragic cue.
+
+`ue-play` mixes offline (`wav <file>`: what was heard since the last,
+and how loud each second; `sounds`: what's playing, and the last
+sounds started).
 
 ### Saved games
 
@@ -1113,6 +1180,7 @@ blended triangles, enough to see a frame), driven by steps:
 `travel <url>` (as the game's `ClientTravel`: "CM_SpaceStation/intro",
 "?load=QuickSave.dsa"), `saves <dir>` (where games are saved),
 `savegame <name>` (saved now: `QuickSave`, else the next `Save<n>`),
+`wav <file>` (the sound heard since the last, mixed offline), `sounds`,
 `watch <actor>` (the camera let loose in front of a live actor),
 `drag <dx> <dy>`, `click <x> <y>`, `shot <file.ppm>`. Checked that way:
 - **M01_KiraL2:** Kira runs down the stone corridor from behind, the

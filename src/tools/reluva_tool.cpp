@@ -4720,6 +4720,8 @@ private:
 // travel <url> (to "Map/Portal" and playing, as the game's ClientTravel;
 // "?load=Save1.dss" a saved game), saves <dir> (where games are saved),
 // savegame <name> (the level saved now: QuickSave, else the next Save<n>),
+// wav <file.wav> (the sound heard since the last, mixed offline), sounds
+// (what's playing),
 // hold <key> <s> (w a s d left right up down space enter escape f), down <key> and
 // up <key> (held across other steps), press <key>, watch <actor> (the
 // camera let loose in front of it),
@@ -4745,7 +4747,10 @@ int cmdUePlay(int argc, char** argv) {
     screen.create(960, 720, reluva::PixelFormat::RGBA32);
     std::vector<std::string> warnings;
     const GameInfo* game = findGame("ds9fallen");
-    ViewerContext ctx{sys, screen, set, *game, warnings};
+    // The sound mixed offline, a frame's worth each frame, for wav.
+    reluva::audio::Mixer mixer(22050);
+    std::vector<int16_t> heard;
+    ViewerContext ctx{sys, screen, set, *game, warnings, &mixer};
     MapViewer page(ctx);
     if (!page.selectMap(argv[3])) {
         std::fprintf(stderr, "no map %s\n", argv[3]);
@@ -4756,6 +4761,9 @@ int cmdUePlay(int argc, char** argv) {
     auto frame = [&] {
         now += 33;
         page.update(now);
+        const size_t at = heard.size();
+        heard.resize(at + 735 * 2); // a thirtieth of a second at 22050 Hz, stereo
+        mixer.mix(heard.data() + at, 735);
     };
     auto keyOf = [](const std::string& k) -> uint32_t {
         if (k == "left") return reluva::key::Left;
@@ -4794,6 +4802,39 @@ int cmdUePlay(int argc, char** argv) {
             for (int f = 0; f < int(s * 30); ++f)
                 frame();
             send(reluva::EventType::KeyUp, key);
+        } else if (step == "sounds") {
+            for (const std::string& s : page.sounds())
+                std::printf("  %s\n", s.c_str());
+        } else if (step == "wav" && i + 1 < argc) {
+            // What was heard since the last wav (or the start), as a WAVE
+            // file, and how loud each second of it was.
+            const std::string file = argv[++i];
+            std::FILE* out = std::fopen(file.c_str(), "wb");
+            if (!out) {
+                std::fprintf(stderr, "can't write %s\n", file.c_str());
+                return 1;
+            }
+            auto u32 = [&](uint32_t v) { std::fwrite(&v, 4, 1, out); };
+            auto u16 = [&](uint16_t v) { std::fwrite(&v, 2, 1, out); };
+            const uint32_t bytes = uint32_t(heard.size() * 2);
+            std::fwrite("RIFF", 1, 4, out);
+            u32(36 + bytes);
+            std::fwrite("WAVEfmt ", 1, 8, out);
+            u32(16), u16(1), u16(2), u32(22050), u32(22050 * 4), u16(4), u16(16);
+            std::fwrite("data", 1, 4, out);
+            u32(bytes);
+            std::fwrite(heard.data(), 2, heard.size(), out);
+            std::fclose(out);
+            std::printf("wav %s: %.1f s; loudest (RMS) each second:", file.c_str(), double(heard.size()) / 2 / 22050);
+            for (size_t s = 0; s < heard.size(); s += 22050 * 2) {
+                double sum = 0;
+                const size_t end = std::min(heard.size(), s + 22050 * 2);
+                for (size_t k = s; k < end; ++k)
+                    sum += double(heard[k]) * heard[k];
+                std::printf(" %.0f", std::sqrt(sum / double(end - s)));
+            }
+            std::printf("\n");
+            heard.clear();
         } else if (step == "savegame" && i + 1 < argc) {
             const reluva::Error err = page.saveGame(argv[++i]);
             std::printf("savegame: %s\n", err ? err.message.c_str() : "saved");

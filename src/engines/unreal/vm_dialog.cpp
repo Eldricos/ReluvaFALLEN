@@ -325,6 +325,19 @@ float ScriptLevel::lineSeconds(const DialogLine& l) {
 void ScriptLevel::beginLine(DialogThread& t, int index) {
     const DialogLine& l = dialogLines_[size_t(index)];
     ++dialogPlays_[size_t(index)];
+    // Its voice: the Sound of its record in the package of its table's
+    // name, heard everywhere (lines are meant to be heard, over the
+    // communicator too), one at a time.
+    if (const Package* p = vm_.packages().get(l.table))
+        if (const int e = p->findExport(l.record, "Sound"); e >= 0) {
+            SoundRequest r;
+            r.sound = {p, e};
+            r.slot = 5; // SLOT_Talk
+            r.speech = true;
+            if (soundRequests_.size() >= 256)
+                soundRequests_.erase(soundRequests_.begin());
+            soundRequests_.push_back(r);
+        }
     ++dialog.lines;
     t.line = index;
     t.seconds = lineSeconds(l);

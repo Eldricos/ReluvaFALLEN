@@ -83,6 +83,18 @@ void Mixer::setPan(SoundHandle handle, int pan) {
         c->pan = std::clamp(pan, -kMaxPan, kMaxPan);
 }
 
+void Mixer::setPitch(SoundHandle handle, double pitch) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (Channel* c = find(handle))
+        c->pitch = std::clamp(pitch, 0.05, 8.0);
+}
+
+void Mixer::seek(SoundHandle handle, double frame) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (Channel* c = find(handle))
+        c->position = std::max(0.0, frame);
+}
+
 void Mixer::setTypeVolume(SoundType type, int volume) {
     std::lock_guard<std::mutex> lock(mutex_);
     typeVolume_[int(type)] = std::clamp(volume, 0, kMaxVolume);
@@ -103,7 +115,7 @@ void Mixer::mix(int16_t* out, int frames) {
             continue;
         const Sound& s = *c.sound;
         const size_t n = s.frames(), ch = size_t(s.channels);
-        const double step = double(s.rate) / double(outputRate_);
+        const double step = double(s.rate) / double(outputRate_) * c.pitch;
         // Gains in 1/65536ths: volume x type volume, and a linear pan that
         // keeps the louder side at full level.
         const int64_t gain = int64_t(c.volume) * typeVolume_[int(c.type)];

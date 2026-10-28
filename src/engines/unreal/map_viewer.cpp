@@ -850,6 +850,11 @@ void MapViewer::update(uint64_t nowMs) {
 
     if (play_) {
         updatePlay(dt);
+        // Its sounds, heard from the game's camera.
+        if (ctx_.mixer && !audio_)
+            audio_ = std::make_unique<LevelAudio>(*ctx_.mixer, ctx_.packages);
+        if (audio_)
+            audio_->update(*play_, view_.location, view_.rotation, dt);
         if (play_->quitAsked())
             stopPlay();
         else if (const std::string url = play_->takeTravel(); !url.empty())
@@ -1505,6 +1510,8 @@ void MapViewer::stopPlay() {
             if (g.mesh)
                 renderer_->destroyMesh(g.mesh);
     posedMeshes_.clear();
+    if (audio_)
+        audio_->reset();
     play_.reset();
     moverActors_.clear();
     // The live actors' meshes stay uploaded (in meshes_), for playing again.

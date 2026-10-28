@@ -28,6 +28,7 @@ public:
         Vec3f normal{};    // of the surface hit, facing back along the move
         Vec3f location{};  // where the box's centre stopped
         bool startSolid = false; // it started overlapping solid space
+        int32_t node = -1;       // the node whose plane it stopped at (its coplanar ones share it)
         bool hit() const { return time < 1 || startSolid; }
     };
     // Sweeps a box (half sizes `extent`; zero for a line) from start to end.

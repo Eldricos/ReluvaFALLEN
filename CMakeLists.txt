@@ -183,6 +183,7 @@ if(RELUVA_ENGINE_UNREAL)
         src/engines/unreal/vm_level.cpp
         src/engines/unreal/vm_physics.cpp
         src/engines/unreal/vm_save.cpp
+        src/engines/unreal/vm_sound.cpp
         src/engines/unreal/vm_splines.cpp
         src/engines/unreal/vm_anim.cpp
         src/engines/unreal/vm_attach.cpp
@@ -193,6 +194,7 @@ if(RELUVA_ENGINE_UNREAL)
         src/engines/unreal/vm_canvas.cpp
         src/engines/unreal/font.cpp
         src/engines/unreal/dialog_table.cpp
+        src/engines/unreal/level_audio.cpp
         src/engines/unreal/level_play.cpp
         src/engines/unreal/actors.cpp
         src/engines/unreal/class_defaults.cpp

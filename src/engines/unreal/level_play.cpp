@@ -206,6 +206,66 @@ bool LevelPlay::quitAsked() const {
     return level_->quitAsked();
 }
 
+std::vector<ScriptLevel::SoundRequest> LevelPlay::takeSounds() {
+    return std::exchange(level_->soundRequests(), {});
+}
+
+bool LevelPlay::locationOf(VmObject* actor, Vec3f& out) {
+    if (!actor || actor->deleted)
+        return false;
+    const Value* v = actor->find(*vm_, "Location");
+    if (!v)
+        return false;
+    const auto l = Vm::vectorOf(*v);
+    out = {l[0], l[1], l[2]};
+    return true;
+}
+
+// Each actor with an AmbientSound: heard as far as 25 x (SoundRadius + 1)
+// units, at SoundVolume / 255, its pitch SoundPitch / 64.
+void LevelPlay::ambientSounds(std::vector<Ambient>& out) {
+    out.clear();
+    Vm& vm = *vm_;
+    for (VmObject* a : level_->actors()) {
+        if (a->deleted)
+            continue;
+        const Value* s = a->find(vm, "AmbientSound");
+        VmObject* sound = s ? s->asObject() : nullptr;
+        if (!sound || !sound->package || sound->exportIndex < 0)
+            continue;
+        Ambient am;
+        am.actor = a;
+        am.sound = {sound->package, sound->exportIndex};
+        am.streamed = level_->streamedSound(sound);
+        locationOf(a, am.at);
+        auto byte = [&](const char* name, int otherwise) {
+            const Value* v = a->find(vm, name);
+            return v ? v->asInt() : otherwise;
+        };
+        am.radius = 25.0f * float(byte("SoundRadius", 32) + 1);
+        am.volume = float(byte("SoundVolume", 128)) / 255;
+        am.pitch = float(byte("SoundPitch", 64)) / 64;
+        out.push_back(am);
+    }
+}
+
+std::string LevelPlay::audioSetting(const std::string& key) {
+    const std::string* device = vm_->configSetting("Engine.Engine", "AudioDevice");
+    const std::string* v = device ? vm_->configSetting(*device, key) : nullptr;
+    return v ? *v : std::string();
+}
+
+float LevelPlay::masterVolume() {
+    if (level_->masterVolume() >= 0)
+        return level_->masterVolume();
+    const std::string v = audioSetting("MasterVolume");
+    return v.empty() ? 255 : std::strtof(v.c_str(), nullptr);
+}
+
+bool LevelPlay::takeKillSounds() {
+    return std::exchange(level_->killSounds(), false);
+}
+
 void LevelPlay::hudEvent(int code) {
     if (const Value* hud = player_ && !player_->deleted ? player_->find(*vm_, "myHUD") : nullptr; hud && hud->asObject())
         vm_->callEvent(hud->o, "HudEvent", {Value::intValue(code)});

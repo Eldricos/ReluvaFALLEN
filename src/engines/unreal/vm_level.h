@@ -326,6 +326,36 @@ public:
     // The player's console (its viewport's), if it has one.
     VmObject* console();
 
+    // Sounds (vm_sound.cpp). What the scripts have asked to play since the
+    // page last took them (PlaySound; a dialogue line's voice), and the
+    // music.
+    struct SoundRequest {
+        VmObject* actor = nullptr; // heard from where it is; none: everywhere (a voice)
+        ObjectRef sound;
+        int slot = 0;              // ESoundSlot: 0 none, 5 talk...; one sound a slot an actor
+        float volume = 1, radius = 0, pitch = 1;
+        bool noOverride = false;   // not played over one already in its slot
+        bool speech = false;       // a voice, at the speech volume
+    };
+    std::vector<SoundRequest>& soundRequests() { return soundRequests_; }
+    // The music is the streamed sound the player's CurrentMusic names. One
+    // the scripts play (a music trigger's PlaySound) sets it, with its
+    // volume and where in it to start (the HUD's StartTimeOffset); each such
+    // play counts, so the same track can start again.
+    struct Music {
+        float volume = 1, startSeconds = 0;
+        int serial = 0;
+    };
+    Music& music() { return music_; }
+    VmObject* currentMusic();
+    void musicEnded(VmObject* sound); // CurrentMusic back to None, if it's still that
+    // Whether a Sound is one of The Fallen's streamed (MP3) ones: music.
+    bool streamedSound(VmObject* sound);
+    // The console's sound commands: every sound stopped (KillSound), and
+    // the master volume for now (SetMasterVolume; below 0: the setting's).
+    bool& killSounds() { return killSounds_; }
+    float& masterVolume() { return masterVolume_; }
+
     // Saved games (vm_save.cpp), in the folder the page gives: Reluva's
     // own files, under the game's names (QuickSave.dsa, Save<n>.dss).
     struct SaveInfo {
@@ -354,6 +384,9 @@ public:
     // place; the start-up events sent. nullptr if the class isn't an
     // actor's.
     VmObject* spawn(VmClass* cls, VmObject* owner, NameId tag, const Value* location, const Value* rotation);
+    // The texture of the level's surface a line from start to end meets
+    // first; null if it meets none (GetSurfaceTexture: what's underfoot).
+    VmObject* surfaceTexture(const std::array<float, 3>& start, const std::array<float, 3>& end);
     void destroy(VmObject* actor);
 
 private:
@@ -525,6 +558,11 @@ private:
     bool quitAsked_ = false;
     bool fastForward_ = false;
     std::filesystem::path saveFolder_;
+    std::vector<SoundRequest> soundRequests_;
+    Music music_;
+    std::map<const VmObject*, bool> streamed_;
+    bool killSounds_ = false;
+    float masterVolume_ = -1;
 };
 
 // A setting from a game's .ini ("Engine.Engine", "DefaultGame"); empty if
@@ -577,6 +615,8 @@ void registerCanvasNatives(Vm& vm);
 void registerConsoleNatives(Vm& vm);
 // The HUD's saved games list (vm_save.cpp).
 void registerSaveNatives(Vm& vm);
+// Sounds and music (vm_sound.cpp).
+void registerSoundNatives(Vm& vm);
 // A map's reach list as stored (object references, not yet actors).
 struct RawReachSpec {
     int distance = 0, start = 0, end = 0, radius = 0, height = 0, flags = 0;
