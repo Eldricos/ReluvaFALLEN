@@ -37,9 +37,10 @@ they go in. Never use Epic's licensee source code (leaked or otherwise).
 | Music | The Fallen has no music modules: its music is the MP3s (above), which play. Other UE1 games' modules (`.umx`) are extracted (`ue-extract`) but not played: there's no tracker player yet |
 | Levels | all 74 of The Fallen's maps read and draw. The level's BSP model: points, vectors, nodes, surfaces, vertices ([model.md](../formats/unreal/model.md)); polygons drawn textured, with masked, translucent and modulated surfaces, and only the zones seen through the zone portals. Lit by lightmaps worked out from the shadow bits and light actors, with zone ambient ([lighting.md](../formats/unreal/lighting.md)): lights' effects change their brightness (flicker, pulse, waver), scripted lights follow their scripts, lit actors light what's near them as they move, and movers are lit where they are. Movers (doors, lifts) from their own brushes, moved by their scripts, and the sky from the level's sky zone ([actors.md](../formats/unreal/actors.md)). Lightmaps, movers and the sky not yet compared with the original running; the patterns light effects draw across surfaces aren't drawn |
 | Meshes | all The Fallen's Mesh and LodMesh exports read (455 and 6), with their animations ([mesh.md](../formats/unreal/mesh.md)): vertex animation, and characters posed from their skeletons with their own clips and the shared animation sets; layers on parts of the body, faces (blink, brows, mouth), tweens from the pose showing, and the scripts' bends and IK; attachment points, where held things go, checked against the meshes' own precomputed places (`reluva-tool ue-points`). Lit where they stand ([actors.md](../formats/unreal/actors.md)); a Meshes page |
-| Viewer | Maps (3D, fly camera from the PlayerStart; Enter plays the level), Meshes, Textures, Sounds, Packages (tables and properties) |
+| Viewer | Maps (3D, fly camera from the PlayerStart; Enter plays the level), Meshes, Textures, Sounds, Movies, Packages (tables and properties) |
+| Movies | the intro (`movies/intro.avi`) plays first when the game starts, as the original's does, its pictures kept with its sound; Esc, Space or Enter skips it. AVI ([avi.md](../formats/common/avi.md)) with Cinepak video ([cinepak.md](../formats/common/cinepak.md)) and PCM sound; a Movies page plays it again |
 | UnrealScript | classes, states, functions, properties, enums, constants and their bytecode read (every one of The Fallen's), and written out as text (`ue-script`) ([script.md](../formats/unreal/script.md)). A VM runs them: classes loaded, objects, the interpreter with states, latent code and timers, and every native the game's scripts call, Core's, Engine's and The Fallen's own; every map runs (`ue-run`) ([unreal_vm.md](unreal_vm.md)) |
-| Game | started: the level's scripts run live with the player logged in, moving and colliding against the level, steered from the keyboard and mouse and seen from the game's own camera, cut scenes included (the Maps page, Enter; [unreal_vm.md](unreal_vm.md)). Actors' animations play on the scripts' timing, with their notifications. The AI finds its way along the level's paths; the characters' lines play from the dialogue tables ([dialogue.md](../formats/unreal/dialogue.md)), shown as they're said: cut scenes, hails over the communicator (requests for supplies, reports, signing off) and the AI's own lines (spotting the player, losing them, chatter); the documents and the level's objectives and title read from `int/` ([int.md](../formats/unreal/int.md)). The game's own HUD is drawn (its panels, numbers, communicator; [font.md](../formats/unreal/font.md)), and its menus work: the title, credits, main menu and info pad, New Game travelling to the opening, the UWindow options window with the mouse; games saved and loaded (Reluva's own files); sound: effects heard from where they are, ambient sounds, the music (the MP3s) and the dialogue's voices; the effects: particles, sparks, electric arcs, beams, rain and snow, decals. No native a map calls is left unwritten; The Fallen's own physics modes work: the player climbs ladders, hangs from ledges and pulls up onto them, and each kind of effect moves its particles |
+| Game | started: the level's scripts run live with the player logged in, moving and colliding against the level, steered from the keyboard and mouse and seen from the game's own camera, cut scenes included (the Maps page, Enter; [unreal_vm.md](unreal_vm.md)). Actors' animations play on the scripts' timing, with their notifications. The AI finds its way along the level's paths; the characters' lines play from the dialogue tables ([dialogue.md](../formats/unreal/dialogue.md)), shown as they're said: cut scenes, hails over the communicator (requests for supplies, reports, signing off) and the AI's own lines (spotting the player, losing them, chatter); the documents, the level's objectives and title and its actors' strings (messages, tricorder readings) read from `int/` ([int.md](../formats/unreal/int.md)). The game's own HUD is drawn (its panels, numbers, communicator; [font.md](../formats/unreal/font.md)), and its menus work: the title, credits, main menu and info pad, New Game travelling to the opening, the UWindow options window with the mouse; games saved and loaded (Reluva's own files); sound: effects heard from where they are, ambient sounds, the music (the MP3s) and the dialogue's voices; the effects: particles, sparks, electric arcs, beams, rain and snow, decals. No native a map calls is left unwritten; The Fallen's own physics modes work: the player climbs ladders, hangs from ledges and pulls up onto them, and each kind of effect moves its particles |
 
 **First check against the retail data** (October 2026): all 175 packages
 open (versions 71-73), all 3801 palettes and 2868 of 2930 sounds decode.
@@ -60,6 +61,7 @@ check again:
 ./build/reluva-tool ue-play   "/path/to/DS9TheFallen" <map> play wait 20 hold w 2 shot frame.ppm
 ./build/reluva-tool ue-points "/path/to/DS9TheFallen"     # attachment points against the meshes' precomputed places
 ./build/reluva-tool ue-extract "/path/to/DS9TheFallen" <package> <export>   # a texture (.tga), sound or music
+./build/reluva-tool video-frame "/path/to/DS9TheFallen/movies/intro.avi" <frame> frame.ppm
 ./build/reluva --hash "/path/to/DS9TheFallen/System/DS9.exe" ".../System/Engine.u"
 ```
 
@@ -70,7 +72,7 @@ added fields).
 ## Next steps
 
 What's left is mostly checking, a few things whose cause wasn't found,
-some data not read yet, and speed:
+and speed:
 
 1. **Compare with the original running.** Nothing has been compared side
    by side with The Fallen running: the lightmaps, movers and the sky on
@@ -87,16 +89,11 @@ some data not read yet, and speed:
    ([mesh.md](../formats/unreal/mesh.md)).
 4. **Play-through checks.** The supply beam-down hasn't been played end
    to end.
-5. **Data not read yet.** The rest of the maps' strings in `int/` (their
-   actors' messages and tricorder readings; the dialogue tables,
-   documents, objectives and titles are read), the `System/*.int`
-   localisation, and `movies/intro.avi` (the copy worked from doesn't
-   have it).
-6. **Speed.** M03_KiraL2 runs 20 seconds of play in about 11 of CPU;
+5. **Speed.** M03_KiraL2 runs 20 seconds of play in about 11 of CPU;
    the biggest maps to be measured again.
-7. **Other UE1 games.** A tracker player for music modules, and the
+6. **Other UE1 games.** A tracker player for music modules, and the
    layouts other licensees changed, once there's a second game to check
    against.
 
 The game's own gaps, which nothing here can fill: no lip-sync data, and
-no dialogue tables for mission 11, mission 12 or the training.
+no dialogue table for mission 12.

@@ -47,10 +47,13 @@ crewmate's report, signing off); 4 PAN EXB EXG GSP DWN; 5 FSE; 6 SUR TTP
 GPI KIL FHE EVT HUD TBD; 7 BAT LSE INT LED ACK; 8 AMB REP. No script asks
 for FSE, LSE, KIL, SUR, AMB or REP: the AI's own, the engine's.
 
-The game ships tables for missions 1, 3 to 7 and 10 and the others
-above, but not 11 (or 12, or the training's): their voices are in
-`m11_Dialogue.uax`, `m12_Dialogue.uax` and `trn_Dialogue.uax`, their
-text nowhere.
+The game ships tables for missions 1, 3 to 7, 10 and 11, the training
+(`TRN_Dialogue.txt`) and the others above: 2,181 lines in all. Some
+copies of the install lack `M11_Dialogue.txt` and `TRN_Dialogue.txt` (and
+mission 11's and the training room's `.int` files); the full CD install
+has them. Mission 11's has 73 lines, 70 with voices (KRA134 to 136 have
+none); the training's 68, all voiced. No copy has a table for mission
+12: its voices are in `m12_Dialogue.uax`, their text nowhere.
 
 A line's key is its mission, type, speaker and line ID run together
 (`K01AMBBFC000`); NEXTLINE and RETURNLINE name lines so, across tables

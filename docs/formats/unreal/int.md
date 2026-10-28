@@ -1,8 +1,8 @@
 # The Fallen: documents, objectives and map strings (int/*.int)
 
-Status: **partly implemented** (`src/engines/unreal/vm_documents.cpp`): the
-documents, the maps' objectives and titles are read. The actors' strings
-(messages, tricorder readings) aren't yet.
+Status: **implemented**: the documents, the maps' objectives and titles
+(`src/engines/unreal/vm_documents.cpp`), and the actors' strings
+(`Vm::applyLocalizedActor` in `src/engines/unreal/vm.cpp`).
 **Checked on The Fallen** (October 2026).
 
 Beside the dialogue tables ([dialogue.md](dialogue.md)), the install's
@@ -35,3 +35,13 @@ A map's `.int` has:
   actor's tag (`[consx1]`). These hold `MESSAGE`, the tricorder's
   `TRICORDERNAME`, `TRICORDERBIG1`/`2` and `TRICORDERSUB1` to `3`,
   `SCANSTRING` and a few others: the actors' localised strings.
+  The section goes by the actor's **Tag**, not its object name:
+  M01_KiraL2's `[notaligned1]` is for SpecialEvent17, whose Tag is
+  `notaligned1`. Each key is one of the actor's class's `localized`
+  properties, set from the text as the map is loaded (after its own
+  properties, so the text wins over what the map was saved with). A few
+  sections are left over from actors since taken out, and match none.
+
+The class-level strings (a class's `localized` defaults) come from
+`System/<Package>.int` and `int/Classes.int`, under `[ClassName]`
+sections; those are read with the class defaults, not from here.

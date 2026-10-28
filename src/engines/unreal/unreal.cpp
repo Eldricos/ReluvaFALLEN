@@ -53,18 +53,35 @@ public:
         ViewerContext ctx{sys_, screen_, packages_, game_, warnings, audioOut ? &mixer : nullptr};
         if (!target_.savePath.empty())
             ctx.saveFolder = target_.savePath / "Saves";
+        ctx.gameFolder = target_.path;
         std::vector<std::unique_ptr<Page>> pages;
         pages.push_back(std::make_unique<MapViewer>(ctx));
         pages.push_back(std::make_unique<MeshViewer>(ctx));
         pages.push_back(std::make_unique<TextureViewer>(ctx));
         pages.push_back(std::make_unique<SoundViewer>(ctx));
+        auto movies = std::make_unique<MovieViewer>(ctx);
+        MovieViewer* moviePage = movies.get();
+        const size_t moviePageIndex = pages.size();
+        pages.push_back(std::move(movies));
         pages.push_back(std::make_unique<PackageViewer>(ctx));
-        size_t page = 0;
-        while (page < pages.size() && pages[page]->count() == 0)
-            ++page;
-        if (page == pages.size())
+        size_t first = 0;
+        while (first < pages.size() && pages[first]->count() == 0)
+            ++first;
+        if (first == pages.size())
             return Error::fail("No packages found in " + target_.path.string());
-        pages[page]->activate();
+        // The game's intro plays first, as the original's does; then the
+        // first page.
+        size_t page = first;
+        bool intro = false;
+        if (moviePage->count() > 0) {
+            page = moviePageIndex;
+            pages[page]->activate();
+            intro = moviePage->play("intro.avi");
+            if (!intro)
+                page = first;
+        }
+        if (!intro)
+            pages[page]->activate();
         auto switchTo = [&](size_t next) -> Error {
             const bool was3D = pages[page]->uses3D();
             pages[page]->deactivate();
@@ -95,6 +112,12 @@ public:
                 pages[page]->handleEvent(ev);
             }
             pages[page]->update(sys_.getMillis());
+            if (intro && !moviePage->playing()) {
+                intro = false;
+                if (page == moviePageIndex && page != first)
+                    if (Error err = switchTo(first))
+                        return err;
+            }
             sys_.updateScreen(screen_);
             // 3D pages are paced by presenting (vsync); the rest needn't spin.
             if (!pages[page]->uses3D())

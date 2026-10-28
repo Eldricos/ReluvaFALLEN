@@ -127,6 +127,8 @@
 #endif
 #include "common/font.h"
 #include "common/fs.h"
+#include "common/video/avi.h"
+#include "common/video/cinepak.h"
 #include "common/zip.h"
 #ifdef RELUVA_ENGINE_IDTECH3
 #include "engines/idtech3/bsp.h"
@@ -4538,7 +4540,7 @@ int cmdUeRun(int argc, char** argv) {
     const bool all = std::strcmp(argv[3], "-all") == 0;
     std::vector<std::string> maps = all ? set.mapNames() : std::vector<std::string>{argv[3]};
     std::map<std::string, int> missing, errors, noneAt;
-    int placedGhosts = 0, ghostsBack = 0;
+    int placedGhosts = 0, ghostsBack = 0, localizedSet = 0;
     int ran = 0, failed = 0;
     uint64_t calls = 0, statements = 0;
     int accessedNone = 0;
@@ -4620,6 +4622,7 @@ int cmdUeRun(int argc, char** argv) {
                         "", level.dialogLines().size(), dg.started, dg.lines, dg.notFound, dg.unknownConditions,
                         dg.barks);
         placedGhosts += level.placedGhosts();
+        localizedSet += level.localizedSet();
         ghostsBack += level.placedGhosts() - int(std::count_if(level.ghosts().begin(), level.ghosts().end(), [](const VmObject* g) { return !g->deleted; }));
         said.started += dg.started;
         said.lines += dg.lines;
@@ -4681,6 +4684,7 @@ int cmdUeRun(int argc, char** argv) {
     std::printf("paths: %d ways found straight, %d along paths, %d not\n", paths.straight, paths.found, paths.failed);
     std::printf("ghosts: %d placed as ghosts set aside at the start, about %d brought back since\n", placedGhosts,
                 std::max(0, ghostsBack));
+    std::printf("actors' strings from the maps' .int: %d set\n", localizedSet);
     std::printf("dialogue: %d started (%d lines said), %d with no line to say, %d of the AI's own\n", said.started,
                 said.lines, said.notFound, said.barks);
     std::printf("natives not written yet (%zu, by calls):\n", missing.size());
@@ -5684,9 +5688,49 @@ int cmdUeCheck(int argc, char** argv) {
 
 } // namespace
 
+// Decodes a video's frames up to one and writes it as a PPM, with what the
+// file holds (`video-frame <file.avi> <frame> <out.ppm>`).
+int cmdVideoFrame(int argc, char** argv) {
+    if (argc != 5) {
+        std::fprintf(stderr, "usage: reluva-tool video-frame <file.avi> <frame> <out.ppm>\n");
+        return 2;
+    }
+    reluva::video::Avi avi;
+    if (reluva::Error err = reluva::video::readAvi(std::filesystem::path(argv[2]), avi)) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    std::printf("%dx%d, %s, %.2f frames a second, %zu frames; audio: %d Hz, %d channels, %zu frames\n", avi.width,
+                avi.height, avi.codec.c_str(), avi.framesPerSecond, avi.frames.size(), avi.audio.rate,
+                avi.audio.channels, avi.audio.frames());
+    if (reluva::fs::toLower(avi.codec) != "cvid") {
+        std::fprintf(stderr, "not Cinepak: %s\n", avi.codec.c_str());
+        return 1;
+    }
+    const size_t want = std::min(avi.frames.size() - 1, size_t(std::max(0, std::atoi(argv[3]))));
+    reluva::video::CinepakDecoder dec(avi.width, avi.height);
+    for (size_t i = 0; i <= want; ++i)
+        if (reluva::Error err = dec.decode(avi.frames[i])) {
+            std::fprintf(stderr, "frame %zu: %s\n", i, err.message.c_str());
+            return 1;
+        }
+    const reluva::image::Image& img = dec.picture();
+    std::FILE* out = std::fopen(argv[4], "wb");
+    if (!out)
+        return 1;
+    std::fprintf(out, "P6\n%d %d\n255\n", img.w, img.h);
+    for (size_t i = 0; i < img.rgba.size(); i += 4)
+        std::fwrite(&img.rgba[i], 1, 3, out);
+    std::fclose(out);
+    std::printf("wrote frame %zu\n", want);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "hexdump") == 0)
         return cmdHexdump(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "video-frame") == 0)
+        return cmdVideoFrame(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "chunks") == 0)
         return cmdChunks(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "words") == 0)

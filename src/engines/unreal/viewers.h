@@ -28,6 +28,9 @@
 //           the animation, [ and ] pick it, R resets the view, I shows or
 //           hides the info.
 // Sounds:   Left/Right step, PageUp/PageDown pick the package, Space plays.
+// Movies:   the game's movies (its movies/*.avi; the intro plays first
+//           when the viewer starts). Left/Right pick one, Space or Enter
+//           plays it; Space, Enter or Esc stops it.
 // Packages: every package on the search path. Left/Right pick one,
 //           Up/Down move through its exports (PageUp/PageDown, Home/End),
 //           Enter shows the selected export's properties.
@@ -48,9 +51,12 @@
 #include "common/events.h"
 #include "common/gfx3d.h"
 #include "common/system.h"
+#include "common/video/avi.h"
+#include "common/video/cinepak.h"
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <optional>
@@ -73,6 +79,8 @@ struct ViewerContext {
     // Where the game's saved games go (GameTarget::savePath's "Saves");
     // empty: none can be saved.
     std::filesystem::path saveFolder{};
+    // The game's own folder (its movies are found from it).
+    std::filesystem::path gameFolder{};
     // The Fallen's shared animation sets, read the first time a page needs them.
     std::optional<std::vector<AnimationSet>> animationSets{};
     const std::vector<AnimationSet>& sets() {
@@ -189,6 +197,39 @@ private:
     bool started_ = false;
     std::string status_;
     audio::SoundHandle playing_ = audio::kNoSound;
+};
+
+class MovieViewer : public Page {
+public:
+    explicit MovieViewer(ViewerContext& ctx);
+    ~MovieViewer() override;
+    const char* name() const override { return "Movies"; }
+    size_t count() const override { return files_.size(); }
+    void activate() override;
+    void deactivate() override;
+    void handleEvent(const Event& ev) override;
+    void update(uint64_t nowMs) override;
+    bool ownsKey(uint32_t key) const override { return key == key::Escape && playing(); }
+
+    // Plays the movie whose file is named `name` (any case); false if
+    // there's none.
+    bool play(const std::string& name);
+    bool playing() const { return decoder_ != nullptr; }
+
+private:
+    void play(size_t index);
+    void stop();
+    void draw();
+    void showPicture();
+
+    std::vector<std::filesystem::path> files_;
+    size_t index_ = 0;
+    std::string status_;
+    video::Avi movie_;
+    std::unique_ptr<video::CinepakDecoder> decoder_;
+    int shown_ = -1;          // the last frame decoded
+    uint64_t startMs_ = 0;    // when it started, by the clock (0: not yet)
+    audio::SoundHandle sound_ = audio::kNoSound;
 };
 
 class MeshViewer : public Page {
