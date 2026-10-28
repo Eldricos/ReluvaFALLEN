@@ -175,6 +175,7 @@ if(RELUVA_ENGINE_UNREAL)
         src/engines/unreal/model.cpp
         src/engines/unreal/collision.cpp
         src/engines/unreal/lighting.cpp
+        src/engines/unreal/zones.cpp
         src/engines/unreal/procedural.cpp
         src/engines/unreal/script.cpp
         src/engines/unreal/script_text.cpp

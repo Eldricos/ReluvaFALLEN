@@ -48,6 +48,40 @@ lightmaps.
 | u64 | connectivity: zones this one touches |
 | u64 | visibility: zones it can see |
 
+In every one of The Fallen's maps each zone's connectivity is only
+itself and its visibility (and each leaf's visible zones) is every bit
+set: they say nothing. What a view can see is worked out each frame
+instead, from the zone portals, as UE1's renderer did:
+
+- The camera's zone: down the BSP from the root to a leaf, the zone on
+  the side of the last node it's on. No leaf there (inside solid, as the
+  free camera is at 0, 0, 0) and every zone counts as seen.
+- A portal is a polygon of a surface flagged 0x4000000 whose node has
+  different zones on its two sides. From the camera's zone, each portal
+  on screen leads into the zone beyond it, seen through the portal's
+  rectangle on screen (its part in front of the eye, projected) within
+  the rectangle the zone it's seen from was; the zone beyond is seen
+  through that, and goes on to its own portals. A zone reached again
+  through more of the screen goes round again with the larger rectangle.
+- Within 32 units of a portal's box, walking through it, the portal is
+  edge-on and covers nothing, while the zone beyond fills half the view:
+  there, it's seen through the whole of the rectangle.
+- A solid surface seen through (translucent, masked, modulated or
+  invisible) is a window: if going back through it from its centre
+  comes out of the solid within 512 units, in another zone, that's a
+  portal too. Further than that and what's beyond isn't drawn: one of
+  M01_KiraL1A's floors is mirrored and translucent over more than a
+  thousand units of solid, and the rooms below showed through it.
+
+A polygon is drawn when the zone in front of its node is seen (and the
+one behind it, for two-sided, non-solid and semisolid surfaces, or when
+the front's is zone 0). Only the level's own polygons are left out:
+movers and actors are drawn wherever they are. Compared with drawing
+everything, the views from walks through six maps were the same but for
+single pixels along seams and that floor, with fewer draws: about a
+quarter of them on M06_WorfL1B, half on M03_KiraL2 and the Promenade,
+most on CM06_SW_Capture (Z in the viewer draws them all).
+
 ### Light map index
 
 | Type | Meaning |
@@ -88,9 +122,10 @@ A polygon point P's texture coordinates, in texels, are
 `(P - base) · U + panU` and `(P - base) · V + panV`, divided by the
 texture's size.
 
-Poly flags Reluva uses: 0x1 invisible, 0x2 masked, 0x4 translucent,
-0x40 modulated, 0x80 fake backdrop (sky shows through), 0x800 no
-smoothing, 0x400000 unlit, 0x4000000 zone portal.
+Poly flags Reluva uses: 0x1 invisible, 0x2 masked, 0x4 translucent, 0x8
+not solid, 0x20 semisolid,
+0x40 modulated, 0x80 fake backdrop (sky shows through), 0x100
+two-sided, 0x800 no smoothing, 0x400000 unlit, 0x4000000 zone portal.
 
 The reader checks every index against its array; when a game's layout
 differs (another version, a licensee's change) that check is what fails,

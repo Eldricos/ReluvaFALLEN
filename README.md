@@ -113,6 +113,7 @@ Linux (with each distro's packages) and Windows with Visual Studio 2022.
   **L** the lightmaps (pulsing and flickering lights animate, as do fire, water, ice and FLC textures), **[**/**]** dim or brighten them, **-**/**=** change the display's
   gamma, **O** moves the doors and lifts to their next position, **P** turns the level's scripts off or on
   (on, it's drawn as they leave it when play begins: lights off, icons hidden), **K** turns the sky off,
+  **Z** draws every zone, not only those seen through the zone portals,
   **N** plays the placed meshes' animations, **M** changes how imported meshes are turned
   (the opposite of their float copies, as the game does; as stored; or as the float copies), **Y** turns
   them a further quarter turn about the vertical, **G** jumps to the next placed mesh (**H** the next

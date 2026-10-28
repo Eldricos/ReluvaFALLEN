@@ -110,6 +110,9 @@ struct Polygon {
     std::vector<Vec3f> points;
     Vec3f normal{};
     std::vector<std::array<float, 2>> texels;
+    // The zones it can be seen from (bit z for zone z): its node's front
+    // zone, and its back zone too if it's seen from both sides.
+    uint64_t zones = 0;
 };
 std::vector<Polygon> levelPolygons(const Model& model);
 

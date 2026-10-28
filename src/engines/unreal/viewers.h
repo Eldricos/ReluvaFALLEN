@@ -42,6 +42,7 @@
 #include "engines/unreal/package_set.h"
 #include "engines/unreal/procedural.h"
 #include "engines/unreal/texture.h"
+#include "engines/unreal/zones.h"
 
 #include "common/audio/mixer.h"
 #include "common/events.h"
@@ -275,6 +276,7 @@ private:
         gfx::TextureId lightmap = 0; // 0: none (unlit, blended, or the level has no lighting)
         uint32_t polyFlags = 0;
         ObjectRef textureRef{}; // the level's: the texture it's drawn with, for the scripts' swaps
+        uint64_t zones = ~uint64_t(0); // the zones it's seen from (zones.h): drawn when one of them is seen
     };
     // Where each of the level's surfaces is in its mesh (a batch and a run
     // of its indices for each of its polygons), to draw one with another
@@ -325,6 +327,12 @@ private:
     std::vector<MoverDraw> movers_;
     std::optional<Vec3f> sky_; // the sky zone's viewpoint, Unreal's coordinates
     bool showSky_ = true;
+    // The zones seen through the portals from where the view is drawn
+    // from; Z draws them all.
+    ZoneVisibility zones_;
+    uint64_t zonesSeen_ = ~uint64_t(0);
+    bool zoneCulling_ = true;
+    void seeZonesFrom(const gfx::Vec3& eye, const gfx::Mat4& viewProj);
     // Actors drawn as meshes, each mesh uploaded once.
     struct MeshDraw {
         size_t mesh = 0; // into meshes_ / gpuMeshes_

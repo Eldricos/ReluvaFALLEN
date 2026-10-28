@@ -20,6 +20,7 @@
 #include "common/fs.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -183,6 +184,8 @@ void MapViewer::load(int index) {
     const Package* pkg = ctx_.packages.get(name);
     Model model;
     std::string modelError;
+    zones_ = {};
+    zonesSeen_ = ~uint64_t(0);
     if (!pkg) {
         error_ = ctx_.packages.error(name);
     } else if (findLevelModel(*pkg, &model, &modelError) < 0) {
@@ -241,12 +244,14 @@ void MapViewer::load(int index) {
 
     // Group the polygons by texture, drawing flags and lightmap page.
     const std::vector<Polygon> polys = levelPolygons(model);
-    std::map<std::tuple<bool, int32_t, uint32_t, int>, std::vector<const Polygon*>> groups;
+    // And by the zones they're seen from, to leave out those not seen.
+    zones_.build(model);
+    std::map<std::tuple<bool, int32_t, uint32_t, int, uint64_t>, std::vector<const Polygon*>> groups;
     for (const Polygon& p : polys) {
         const BspSurf& s = model.surfs[size_t(p.surf)];
         const uint32_t flags = s.polyFlags & kDrawFlags;
         const int page = blended(flags) || (flags & polyflag::FakeBackdrop) ? -1 : atlas.surfs[size_t(p.surf)].page;
-        groups[{blended(flags), s.texture, flags, page}].push_back(&p);
+        groups[{blended(flags), s.texture, flags, page, zones_.portalCount() ? p.zones : ~uint64_t(0)}].push_back(&p);
     }
 
     std::vector<gfx::Vertex> vertices;
@@ -278,9 +283,10 @@ void MapViewer::load(int index) {
         return gfx::Vec3{0.3f / l, 0.5f / l, 0.8f / l};
     }();
     for (const auto& [key, group] : groups) {
-        const auto& [isBlended, textureRef, flags, page] = key;
+        const auto& [isBlended, textureRef, flags, page, zones] = key;
         Batch batch;
         batch.polyFlags = flags;
+        batch.zones = zones;
         batch.lightmap = page >= 0 ? pages[size_t(page)] : 0;
         batch.firstIndex = uint32_t(indices.size());
         const auto [textureId, size] = textureFor(*pkg, textureRef);
@@ -843,6 +849,8 @@ void MapViewer::handleEvent(const Event& ev) {
             displayGamma_ = std::min(2.5f, displayGamma_ + 0.05f);
         else if (ev.key == 'k')
             showSky_ = !showSky_;
+        else if (ev.key == 'z')
+            zoneCulling_ = !zoneCulling_;
         else if (ev.key == 'n')
             animate_ = !animate_;
         else if (ev.key == 'g' || ev.key == 'h')
@@ -971,7 +979,9 @@ void MapViewer::update(uint64_t nowMs) {
         // same way; then the view, from scratch, with the backdrop
         // surfaces leaving it showing.
         const gfx::Vec3 eye = toWorld(*sky_);
-        renderer_->beginFrame(gfx::multiply(proj, gfx::lookAlong(eye, forward, {0, 0, 1})), eye, {20, 24, 40});
+        const gfx::Mat4 skyView = gfx::multiply(proj, gfx::lookAlong(eye, forward, {0, 0, 1}));
+        seeZonesFrom(eye, skyView);
+        renderer_->beginFrame(skyView, eye, {20, 24, 40});
         drawBatches(levelBatches(), mesh_, gfx::identity(), true);
         drawSurfaceSwaps();
         renderer_->clearDepth();
@@ -979,10 +989,11 @@ void MapViewer::update(uint64_t nowMs) {
     } else {
         renderer_->beginFrame(viewProj, pos_, {20, 24, 40});
     }
+    seeZonesFrom(pos_, viewProj);
     // Backdrop surfaces: with the sky, only their depth, hiding what's
     // behind them; without it, a plain colour.
     for (const Batch& b : batches_) {
-        if (!(b.polyFlags & polyflag::FakeBackdrop))
+        if (!(b.polyFlags & polyflag::FakeBackdrop) || !(b.zones & zonesSeen_))
             continue;
         gfx::DrawCall call;
         call.mesh = mesh_;
@@ -1343,6 +1354,19 @@ gfx::Mat4 MapViewer::moverPlacement(const Mover& m, const Vec3f& location, const
     return gfx::multiply(m4, translation({-m.prePivot[0], -m.prePivot[1], -m.prePivot[2]}));
 }
 
+// The zones seen from `eye` (gfx's coordinates) through the portals, for
+// drawBatches to leave out the rest.
+void MapViewer::seeZonesFrom(const gfx::Vec3& eye, const gfx::Mat4& viewProj) {
+    if (!zoneCulling_) {
+        zonesSeen_ = ~uint64_t(0);
+        return;
+    }
+    // Unreal's coordinates have y the other way.
+    gfx::Mat4 flip = gfx::identity();
+    flip[5] = -1;
+    zonesSeen_ = zones_.visible(Vec3f{eye[0], -eye[1], eye[2]}, gfx::multiply(viewProj, flip));
+}
+
 // The level's batches, playing: with the textures the scripts have swapped
 // for others everywhere (SetSurfaceTexture's bReplaceAllWorld).
 const std::vector<MapViewer::Batch>& MapViewer::levelBatches() {
@@ -1390,7 +1414,7 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
                !(b.polyFlags & (polyflag::FakeBackdrop | polyflag::Unlit));
     };
     for (const Batch& b : batches) {
-        if (b.polyFlags & polyflag::FakeBackdrop)
+        if ((b.polyFlags & polyflag::FakeBackdrop) || !(b.zones & zonesSeen_))
             continue;
         gfx::DrawCall call;
         call.mesh = mesh;
@@ -1530,11 +1554,20 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
                                : "Playing (Enter stops): W/S move, A/D step aside, arrows turn and look, drag to look, Space "
                                  "jumps, Ctrl or F fires, 0-9 pick weapons, F1-F12 as the game binds them, Esc the game's menu, V lets "
                                  "the camera loose");
-    char where[200];
+    char where[240];
     // Shown in Unreal's own coordinates.
-    std::snprintf(where, sizeof where, "at %.0f %.0f %.0f, %.0f fps; lightmaps %s, brightness x%.2f, display gamma %.2f",
-                  pos_[0], -pos_[1], pos_[2], fps_, !hasLightmaps_ ? "none" : lightmaps_ ? "on" : "off", lightScale_,
-                  displayGamma_);
+    const std::string zones =
+        !zones_.portalCount() ? "no zone portals"
+        : !zoneCulling_       ? "all zones drawn (Z)"
+        : zonesSeen_ == ~uint64_t(0)
+            ? "all zones seen"
+        : std::popcount(zonesSeen_) == 1
+            ? "1 zone seen (Z draws all)"
+            : std::to_string(std::popcount(zonesSeen_)) + " zones seen (Z draws all)";
+    std::snprintf(where, sizeof where,
+                  "at %.0f %.0f %.0f, %.0f fps; lightmaps %s, brightness x%.2f, display gamma %.2f; %s", pos_[0],
+                  -pos_[1], pos_[2], fps_, !hasLightmaps_ ? "none" : lightmaps_ ? "on" : "off", lightScale_,
+                  displayGamma_, zones.c_str());
     lines.push_back(where);
     if (jump_ >= 0 && size_t(jump_) < meshActors_.size()) {
         const MeshDraw& d = meshActors_[size_t(jump_)];

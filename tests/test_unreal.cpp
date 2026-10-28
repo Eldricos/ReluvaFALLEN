@@ -14,6 +14,7 @@
 #include "engines/unreal/mesh.h"
 #include "engines/unreal/mesh_render.h"
 #include "engines/unreal/lighting.h"
+#include "engines/unreal/zones.h"
 #include "engines/unreal/procedural.h"
 #include "engines/unreal/script.h"
 #include "engines/unreal/script_text.h"
@@ -1491,6 +1492,49 @@ static void testVm() {
     (void)setCount;
 }
 
+static void testZoneVisibility() {
+    // One plane, x = 0, and on it a zone portal 100 square: zone 1 behind
+    // (x < 0), zone 2 in front.
+    Model m;
+    BspNode n;
+    n.plane = {1, 0, 0, 0};
+    n.front = n.back = -1;
+    n.zone[0] = 1;
+    n.zone[1] = 2;
+    n.leaf[0] = 0;
+    n.leaf[1] = 1;
+    n.vertexCount = 4;
+    m.nodes.push_back(n);
+    BspSurf s;
+    s.polyFlags = polyflag::Portal;
+    m.surfs.push_back(s);
+    for (const Vec3f& p : {Vec3f{0, -50, -50}, Vec3f{0, 50, -50}, Vec3f{0, 50, 50}, Vec3f{0, -50, 50}}) {
+        m.verts.push_back({int32_t(m.points.size()), 0});
+        m.points.push_back(p);
+    }
+    ZoneVisibility zones;
+    zones.build(m);
+    CHECK(zones.portalCount() == 1 && zones.zoneAt({-5, 0, 0}) == 1 && zones.zoneAt({5, 0, 0}) == 2);
+    // A view from x = -200 along +x (screen x from y, up from z, depth
+    // from x), then along -x.
+    std::array<float, 16> ahead{}, behind{};
+    ahead[4] = behind[4] = 1;
+    ahead[9] = behind[9] = 1;
+    ahead[3] = 1;
+    ahead[15] = 200;
+    behind[3] = -1;
+    behind[15] = -200;
+    CHECK(zones.visible({-200, 0, 0}, ahead) == 0b110);
+    CHECK(zones.visible({-200, 0, 0}, behind) == 0b010);
+    // Looking away but standing in the portal: the zone beyond fills half
+    // the view, so it counts as seen.
+    CHECK(zones.visible({-10, 0, 0}, behind) == 0b110);
+    // Off to the side, the portal off screen: not seen.
+    std::array<float, 16> aside = ahead;
+    aside[12] = -1000;
+    CHECK(zones.visible({-200, 1000, 0}, aside) == 0b010);
+}
+
 static void testCollision() {
     // One plane, z = 0, facing up: open above, solid below.
     Model m;
@@ -1588,6 +1632,7 @@ static void testRotatorFromAxes() {
 }
 
 int main() {
+    testZoneVisibility();
     testCompactIndex();
     testPackageTables();
     testProperties();

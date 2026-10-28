@@ -77,8 +77,10 @@ added fields).
    localisation.
 2. **Levels, continued**: check the lightmaps on The Fallen's maps and
    tune them against the original ([lighting.md](../formats/unreal/lighting.md));
-   lights' effects; check movers and the sky on The Fallen's maps; movers
-   lit as they move; visibility by zone portals.
+   lights' effects' patterns across surfaces (their brightness changes
+   are done, as are movers lit as they move and dynamic lights); check
+   movers and the sky on The Fallen's maps. Visibility by zone portals
+   is done ([model.md](../formats/unreal/model.md)).
 3. **Meshes**: check them on The Fallen's data; sprites for actors drawn
    as sprites; meshes lit as the original lights them.
 4. **UnrealScript**: classes, functions and states from `.u` packages

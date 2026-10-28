@@ -283,6 +283,9 @@ std::vector<Polygon> levelPolygons(const Model& model) {
         Polygon p;
         p.surf = node.surf;
         p.normal = model.vectors[size_t(s.normal)];
+        p.zones = uint64_t(1) << (node.zone[1] & 63);
+        if (node.zone[1] == 0 || (s.polyFlags & (polyflag::TwoSided | polyflag::NotSolid | polyflag::Semisolid)))
+            p.zones |= uint64_t(1) << (node.zone[0] & 63);
         const Vec3f& base = model.points[size_t(s.base)];
         const Vec3f& tu = model.vectors[size_t(s.textureU)];
         const Vec3f& tv = model.vectors[size_t(s.textureV)];
