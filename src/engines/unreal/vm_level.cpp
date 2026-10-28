@@ -219,6 +219,15 @@ void ScriptLevel::beginPlay(const std::string& defaultGame) {
     for (VmObject* a : start)
         if (a != game_)
             vm_.callEvent(a, "SetInitialState");
+    // Those placed as ghosts (The Fallen's bIsGhost: a guard who arrives
+    // later, an effect for a scene) set aside once started, until an event
+    // brings them back (GhostActors, which a trigger's event goes through
+    // too). Left in the level, they played from the start.
+    for (VmObject* a : start)
+        if (const Value* ghost = a != game_ && !a->deleted ? prop(a, "bIsGhost") : nullptr; ghost && ghost->asBool()) {
+            makeGhost(a, true);
+            ++placedGhosts_;
+        }
     if (Value* v = levelInfo_->find(vm_, "bStartup"))
         *v = Value::boolValue(false);
     if (Value* v = levelInfo_->find(vm_, "bBegunPlay"))
@@ -628,6 +637,7 @@ void ScriptLevel::makeGhost(VmObject* a, bool ghost) {
     if (!a || a->deleted)
         return;
     const bool now = std::find(ghosts_.begin(), ghosts_.end(), a) != ghosts_.end();
+    // (bIsGhost may say so already: placed as one.)
     if (ghost == now)
         return;
     if (ghost) {

@@ -282,6 +282,35 @@ actors; the dark lights are TriggerLights that start off (1,300) and
 plain Lights placed with brightness 0 (226: TrainingRoom's, the
 Promenade's and Ops' 30 each).
 
+**Placed ghosts.** An actor saved in the map with The Fallen's
+`bIsGhost` is set aside once the level has started it (its
+`PreBeginPlay` to `SetInitialState`: a friendly AI takes its phaser
+there), out of the level's list until an event brings it back through
+`GhostActors`, which every `Trigger` and player start sends its event
+through as well as to the live actors. Over all maps that's 1,306
+actors: mostly the enemies of later waves (179 Jem'Hadar, 126 Bajoran
+fanatics, 90 Grigari drones...), creatures, and a scene's lights,
+sounds, music and speech. Left in, they played from the start: on
+M01_WorfL1 an ensign who arrives in a later Grigari attack was already
+fighting, with no phaser (925 of the run's None accessed). Set aside,
+an all-maps run makes 178 million calls (229 before), and None is
+accessed 3,860 times (12,600 before).
+
+**What None accessed is left** (`ue-run` lists it by place in the
+code, the context expression's offset as `ue-script` lists it). It all
+reads as the game's own:
+- `CTV_AiPawn.HearNoise` and `DS9_FriendlyAI.HearNoise` (about 900 of
+  each place): `Instigator.Owner.IsA('HUD')` with no `None` test, when
+  the noise's maker has no owner, as a pawn placed or spawned in the
+  level hasn't (here as in UE1).
+- `CTVE_PlayerActivate.AutomaticActivate` (841): `Level.Player`, which
+  the player's own script sets once it has joined, read when a mover's
+  `BeginPlay` touches the trigger, before any player has.
+- `CTVE_PlayerPawn.PlayerInput` (600): `CTVE_Hud(myHUD).IsLetterBoxOn()`
+  before the player's HUD is made, in its first ticks. The HUD is made
+  by `InitPlayerStart` or the first `PreRender`; `ue-run` draws no
+  frames, so it's a few ticks later there than in play.
+
 What's left before play, by what `ue-run` reports:
 
 - **Natives not written**: none that a map calls in its first seconds.
@@ -913,7 +942,7 @@ known.
   `Start` if the line doesn't cross it (bubbles rising out of water).
 - **Ghosts** (`MakeGhost`, `GhostActors`): an actor set aside, out of the
   level's list (no ticks, no collision, not drawn) until it's brought
-  back.
+  back. Those placed as ghosts start so (above).
 - `ListActors`: an AI's known actors (`ActorList`), each with its entry.
 - `ScriptTick`: one actor's tick on its own while the game's paused (the
   HUD's portrait).

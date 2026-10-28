@@ -4537,7 +4537,8 @@ int cmdUeRun(int argc, char** argv) {
     const float seconds = argc == 5 ? float(std::atof(argv[4])) : 5.0f;
     const bool all = std::strcmp(argv[3], "-all") == 0;
     std::vector<std::string> maps = all ? set.mapNames() : std::vector<std::string>{argv[3]};
-    std::map<std::string, int> missing, errors;
+    std::map<std::string, int> missing, errors, noneAt;
+    int placedGhosts = 0, ghostsBack = 0;
     int ran = 0, failed = 0;
     uint64_t calls = 0, statements = 0;
     int accessedNone = 0;
@@ -4618,6 +4619,8 @@ int cmdUeRun(int argc, char** argv) {
                         "%d conditions not known, %d of the AI's own\n",
                         "", level.dialogLines().size(), dg.started, dg.lines, dg.notFound, dg.unknownConditions,
                         dg.barks);
+        placedGhosts += level.placedGhosts();
+        ghostsBack += level.placedGhosts() - int(std::count_if(level.ghosts().begin(), level.ghosts().end(), [](const VmObject* g) { return !g->deleted; }));
         said.started += dg.started;
         said.lines += dg.lines;
         said.notFound += dg.notFound;
@@ -4641,6 +4644,8 @@ int cmdUeRun(int argc, char** argv) {
             missing[k] += v;
         for (const auto& [k, v] : vm.stats.errors)
             errors[k] += v;
+        for (const auto& [k, v] : vm.stats.noneAt)
+            noneAt[k] += v;
         if (!all) {
             // The scripts' log, repeated lines counted.
             std::vector<std::pair<std::string, int>> lines;
@@ -4674,6 +4679,8 @@ int cmdUeRun(int argc, char** argv) {
                 moved.moves, moved.blockedByWorld, moved.blockedByActors, moved.steps, moved.landings, moved.touches,
                 moved.zoneChanges, moved.refused, moved.gaveUp);
     std::printf("paths: %d ways found straight, %d along paths, %d not\n", paths.straight, paths.found, paths.failed);
+    std::printf("ghosts: %d placed as ghosts set aside at the start, about %d brought back since\n", placedGhosts,
+                std::max(0, ghostsBack));
     std::printf("dialogue: %d started (%d lines said), %d with no line to say, %d of the AI's own\n", said.started,
                 said.lines, said.notFound, said.barks);
     std::printf("natives not written yet (%zu, by calls):\n", missing.size());
@@ -4689,6 +4696,10 @@ int cmdUeRun(int argc, char** argv) {
         std::printf("  %7d %s\n", n, k.c_str());
     std::printf("None accessed (%zu places, the most):\n", none.size());
     for (const auto& [n, k] : top(none, all ? 15 : 10))
+        std::printf("  %7d %s\n", n, k.c_str());
+    // Where in them (the context expression's offset, as ue-script lists the code).
+    std::printf("None accessed, by place in the code (the most):\n");
+    for (const auto& [n, k] : top(noneAt, all ? 20 : 10))
         std::printf("  %7d %s\n", n, k.c_str());
     return failed ? 1 : 0;
 }

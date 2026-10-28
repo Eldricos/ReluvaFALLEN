@@ -1269,7 +1269,7 @@ public:
         case ClassContext: {
             VmObject* o = eval(f, arg(x, 0), ctx).asObject();
             if (!o) {
-                accessedNone(f);
+                accessedNone(f, x.offset);
                 return Value();
             }
             return eval(f, arg(x, 1), o);
@@ -1390,7 +1390,7 @@ public:
         case ClassContext: {
             VmObject* o = eval(f, arg(x, 0), ctx).asObject();
             if (!o) {
-                accessedNone(f);
+                accessedNone(f, x.offset);
                 return temp(f, Value());
             }
             return ref(f, arg(x, 1), o);
@@ -1542,7 +1542,7 @@ private:
         if ((x.token == token::Context || x.token == token::ClassContext) && x.args.size() >= 2) {
             target = eval(f, x.args[0], f.self).asObject();
             if (!target) {
-                accessedNone(f);
+                accessedNone(f, x.offset);
                 return;
             }
             call = &f.owner->code.exprs[size_t(x.args[1])];
@@ -1652,9 +1652,14 @@ private:
         auto s = owner->statementAt.find(it->second);
         return s == owner->statementAt.end() ? -1 : s->second;
     }
-    void accessedNone(Frame& f) {
+    // `offset`: the context expression's, in the code as ue-script lists it.
+    void accessedNone(Frame& f, uint32_t offset) {
         ++vm_.stats.accessedNone;
-        vm_.stats.errors["Accessed None in " + where(f)]++;
+        const std::string at = where(f);
+        vm_.stats.errors["Accessed None in " + at]++;
+        char buf[16];
+        std::snprintf(buf, sizeof buf, " at 0x%04x", offset);
+        vm_.stats.noneAt[at + buf]++;
     }
     std::string where(const Frame& f) const {
         if (f.owner->kind == VmStruct::Kind::Function)

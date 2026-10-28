@@ -313,6 +313,7 @@ public:
         int accessedNone = 0;
         std::map<std::string, int> missingNatives; // "Class.Function" -> calls
         std::map<std::string, int> errors;         // message -> times
+        std::map<std::string, int> noneAt;         // Accessed None by function and code offset -> times
     };
     Stats stats;
     std::function<void(const std::string&)> logger; // Log() and warnings
