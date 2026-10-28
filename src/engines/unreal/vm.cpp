@@ -535,15 +535,20 @@ void Vm::applyLocalized(VmClass& c) {
     }
 }
 
-// The Fallen's map .int names its actors' sections by their Tag, not
-// their object name as UE1's own do (M01_KiraL2's [notaligned1] is the
-// message of the SpecialEvent tagged so; no section is named after an
-// object), so every actor with that tag takes its keys.
+// The Fallen's actors name their own strings: Actor's TextInfo is the
+// section and FileName the .int it's in, with or without ".int"
+// (CTVE_TricorderInfo1: [WarpCore] in M01_WorfL1.int). The file is often
+// named for the map before it was split in two (M01_KiraL1.int for both
+// M01_KiraL1A and B), and the map's own name when FileName is empty.
 int Vm::applyLocalizedActor(VmObject* a, const std::string& map) {
-    const Value* tag = a ? a->find(*this, "Tag") : nullptr;
-    if (!tag || !tag->i)
+    const Value* textInfo = a ? a->find(*this, "TextInfo") : nullptr;
+    if (!textInfo || textInfo->s.empty())
         return 0;
-    const std::string section = nameText(tag->i);
+    const std::string section = textInfo->s;
+    const Value* fileName = a->find(*this, "FileName");
+    std::string file = fileName && !fileName->s.empty() ? fileName->s : map;
+    if (file.size() > 4 && lower(file.substr(file.size() - 4)) == ".int")
+        file.resize(file.size() - 4);
     int set = 0;
     for (const VmClass* c = a->cls; c; c = c->parent())
         for (const VmProperty* prop : c->properties) {
@@ -552,7 +557,7 @@ int Vm::applyLocalizedActor(VmObject* a, const std::string& map) {
             Value* v = a->find(*this, prop->name);
             for (int k = 0; v && k < prop->arrayDim && size_t(prop->slot + k) < a->values.size(); ++k) {
                 const std::string key = prop->arrayDim > 1 ? prop->name + "[" + std::to_string(k) + "]" : prop->name;
-                if (const auto value = localized(map, section, key, false)) {
+                if (const auto value = localized(file, section, key, false)) {
                     setFromText(*prop, v[k], *value);
                     ++set;
                 }

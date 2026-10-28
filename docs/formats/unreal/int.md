@@ -35,12 +35,23 @@ A map's `.int` has:
   actor's tag (`[consx1]`). These hold `MESSAGE`, the tricorder's
   `TRICORDERNAME`, `TRICORDERBIG1`/`2` and `TRICORDERSUB1` to `3`,
   `SCANSTRING` and a few others: the actors' localised strings.
-  The section goes by the actor's **Tag**, not its object name:
-  M01_KiraL2's `[notaligned1]` is for SpecialEvent17, whose Tag is
-  `notaligned1`. Each key is one of the actor's class's `localized`
-  properties, set from the text as the map is loaded (after its own
-  properties, so the text wins over what the map was saved with). A few
-  sections are left over from actors since taken out, and match none.
+  The actor names its own section and file: The Fallen's Actor has
+  `TextInfo` (the section) and `FileName` (the file, with or without
+  `.int`), under the FileInfo category. M01_WorfL1's
+  CTVE_TricorderInfo1 has `TextInfo="WarpCore"`, `FileName="M01_WorfL1"`:
+  its tricorder reading is `[WarpCore]` in `M01_WorfL1.int`. The section
+  is usually, but not always, the actor's tag. Each key is one of the
+  actor's class's `localized` properties, set from the text as the map
+  is loaded (after its own properties, so the text wins over what the
+  map was saved with); no script reads TextInfo or FileName for this
+  (CTVE_Dialog takes TextInfo as its dialogue's name), so it's the
+  engine's own doing.
+
+  That is why some files are named for no map: the maps split in two
+  later (M01_KiraL1A and M01_KiraL1B; M06_SiskoL1A to C) still name the
+  file of the map they came from (`M01_KiraL1.int`), whose own `.int`
+  holds only the title and objectives. Actors with no TextInfo take
+  nothing from these files.
 
 The class-level strings (a class's `localized` defaults) come from
 `System/<Package>.int` and `int/Classes.int`, under `[ClassName]`

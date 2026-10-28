@@ -294,8 +294,9 @@ public:
     // `classesToo`: Classes.int as well, where the package's own hasn't it.
     std::optional<std::string> localized(const std::string& package, const std::string& section,
                                          const std::string& key, bool classesToo = true);
-    // A level's actor's localized properties from the map's .int, its
-    // section the actor's Tag (The Fallen's: [consx1]). How many were set.
+    // A level's actor's localized properties from the .int its FileName
+    // names, in the section its TextInfo does (The Fallen's). How many
+    // were set.
     int applyLocalizedActor(VmObject* actor, const std::string& map);
     const std::string* configSetting(const std::string& section, const std::string& key);
     void setConfig(const std::string& section, const std::string& key, const std::string& value);
