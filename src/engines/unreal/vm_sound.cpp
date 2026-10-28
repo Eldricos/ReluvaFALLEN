@@ -104,6 +104,11 @@ void registerSoundNatives(Vm& vm) {
             ++m.serial;
             return;
         }
+        // A sound is a noise the AI hears too, as loud as it's played,
+        // unless asked not to be (bNoHearNoise: The Fallen's weapons pass
+        // it for all their sounds but the empty click; footsteps don't).
+        if (!(given(6) && c.b(6)))
+            level->makeNoise(c.self, r.volume);
         auto& requests = level->soundRequests();
         if (requests.size() >= kMostRequests)
             requests.erase(requests.begin());

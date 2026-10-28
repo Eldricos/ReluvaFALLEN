@@ -465,6 +465,11 @@ public:
         float ledge = 0, reach = 0, seconds = 0, startFrame = -1, lastFrame = 0, done = 0;
         std::array<float, 3> to(float height) const;
     };
+    // A noise the AI may hear (MakeNoise; weapons' and projectiles' sounds).
+    void makeNoise(VmObject* maker, float loudness);
+    struct NoiseStats {
+        int made = 0, heard = 0;
+    } noise;
     // A script changed an actor's collision (SetCollision): the list of
     // those that collide is made again.
     void collisionChanged() { collidingDirty_ = true; }
@@ -502,6 +507,8 @@ private:
     // BSP if it has one, else its box.
     struct MoverSpace;
     bool moverSpace(VmObject* mover, MoverSpace& space);
+    void hitWall(VmObject* a, const MoveHit& h);
+    void updateBodyRegions(VmObject* a, bool events);
     bool moverNear(VmObject* mover, const std::array<float, 3>& start, const std::array<float, 3>& delta,
                    const std::array<float, 3>& extent);
     bool moverOverlaps(VmObject* mover, const std::array<float, 3>& centre, const std::array<float, 3>& extent);
@@ -644,6 +651,7 @@ private:
         bool ambientSet = false, killed = false;
     };
     std::map<VmObject*, Bark> barks_;
+    std::map<VmObject*, float> noiseQuiet_; // pawns: no noise heard before this time
     float barkTimer_ = 0;
     std::mt19937 barkRandom_{13579};
     VmObject* conditionSubject_ = nullptr; // whose conditions (the actor the tests ask about)

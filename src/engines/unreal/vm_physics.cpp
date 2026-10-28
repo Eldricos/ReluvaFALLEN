@@ -554,7 +554,8 @@ ScriptLevel::MoveHit ScriptLevel::moveActor(VmObject* a, const Vec& delta) {
     // Where it is now: its zone, what it touches.
     Value* region = prop(a, "Region");
     VmObject* oldZone = region && !region->fields.empty() ? region->fields[0].asObject() : nullptr;
-    updateRegion(a);
+    if (region && hasModel_)
+        vm_.assign(*region, regionAt(end));
     VmObject* newZone = region && !region->fields.empty() ? region->fields[0].asObject() : nullptr;
     if (newZone != oldZone && newZone) {
         ++movement.zoneChanges;
@@ -563,6 +564,8 @@ ScriptLevel::MoveHit ScriptLevel::moveActor(VmObject* a, const Vec& delta) {
         vm_.callEvent(a, "ZoneChange", {Value::objectValue(newZone)});
         vm_.callEvent(newZone, "ActorEntered", {Value::objectValue(a)});
     }
+    if (!a->deleted)
+        updateBodyRegions(a, true);
     if (collideActors)
         updateTouching(a);
     if (by && by != levelInfo_) { // bumped into an actor: both told
@@ -572,6 +575,24 @@ ScriptLevel::MoveHit ScriptLevel::moveActor(VmObject* a, const Vec& delta) {
     return out;
 }
 
+// HitWall for a move a wall stopped (the world's, or a mover's: the AI's
+// walking opens doors from it, HandleDoor). The Fallen's player's walking
+// state reads it differently: X how head-on it hit (its way of moving
+// against the wall's normal, -1 straight into it), Y how fast it was
+// going; a thump at more than 200 to 400, and a bump at a standstill
+// stops its running (ImpactLocation, SlideSpeed).
+void ScriptLevel::hitWall(VmObject* a, const MoveHit& h) {
+    if (a->deleted || !h.hit())
+        return;
+    Vec n = h.normal;
+    if (vm_.isA(a, "CTVE_PlayerPawn")) {
+        const Vec v = vecOf(prop(a, "Velocity"));
+        const float speed = length(v);
+        n = {speed > 0 ? dot(mul(v, 1 / speed), h.normal) : 0, speed, 0};
+    }
+    vm_.callEvent(a, "HitWall", {vm_.vectorValue(n[0], n[1], n[2]), Value::objectValue(h.actor)});
+}
+
 ScriptLevel::MoveHit ScriptLevel::moveSmooth(VmObject* a, const Vec& delta) {
     MoveHit h = moveActor(a, delta);
     if (!h.hit() || a->deleted)
@@ -579,8 +600,10 @@ ScriptLevel::MoveHit ScriptLevel::moveSmooth(VmObject* a, const Vec& delta) {
     Vec remaining = mul(delta, 1 - h.time);
     const bool walking = prop(a, "Physics") && (prop(a, "Physics")->asInt() == kPhysWalking ||
                                                 prop(a, "Physics")->asInt() == kPhysSimpleWalking);
-    // A wall: up a step if it's low enough (walking), else along it.
-    if (walking && h.normal[2] < kWalkable) {
+    // A wall: up a step if it's low enough (walking), else along it. So
+    // too a move that got nowhere against the floor's own slope (the
+    // crease where a ramp meets a wall held the player on M10_WorfL1B).
+    if (walking && (h.normal[2] < kWalkable || h.time < 0.05f)) {
         const float stepHeight = prop(a, "MaxStepHeight") ? floatOf(prop(a, "MaxStepHeight")) : 25;
         Value* loc = prop(a, "Location");
         const Value saved = *loc;
@@ -594,8 +617,16 @@ ScriptLevel::MoveHit ScriptLevel::moveSmooth(VmObject* a, const Vec& delta) {
         *loc = saved; // no step there: back, and slide
         updateRegion(a);
     }
-    if (h.actor == levelInfo_ && h.normal[2] < kWalkable)
-        vm_.callEvent(a, "HitWall", {vm_.vectorValue(h.normal[0], h.normal[1], h.normal[2]), Value::objectValue(levelInfo_)});
+    auto isWall = [&](const MoveHit& m) {
+        return m.hit() && m.normal[2] < kWalkable && (m.actor == levelInfo_ || (m.actor && collideSlots(m.actor).mover));
+    };
+    bool told = false;
+    if (isWall(h)) {
+        hitWall(a, h);
+        told = true;
+    }
+    const Vec before = vecOf(prop(a, "Location"));
+    MoveHit wall;
     for (int slide = 0; slide < 2 && !a->deleted; ++slide) {
         const Vec n = h.normal;
         Vec along = sub(remaining, mul(n, dot(remaining, n)));
@@ -606,8 +637,14 @@ ScriptLevel::MoveHit ScriptLevel::moveSmooth(VmObject* a, const Vec& delta) {
         h = moveActor(a, along);
         if (!h.hit())
             break;
+        if (isWall(h))
+            wall = h;
         remaining = mul(along, 1 - h.time);
     }
+    // Walking into a slope too steep to stand on, from one it can (the
+    // first hit the floor's own slope): that's the wall it's against.
+    if (!told && walking && !a->deleted && wall.hit() && length(sub(vecOf(prop(a, "Location")), before)) < 0.5f)
+        hitWall(a, wall);
     return h;
 }
 
@@ -1042,7 +1079,7 @@ void ScriptLevel::physics(VmObject* a, float dt) {
         Vec delta = mul(v, dt);
         MoveHit h = moveActor(a, delta);
         if (!a->deleted && h.hit() && h.normal[2] < kWalkable) {
-            vm_.callEvent(a, "HitWall", {vm_.vectorValue(h.normal[0], h.normal[1], h.normal[2]), Value::objectValue(h.actor)});
+            hitWall(a, h);
             if (a->deleted || physicsValue->asInt() != kPhysFalling)
                 break;
             const Vec along = sub(v, mul(h.normal, dot(v, h.normal)));

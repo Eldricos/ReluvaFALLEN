@@ -4609,6 +4609,8 @@ int cmdUeRun(int argc, char** argv) {
                         "%d not (%d with no point near, %d none near the goal, %d no way between)\n",
                         "", level.navigationPoints().size(), level.reachSpecs().size(), pf.straight, pf.found,
                         pf.failed, pf.noStart, pf.noEnd, pf.noRoute);
+        if (level.noise.made > 0)
+            std::printf("%-20s noise: %d made, heard %d times\n", "", level.noise.made, level.noise.heard);
         const auto& dg = level.dialog;
         if (dg.started + dg.notFound + dg.barks > 0)
             std::printf("%-20s dialogue: %zu lines read; %d started (%d lines said), %d with no line to say, "

@@ -311,6 +311,12 @@ Value ScriptLevel::regionAt(const std::array<float, 3>& p) {
         v = *saved;
         if (const VmStruct* st = v.st) {
             VmObject* zoneActor = size_t(zone) < model_.zones.size() ? vm_.objectAt(map_, model_.zones[size_t(zone)].actor) : nullptr;
+            // A zone with no ZoneInfo of its own (or outside them all) is
+            // the level's: LevelInfo is the default zone, as in UE1.
+            // Scripts read Region.Zone everywhere (the player's ViewFlash,
+            // UnderWaterSounds, HandleWalking took None 150,000 times).
+            if (!zoneActor)
+                zoneActor = levelInfo_;
             if (VmProperty* f = st->findProperty(vm_.name("Zone")))
                 v.fields[size_t(f->slot)] = Value::objectValue(zoneActor);
             if (VmProperty* f = st->findProperty(vm_.name("iLeaf")))
@@ -322,13 +328,121 @@ Value ScriptLevel::regionAt(const std::array<float, 3>& p) {
     return v;
 }
 
+// A noise an actor makes (MakeNoise; a sound played without bNoHearNoise):
+// each pawn but the player and whoever made it hears it if it's loud
+// enough where the pawn is: Loudness x 800 over the distance, halved with
+// the world between, against its HearingThreshold (with the usual 1, a
+// shot of loudness 1 carries 800 units in the open). Its HearNoise
+// (Loudness, the maker): The Fallen's AI turns to search, or attacks if
+// it can see the maker. One noise a pawn every fifth of a second. Reluva's
+// reading: UE1's rule isn't in the scripts.
+void ScriptLevel::makeNoise(VmObject* maker, float loudness) {
+    if (!maker || maker->deleted || loudness <= 0)
+        return;
+    const Value* at = prop(maker, "Location");
+    if (!at)
+        return;
+    const auto from = Vm::vectorOf(*at);
+    const Value* ownerValue = prop(maker, "Owner");
+    VmObject* owner = ownerValue ? ownerValue->asObject() : nullptr;
+    const Value* instigatorValue = prop(maker, "Instigator");
+    VmObject* instigator = instigatorValue ? instigatorValue->asObject() : nullptr;
+    // Only a pawn's noise is heard (one's own, its weapon's or shot's, or
+    // what it set off: an Instigator), as UE1's MakeNoise asks; the
+    // level's ambient sounds aren't.
+    auto isPawn = [&](VmObject* a) {
+        if (!a || a->deleted)
+            return false;
+        auto it = pawnClasses_.find(a->cls);
+        if (it == pawnClasses_.end())
+            it = pawnClasses_.emplace(a->cls, vm_.isA(a, "Pawn")).first;
+        return it->second;
+    };
+    if (!isPawn(maker) && !isPawn(instigator) && !isPawn(owner))
+        return;
+    ++noise.made;
+    const std::vector<VmObject*> now = actors_;
+    for (VmObject* p : now) {
+        if (p == maker || p == owner || p == instigator || p == player_ || p->deleted)
+            continue;
+        if (!isPawn(p))
+            continue;
+        const Value* health = prop(p, "Health");
+        if (health && health->asInt() <= 0)
+            continue;
+        float& quiet = noiseQuiet_[p];
+        if (quiet > time_)
+            continue;
+        const Value* loc = prop(p, "Location");
+        if (!loc)
+            continue;
+        const auto to = Vm::vectorOf(*loc);
+        const float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
+        const float dist = std::max(1.0f, std::sqrt(dx * dx + dy * dy + dz * dz));
+        float heard = loudness * 800 / dist;
+        const Value* threshold = prop(p, "HearingThreshold");
+        const float need = threshold ? std::max(0.01f, threshold->asFloat()) : 1;
+        if (heard < need)
+            continue;
+        if (!lineOfSight(p, from, to))
+            heard *= 0.5f;
+        if (heard < need)
+            continue;
+        quiet = time_ + 0.2f;
+        ++noise.heard;
+        vm_.callEvent(p, "HearNoise", {Value::floatValue(heard), Value::objectValue(maker)});
+        // A guard with no enemy yet wonders aloud ("What was that?").
+        const Value* enemy = p->deleted ? nullptr : prop(p, "Enemy");
+        if (enemy && !enemy->asObject() && dialogThreads_.empty() && (maker == player_ || owner == player_ ||
+                                                                       instigator == player_))
+            startBark(p, "FHE");
+    }
+}
+
 void ScriptLevel::updateRegion(VmObject* a) {
     if (!a || !hasModel_)
         return;
-    Value* location = a->find(vm_, "Location");
-    Value* region = a->find(vm_, "Region");
+    Value* location = prop(a, "Location");
+    Value* region = prop(a, "Region");
     if (location && region)
         vm_.assign(*region, regionAt(Vm::vectorOf(*location)));
+    updateBodyRegions(a, false);
+}
+
+// A pawn's feet, chest (The Fallen's: ChestHeight up its height) and head
+// (its eyes) are each in a zone too, which the engine keeps up to date
+// (FootRegion, ChestRegion, HeadRegion: wading, swimming, its breath
+// underwater), telling its scripts as each changes zone
+// (FootZoneChange, ChestZoneChange, HeadZoneChange) when `events`.
+void ScriptLevel::updateBodyRegions(VmObject* a, bool events) {
+    Value* foot = prop(a, "FootRegion");
+    Value* head = prop(a, "HeadRegion");
+    const Value* location = prop(a, "Location");
+    if (!foot || !head || !location || !hasModel_)
+        return;
+    const auto at = Vm::vectorOf(*location);
+    const Value* h = prop(a, "CollisionHeight");
+    const float height = h ? h->asFloat() : 0;
+    const Value* eye = prop(a, "EyeHeight");
+    const Value* chestHeight = prop(a, "ChestHeight");
+    struct Part {
+        Value* region;
+        float z;
+        const char* event;
+    };
+    Part parts[3] = {{foot, at[2] - height, "FootZoneChange"},
+                     {prop(a, "ChestRegion"), at[2] - height + 2 * height * (chestHeight ? chestHeight->asFloat() : 0.65f),
+                      "ChestZoneChange"},
+                     {head, at[2] + (eye ? eye->asFloat() : height * 0.5f), "HeadZoneChange"}};
+    for (Part& p : parts) {
+        if (!p.region)
+            continue;
+        const VmObject* before = !p.region->fields.empty() ? p.region->fields[0].asObject() : nullptr;
+        vm_.assign(*p.region, regionAt({at[0], at[1], p.z}));
+        VmObject* now = !p.region->fields.empty() ? p.region->fields[0].asObject() : nullptr;
+        if (events && now && before && now != before && !a->deleted)
+            vm_.callEvent(a, p.event, {Value::objectValue(now)});
+    }
 }
 
 bool ScriptLevel::paused() const {
@@ -473,6 +587,7 @@ void ScriptLevel::destroy(VmObject* a) {
     sparkFlash_.erase(a);
     ledgePush_.erase(a);
     clambers_.erase(a);
+    noiseQuiet_.erase(a);
     barks_.erase(a);
 }
 
@@ -731,9 +846,20 @@ void registerEngineNatives(Vm& vm) {
         if (Value* v = c.self ? c.self->find(c.vm, "Base") : nullptr)
             v->o = c.o(0);
     });
-    // Not heard yet: a demo's sounds, and the noises the AI hears (MakeNoise,
-    // PlayDummySound). Sounds themselves are vm_sound.cpp's.
-    for (const char* quiet : {"Actor.DemoPlaySound", "Actor.MakeNoise", "Actor.PlayDummySound"})
+    // StopWaiting(): a Sleep its state code is in ends now (it goes on at
+    // the next tick), as UE1's does.
+    reg("Pawn.StopWaiting", [](NativeCall& c) {
+        if (c.self && c.self->latent && c.self->sleeping > 0)
+            c.self->sleeping = 0;
+    });
+    // MakeNoise(float Loudness): the AI hears it (ScriptLevel::makeNoise).
+    reg("Actor.MakeNoise", [](NativeCall& c) {
+        if (c.vm.level && c.self)
+            c.vm.level->makeNoise(c.self, c.f(0));
+    });
+    // Not heard: a demo's sounds, a dummy sound. Sounds themselves are
+    // vm_sound.cpp's.
+    for (const char* quiet : {"Actor.DemoPlaySound", "Actor.PlayDummySound"})
         reg(quiet, [](NativeCall&) {});
     reg("Actor.GetRegion", [](NativeCall& c) { // GetRegion(Vector Point, out PointRegion Region)
         if (c.vm.level)
