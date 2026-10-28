@@ -271,6 +271,48 @@ void LevelPlay::hudEvent(int code) {
         vm_->callEvent(hud->o, "HudEvent", {Value::intValue(code)});
 }
 
+bool LevelPlay::copies(VmObject* actor, std::vector<Copy>& out) {
+    out.clear();
+    if (!actor || actor->deleted)
+        return false;
+    Vm& vm = *vm_;
+    const Value* base = actor->find(vm, "MultiMesh");
+    if (!base || !base->asObject())
+        return false;
+    for (VmObject* mm : level_->multiMeshes(actor)) {
+        Copy c;
+        if (const Value* v = mm->find(vm, "Location")) {
+            const auto l = Vm::vectorOf(*v);
+            c.location = {l[0], l[1], l[2]};
+        }
+        if (const Value* v = mm->find(vm, "Rotation")) {
+            const auto r = Vm::rotatorOf(*v);
+            c.rotation = {r[0], r[1], r[2]};
+        }
+        if (const Value* v = mm->find(vm, "AxisScale")) {
+            const auto s = Vm::vectorOf(*v);
+            c.axisScale = {s[0], s[1], s[2]};
+        }
+        if (const Value* v = mm->find(vm, "DrawScale"))
+            c.drawScale = v->asFloat();
+        if (const Value* v = mm->find(vm, "ScaleGlow"))
+            c.scaleGlow = v->asFloat();
+        if (const Value* v = mm->find(vm, "Style"))
+            c.style = uint8_t(v->asInt());
+        c.texture = refOf(mm->find(vm, "Texture"));
+        out.push_back(c);
+    }
+    return true;
+}
+
+std::vector<ScriptLevel::Decal> LevelPlay::decals() const {
+    std::vector<ScriptLevel::Decal> out;
+    for (const auto& [actor, d] : level_->decals())
+        if (!actor->deleted)
+            out.push_back(d);
+    return out;
+}
+
 LevelPlay::View LevelPlay::view() {
     View v;
     if (!player_ || player_->deleted)
@@ -358,6 +400,10 @@ bool LevelPlay::look(VmObject* a, Look& out) {
         out.style = uint8_t(v->asInt());
     if (const Value* v = at(ScaleGlow))
         out.scaleGlow = v->asFloat();
+    if (const Value* v = a->find(vm, "bUnlit"))
+        out.unlit = v->asBool();
+    if (const Value* v = a->find(vm, "bMultiMeshRenderInitial"))
+        out.renderInitial = v->asBool();
     out.layers.clear();
     if (const auto* layers = level_->layersOf(a))
         for (const auto& [group, l] : *layers)

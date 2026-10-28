@@ -251,9 +251,9 @@ The movement: 187,000 moves, 6,837 landings, 8,341 touches.
 
 What's left before play, by what `ue-run` reports:
 
-- **Natives not written** (15): The Fallen's `ListActors` iterator (an AI's list of known actors, not yet
-  understood), `GetRendererFlags`, and The Fallen's per-tick hooks and
-  effects (`ScriptTick`, `ChainSparkTick`, `UpdateBeamSections`...).
+- **Natives not written**: none that a map calls in its first seconds.
+  The Fallen's effects' own physics modes are still only moved by their
+  copies' velocity (see Effects).
 - **Speed**: values are copied freely and calls looked up by name; the
   biggest maps tick at half real time.
 - **The game's own mistakes**: `DS9_GrigariSentryDrone` (and its kin)
@@ -311,7 +311,9 @@ Physics each tick, after the actor's scripts:
 | Rotating | `RotationRate` each second. Any physics also turns toward `DesiredRotation` with `bRotateToDesired` (not a player's pawn: its input turns it). |
 | Moving brush | While its script has it going (`InterpolateTo` sets `bInterpolating`): a mover from its old key toward its next by `PhysAlpha`, eased in and out if it glides by time. It carries the actors based on it and sends `InterpolateEnd` at the end. |
 
-The Fallen's own physics modes (its effects', past 32) do nothing yet.
+The Fallen's own physics modes (its effects', past 32: about forty, one
+for each kind of effect) do nothing yet; the effects' copies move on
+their own (see Effects).
 Natives: `Move`, `MoveSmooth`, `SetLocation`, `SetPhysics`, `Trace`
 (the world and actors' cylinders), `FastTrace`, `PointCheck`, `Pawn`'s
 latent `MoveTo`, `MoveToward`, `TurnTo`, `TurnToward`, `WaitForLanding`
@@ -685,6 +687,82 @@ at warp, with the tragic cue.
 `ue-play` mixes offline (`wav <file>`: what was heard since the last,
 and how loud each second; `sounds`: what's playing, and the last
 sounds started).
+
+### Effects
+
+The Fallen draws most effects as copies of one actor, made by its scripts
+(`CTVE_MultiMesh`: `NewMultiMesh` puts one on the actor's `MultiMesh`
+list, `Delete` moves it to the list's end as spare). `vm_effects.cpp`
+moves them and works the effects' natives. All of this is Reluva's
+reading of what the scripts set and expect; the original code isn't
+known.
+
+- **Copies**: each tick, each moves by its `Velocity`, which its
+  `Acceleration` changes. One with a `LifeSpan` is let go when it runs
+  out. An actor with a copy list is drawn as its copies only (even none
+  yet), unless it asks to be drawn as well (`bMultiMeshRenderInitial`).
+  Each copy is drawn as the actor's mesh or sprite, in its place, with
+  its rotation, `DrawScale`, `AxisScale` (along its own axes),
+  `ScaleGlow`, style and texture.
+- **Arcs** (`CTVE_ChainSpark`): `SpawnChain` makes `NumSegments` copies.
+  `ChainSparkTick` lays them along a cubic Bezier from `StartLoc` to
+  `FinishLoc`, leaving along `startPath` and arriving along
+  `FinishPath`. Each tick the points between are jolted aside by up to
+  `SpikeMag` (`EndSpikeMag` next to the ends), with a sine wave on top
+  for `bSinVariation`. It grows (`bGrows`) and fades or glows up and down
+  (`bFade`, `bCycleFade`). Each segment is the spark mesh stretched from
+  one point to the next, `Thickness` wide.
+- **Beams** (`UpdateBeamSections`): the sections start at `BeamOrigin`,
+  each `BeamSectionAxesX` further on, turned as the beam, with a wave if
+  it has one. Their thickness jitters by `SectionAxisYZRandomFactor`. The
+  last section is as long as the head has flown into it (`HeadTime` x
+  `HeadVelocity`).
+- **Sparks** (`CTVE_Sparks.SparkTick`): when its scripts' `BurstDelay`
+  runs out, a burst of `MinSparksPerBurst` to `MaxSparksPerBurst` flies
+  out along its X axis at `Speed`. They spread `RangeWidth` and
+  `RangeHeight`, fall by the zone's gravity, and are `Size` and last
+  `SparkLife` (each give or take its variance), fading as they go. The
+  next burst is due in about `AverageBurstTime`, else at random up to
+  `MaxWaitTime`. Its light (`saveLightType`) flashes for a tenth of a
+  second.
+- **Rain and snow** (`CTVE_Weather.WeatherTick`, `InitialSetUp`): drops
+  fall up to `SpawnRange` around `SeedLocation`, which its scripts keep
+  ahead of the player. There are 4000 x `Intensity` of them (the scripts
+  hold it at 0.1); it comes up or down at `DeltaIntensityRate` as it's
+  turned on and off. New drops start `DropHeight` above (at every height
+  for `InitialSetUp`) and fall at `FallRate` (give or take
+  `FallRateVariance`), blown by `DropVelocity`'s wind. The wind drifts at
+  random toward up to `MaxLateralMove`. Each drop lasts until it meets
+  the world below, traced as it starts, so roofs shelter what's under
+  them. None start inside the weather blockers its scripts gathered
+  (`Block`: a cylinder or a box), or only inside them with
+  `bInvertWeatherBlockers`. Drops left far behind as the player moves
+  go.
+- **Decals** (`Decal.AttachDecal`, `DetachDecal`): stuck to the world
+  surface within the trace distance behind them. They lie flat on it,
+  their top along the direction given or their rotation's Z, and are
+  drawn over it (modulated) with a depth bias.
+- `SetSurfaceTexture`: the surface found by a trace takes another
+  texture (the whole world's use of that texture, if asked), saved with
+  the game. Its `XORPolyFlags` aren't applied.
+- `GetWaterLine(Start, out End)`: `End` is brought back to where the line
+  from `Start` crosses the water's surface, found by halving. It is
+  `Start` if the line doesn't cross it (bubbles rising out of water).
+- **Ghosts** (`MakeGhost`, `GhostActors`): an actor set aside, out of the
+  level's list (no ticks, no collision, not drawn) until it's brought
+  back.
+- `ListActors`: an AI's known actors (`ActorList`), each with its entry.
+- `ScriptTick`: one actor's tick on its own while the game's paused (the
+  HUD's portrait).
+- `ResizeActor`: a new collision size, kept only if there's room for it
+  (on the floor or under the ceiling, as asked).
+- `PickWallAdjust`: a step aside, left or right, that's clear to the
+  goal.
+- `GetDialogueCameraData`: the current line's camera from the dialogue
+  table, in the world or from the speaker.
+- `GetRendererFlags` gives 0. `Level.bHighDetailMode` is set from the
+  ini's `LowDetailTextures`, so high detail by default: the effects that
+  only run in high detail run.
 
 ### Saved games
 

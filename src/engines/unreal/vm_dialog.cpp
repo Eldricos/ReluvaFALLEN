@@ -18,6 +18,7 @@
 #include "common/fs.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <cstring>
 
@@ -325,6 +326,7 @@ float ScriptLevel::lineSeconds(const DialogLine& l) {
 void ScriptLevel::beginLine(DialogThread& t, int index) {
     const DialogLine& l = dialogLines_[size_t(index)];
     ++dialogPlays_[size_t(index)];
+    currentLine_ = index;
     // Its voice: the Sound of its record in the package of its table's
     // name, heard everywhere (lines are meant to be heard, over the
     // communicator too), one at a time.
@@ -352,6 +354,7 @@ void ScriptLevel::beginLine(DialogThread& t, int index) {
         return a && !a->deleted ? a : nullptr;
     };
     t.speaker = actorFor(l.speaker);
+    currentSpeaker_ = t.speaker;
     t.listener = actorFor(l.listener);
     auto pawnOrNone = [&](VmObject* a) { return Value::objectValue(a && vm_.isA(a, "Pawn") ? a : nullptr); };
     if (Value* v = prop(levelInfo_, "Talker"))
@@ -459,9 +462,84 @@ std::vector<ScriptLevel::Subtitle> ScriptLevel::subtitles() const {
     return out;
 }
 
+// "CAM(R:19,15,35,5,-144,0 F:90)": R a place and turn from the speaker
+// (x ahead, y to the side, z up, turned with the speaker's yaw; the turn's
+// yaw added to the speaker's), A in the world, in degrees; F the field of
+// view, D the distance. V and H (most lines') aren't known, so those lines
+// leave the camera to the scripts. Reluva's reading of the column.
+bool ScriptLevel::dialogueCamera(std::array<float, 3>& at, std::array<int32_t, 3>& rotation, float& fov,
+                                 float& dist) {
+    if (currentLine_ < 0 || size_t(currentLine_) >= dialogLines_.size())
+        return false;
+    std::string cam = dialogLines_[size_t(currentLine_)].camera;
+    const size_t open = cam.find('('), close = cam.rfind(')');
+    if (open == std::string::npos || close == std::string::npos || close < open)
+        return false;
+    cam = cam.substr(open + 1, close - open - 1);
+    bool placed = false, relative = false;
+    float v[6] = {};
+    size_t at0 = 0;
+    while (at0 < cam.size()) {
+        size_t end = cam.find(' ', at0);
+        if (end == std::string::npos)
+            end = cam.size();
+        const std::string part = cam.substr(at0, end - at0);
+        at0 = end + 1;
+        if (part.size() < 3 || part[1] != ':')
+            continue;
+        const char key = char(std::toupper(uint8_t(part[0])));
+        const std::string value = part.substr(2);
+        if (key == 'A' || key == 'R') {
+            int n = std::sscanf(value.c_str(), "%f,%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]);
+            if (n >= 3) {
+                placed = true;
+                relative = key == 'R';
+            }
+        } else if (key == 'F') {
+            fov = std::strtof(value.c_str(), nullptr);
+        } else if (key == 'D') {
+            dist = std::strtof(value.c_str(), nullptr);
+        }
+    }
+    if (!placed)
+        return false;
+    auto units = [](float degrees) { return int32_t(std::lround(degrees * 65536.0f / 360)); };
+    rotation = {units(v[3]), units(v[4]), units(v[5])};
+    at = {v[0], v[1], v[2]};
+    if (relative) {
+        VmObject* s = currentSpeaker_;
+        if (!s || s->deleted)
+            return false;
+        const auto loc = Vm::vectorOf(*prop(s, "Location"));
+        const auto rot = Vm::rotatorOf(*prop(s, "Rotation"));
+        const float yaw = float(rot[1]) * 6.2831853f / 65536;
+        at = {loc[0] + v[0] * std::cos(yaw) - v[1] * std::sin(yaw), loc[1] + v[0] * std::sin(yaw) + v[1] * std::cos(yaw),
+              loc[2] + v[2]};
+        rotation[1] += rot[1];
+    }
+    return true;
+}
+
 void registerDialogNatives(Vm& vm) {
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     auto optionalName = [](NativeCall& c, size_t k) { return c.given.size() > k && c.given[k] ? c.i(k) : 0; };
+    // GetDialogueCameraData(out Vector Pos, out Rotator Rot, out float FOV,
+    // out float Dist): the camera the line being said asks for
+    // (ScriptLevel::dialogueCamera); left as they are, false, if none.
+    reg("Actor.GetDialogueCameraData", [](NativeCall& c) {
+        std::array<float, 3> at{};
+        std::array<int32_t, 3> rot{};
+        float fov = c.f(2), dist = c.f(3);
+        if (!c.vm.level || !c.vm.level->dialogueCamera(at, rot, fov, dist)) {
+            c.result = Value::boolValue(false);
+            return;
+        }
+        c.args[0] = c.vm.vectorValue(at[0], at[1], at[2]);
+        c.args[1] = c.vm.rotatorValue(rot[0], rot[1], rot[2]);
+        c.args[2] = Value::floatValue(fov);
+        c.args[3] = Value::floatValue(dist);
+        c.result = Value::boolValue(true);
+    });
     auto optionalString = [](NativeCall& c, size_t k) { return c.given.size() > k && c.given[k] ? c.s(k) : std::string(); };
     // FindBestDialogLine(out int Index, string Type, optional name FilterTag, optional name ListenerTag,
     // optional name SpeakerTag, optional string LineID): how many lines would do, the best in Index.

@@ -166,6 +166,7 @@ struct NativeCall {
     Value result;
     float latentSeconds = -1;  // >= 0: the call waits this long (a latent function)
     std::vector<Value> items;  // an iterator's results, put in its first out parameter in turn
+    std::vector<Value> items2; // and its second's, item by item, if it has one
 
     int32_t i(size_t k) const { return k < args.size() ? args[k].asInt() : 0; }
     float f(size_t k) const { return k < args.size() ? args[k].asFloat() : 0; }

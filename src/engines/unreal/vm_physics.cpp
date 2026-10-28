@@ -259,6 +259,62 @@ bool ScriptLevel::place(VmObject* a, const Vec& point) {
     return false;
 }
 
+bool ScriptLevel::resize(VmObject* a, float r, float h, bool alignToFloor, bool adjustToFit, bool alignToTop) {
+    Value* rv = prop(a, "CollisionRadius");
+    Value* hv = prop(a, "CollisionHeight");
+    Value* loc = prop(a, "Location");
+    if (!rv || !hv || !loc)
+        return false;
+    const float r0 = rv->asFloat(), h0 = hv->asFloat();
+    const Value was = *loc;
+    Vec at = vecOf(loc);
+    if (alignToFloor)
+        at[2] += h - h0;
+    else if (alignToTop)
+        at[2] -= h - h0;
+    *rv = Value::floatValue(r);
+    *hv = Value::floatValue(h);
+    collidersTick_ = -1;
+    if (!boolOf(prop(a, "bCollideWorld")) || clear(at, {r, r, h}, a)) {
+        *loc = vm_.vectorValue(at[0], at[1], at[2]);
+        updateRegion(a);
+        return true;
+    }
+    if (adjustToFit && place(a, at))
+        return true;
+    *rv = Value::floatValue(r0);
+    *hv = Value::floatValue(h0);
+    *loc = was;
+    return false;
+}
+
+bool ScriptLevel::pickWallAdjust(VmObject* pawn) {
+    Value* dest = prop(pawn, "Destination");
+    if (!dest)
+        return false;
+    const Vec from = vecOf(prop(pawn, "Location"));
+    const Vec to = vecOf(dest);
+    Vec dir{to[0] - from[0], to[1] - from[1], 0};
+    const float len = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1]);
+    if (len < 1)
+        return false;
+    dir = mul(dir, 1 / len);
+    const Vec e = extentOf(pawn);
+    const Vec side{-dir[1], dir[0], 0};
+    const float step = std::max(e[0] * 3, 48.0f);
+    for (const float s : {1.0f, -1.0f}) {
+        // Aside, then on: both clear of the world.
+        const Vec aside = add(from, mul(side, s * step));
+        const Vec beyond = add(aside, mul(dir, std::min(len, step * 2)));
+        Vec where{}, n{};
+        if (trace(pawn, from, aside, e, false, where, n) || trace(pawn, aside, beyond, e, false, where, n))
+            continue;
+        *dest = vm_.vectorValue(aside[0], aside[1], aside[2]);
+        return true;
+    }
+    return false;
+}
+
 // A mover's box where it is now: its brush's box through its placement.
 bool ScriptLevel::brushBox(VmObject* m, Vec& min, Vec& max) {
     auto it = m->package == &map_ ? brushes_.find(m->exportIndex) : brushes_.end();
@@ -559,12 +615,12 @@ void ScriptLevel::updateTouching(VmObject* a) {
 // The surface a line meets: the node whose plane stopped it, or another
 // in the same plane (UnrealEd's coplanar nodes, linked by planeNode) whose
 // polygon holds the point.
-VmObject* ScriptLevel::surfaceTexture(const Vec& start, const Vec& end) {
+int ScriptLevel::surfaceAt(const Vec& start, const Vec& end) {
     if (!collision_)
-        return nullptr;
+        return -1;
     const LevelCollision::Hit hit = collision_->trace({start[0], start[1], start[2]}, {end[0], end[1], end[2]});
     if (!hit.hit() || hit.node < 0)
-        return nullptr;
+        return -1;
     const Vec3f& p = hit.location;
     auto holds = [&](const BspNode& n) {
         if (n.vertexCount < 3 || size_t(n.vertPool) + n.vertexCount > model_.verts.size())
@@ -602,10 +658,37 @@ VmObject* ScriptLevel::surfaceTexture(const Vec& start, const Vec& end) {
         at = n.planeNode;
     }
     const int32_t surf = model_.nodes[size_t(found)].surf;
-    if (surf < 0 || size_t(surf) >= model_.surfs.size() || model_.surfs[size_t(surf)].texture == 0)
+    return surf >= 0 && size_t(surf) < model_.surfs.size() ? surf : -1;
+}
+
+// A surface's texture as it is now: swapped by the scripts, or its own.
+VmObject* ScriptLevel::surfaceTexture(const Vec& start, const Vec& end) {
+    const int surf = surfaceAt(start, end);
+    if (surf < 0)
         return nullptr;
-    const ObjectRef tex = vm_.packages().resolve(map_, model_.surfs[size_t(surf)].texture);
+    ObjectRef tex = vm_.packages().resolve(map_, model_.surfs[size_t(surf)].texture);
+    if (auto it = surfaceSwaps_.surfaces.find(surf); it != surfaceSwaps_.surfaces.end())
+        tex = it->second;
+    else if (auto w = surfaceSwaps_.world.find({tex.package, tex.exportIndex}); tex && w != surfaceSwaps_.world.end())
+        tex = w->second;
     return tex ? vm_.objectAt(*tex.package, tex.exportIndex + 1) : nullptr;
+}
+
+void ScriptLevel::swapSurfaceTexture(int surf, VmObject* texture, bool wholeWorld) {
+    if (surf < 0 || size_t(surf) >= model_.surfs.size() || !texture || !texture->package || texture->exportIndex < 0)
+        return;
+    const ObjectRef to{texture->package, texture->exportIndex};
+    if (wholeWorld) {
+        // Every surface with the texture this one has now.
+        ObjectRef from = vm_.packages().resolve(map_, model_.surfs[size_t(surf)].texture);
+        if (auto it = surfaceSwaps_.surfaces.find(surf); it != surfaceSwaps_.surfaces.end())
+            from = it->second;
+        if (from)
+            surfaceSwaps_.world[{from.package, from.exportIndex}] = to;
+    } else {
+        surfaceSwaps_.surfaces[surf] = to;
+    }
+    ++surfaceSwaps_.serial;
 }
 
 VmObject* ScriptLevel::trace(VmObject* self, const Vec& start, const Vec& end, const Vec& extent, bool actors,
@@ -1006,6 +1089,27 @@ void registerMovementNatives(Vm& vm) {
     // GetSurfaceTexture(Vector Start, Vector End): the texture of the
     // level's surface between them (the footsteps' sound goes by its
     // TexMaterial).
+    // ResizeActor(float NewRadius, float NewHeight, optional bool
+    // bAlignToFloor, optional bool bAdjustToFit, optional bool bAdjustToTop):
+    // ScriptLevel::resize; the player crouches and crawls by it.
+    reg("Actor.ResizeActor", [](NativeCall& c) {
+        c.result = Value::boolValue(c.vm.level && c.self &&
+                                    c.vm.level->resize(c.self, c.f(0), c.f(1), c.b(2), c.b(3), c.b(4)));
+    });
+    // SetSurfaceTexture(Vector Start, Vector End, Texture NewTexture,
+    // optional bool bReplaceAllWorld, optional int XORPolyFlags): the
+    // surface between them shows NewTexture (switches, card readers); with
+    // bReplaceAllWorld, every surface showing what it shows. Its flags
+    // (XORPolyFlags, a texture changer's own setting) aren't applied yet.
+    reg("Actor.SetSurfaceTexture", [](NativeCall& c) {
+        if (c.vm.level)
+            c.vm.level->swapSurfaceTexture(c.vm.level->surfaceAt(Vm::vectorOf(c.args[0]), Vm::vectorOf(c.args[1])),
+                                           c.o(2), c.b(3));
+    });
+    // PickWallAdjust(): ScriptLevel::pickWallAdjust.
+    reg("Pawn.PickWallAdjust", [](NativeCall& c) {
+        c.result = Value::boolValue(c.vm.level && c.self && c.vm.level->pickWallAdjust(c.self));
+    });
     reg("Actor.GetSurfaceTexture", [](NativeCall& c) {
         c.result = Value::objectValue(
             c.vm.level ? c.vm.level->surfaceTexture(Vm::vectorOf(c.args[0]), Vm::vectorOf(c.args[1])) : nullptr);

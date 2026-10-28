@@ -268,7 +268,22 @@ private:
         gfx::TextureId texture = 0;
         gfx::TextureId lightmap = 0; // 0: none (unlit, blended, or the level has no lighting)
         uint32_t polyFlags = 0;
+        ObjectRef textureRef{}; // the level's: the texture it's drawn with, for the scripts' swaps
     };
+    // Where each of the level's surfaces is in its mesh (a batch and a run
+    // of its indices for each of its polygons), to draw one with another
+    // texture (SetSurfaceTexture).
+    struct SurfRange {
+        size_t batch;
+        uint32_t firstIndex, indexCount;
+    };
+    std::map<int, std::vector<SurfRange>> surfRanges_;
+    // The level's batches as the scripts' swaps leave them (whole-world
+    // swaps), made again when they change.
+    std::vector<Batch> swappedBatches_;
+    int swappedSerial_ = -1;
+    const std::vector<Batch>& levelBatches();
+    void drawSurfaceSwaps();
 
     // A mover: its polygons (in its brush's own coordinates, in
     // moverMesh_) and where it is between its keyframes.
@@ -280,7 +295,8 @@ private:
     };
     gfx::Mat4 moverTransform(const MoverDraw& m) const;
     static gfx::Mat4 moverPlacement(const Mover& m, const Vec3f& location, const Rotator& rotation);
-    void drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh, const gfx::Mat4& model, bool levelLit);
+    void drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh, const gfx::Mat4& model, bool levelLit,
+                     bool over = false); // over: on top of the same polygons drawn already
 
     std::vector<std::string> names_;
     int index_ = 0;
@@ -312,7 +328,15 @@ private:
         std::array<float, 3> color{1, 1, 1};
         uint8_t style = kStyleNormal;
         bool vertical = false;
+        // Lying as given rather than facing the camera (a decal on a
+        // wall): its right and up, in the renderer's axes; pulled towards
+        // the camera so it shows on the surface it's on.
+        bool oriented = false;
+        gfx::Vec3 right{}, up{};
     };
+    void drawCopies(VmObject* actor, const LevelPlay::Look& look, const std::vector<LevelPlay::Copy>& copies,
+                    std::vector<SpriteDraw>& sprites);
+    void addDecals(std::vector<SpriteDraw>& sprites);
     void drawSprites(const std::vector<SpriteDraw>& sprites, const gfx::Vec3& forward, const gfx::Vec3& right);
     gfx::MeshId spriteQuad_ = 0;
     std::vector<SpriteDraw> sprites_;

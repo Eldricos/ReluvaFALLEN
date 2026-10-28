@@ -119,6 +119,8 @@ public:
         bool animLoop = false;
         uint8_t style = 1;
         float scaleGlow = 1;
+        bool unlit = false;            // bUnlit: as bright as its ScaleGlow, not the light where it is
+        bool renderInitial = false;    // bMultiMeshRenderInitial: drawn itself as well as its copies
         // The Fallen's layered animations on parts of it (C3DPlayAnim).
         struct Layer {
             std::string anim, bone;
@@ -130,6 +132,23 @@ public:
         LayeredPoser::Adjust adjust;
     };
     bool look(VmObject* actor, Look& out);
+    // Its copies (The Fallen's MultiMesh: particles, sparks, a beam's
+    // sections), each drawn as it is, in its place, turned and scaled
+    // (AxisScale, along its own axes), glowing and in its style; with its
+    // own texture, for sprites. False if it has no list of them (it's
+    // drawn as itself); with one, it's drawn as its copies only, even none
+    // yet, unless it asks to be drawn as well (renderInitial).
+    struct Copy {
+        Vec3f location{}, axisScale{1, 1, 1};
+        Rotator rotation;
+        float drawScale = 1, scaleGlow = 1;
+        ObjectRef texture;
+        uint8_t style = 1;
+    };
+    bool copies(VmObject* actor, std::vector<Copy>& out);
+    // The decals stuck to the world (Decal.AttachDecal), and their size:
+    // their texture's, by their scale.
+    std::vector<ScriptLevel::Decal> decals() const;
     // It was drawn this frame (its LastRenderTime: The Fallen's heads and
     // faces only move on pawns drawn in the last few seconds).
     void drawn(VmObject* actor);

@@ -27,7 +27,7 @@ namespace reluva::unreal {
 
 namespace {
 
-constexpr char kMagic[8] = {'R', 'L', 'V', 'S', 'A', 'V', 'E', '1'};
+constexpr char kMagic[8] = {'R', 'L', 'V', 'S', 'A', 'V', 'E', '2'}; // 2: with the ghosts
 
 class Out {
 public:
@@ -219,6 +219,8 @@ Error ScriptLevel::saveGame(const std::string& slot) {
     };
     for (VmObject* a : actors_)
         add(a);
+    for (VmObject* g : ghosts_)
+        add(g);
     std::function<void(const Value&)> follow = [&](const Value& v) {
         if (v.type == VType::Object)
             add(v.o);
@@ -318,6 +320,10 @@ Error ScriptLevel::saveGame(const std::string& slot) {
     for (VmObject* a : actors_)
         if (has(a))
             out.i32(ids[a]);
+    out.i32(int32_t(std::count_if(ghosts_.begin(), ghosts_.end(), has)));
+    for (VmObject* g : ghosts_)
+        if (has(g))
+            out.i32(ids[g]);
     ref(player_);
     ref(game_);
     out.f32(time_);
@@ -430,6 +436,19 @@ Error ScriptLevel::saveGame(const std::string& slot) {
     }
     out.i32(nextDialogThread_);
     out.i32(int32_t(dialogRandom_));
+    out.i32(int32_t(surfaceSwaps_.surfaces.size()));
+    for (const auto& [surf, tex] : surfaceSwaps_.surfaces) {
+        out.i32(surf);
+        out.str(tex.package->name());
+        out.i32(tex.exportIndex);
+    }
+    out.i32(int32_t(surfaceSwaps_.world.size()));
+    for (const auto& [from, to] : surfaceSwaps_.world) {
+        out.str(from.first->name());
+        out.i32(from.second);
+        out.str(to.package->name());
+        out.i32(to.exportIndex);
+    }
     const auto& counts = vm_.nameCounts();
     out.i32(int32_t(counts.size()));
     for (const auto& [cls, n] : counts) {
@@ -614,6 +633,12 @@ Error ScriptLevel::restore(const std::filesystem::path& file) {
         if (id >= 0 && size_t(id) < objects.size())
             actors_.push_back(objects[size_t(id)]);
     }
+    ghosts_.clear();
+    for (int32_t k = in.count(4); k > 0; --k) {
+        const int32_t id = in.i32();
+        if (id >= 0 && size_t(id) < objects.size())
+            ghosts_.push_back(objects[size_t(id)]);
+    }
     player_ = ref();
     game_ = ref();
     time_ = in.f32();
@@ -750,6 +775,23 @@ Error ScriptLevel::restore(const std::filesystem::path& file) {
     }
     nextDialogThread_ = in.i32();
     dialogRandom_ = uint32_t(in.i32());
+    surfaceSwaps_ = {};
+    auto packageRef = [&]() -> ObjectRef {
+        const Package* p = vm_.packages().get(in.str());
+        const int32_t index = in.i32();
+        return p ? ObjectRef{p, index} : ObjectRef{};
+    };
+    for (int32_t k = in.count(12); k > 0; --k) {
+        const int32_t surf = in.i32();
+        if (const ObjectRef tex = packageRef())
+            surfaceSwaps_.surfaces[surf] = tex;
+    }
+    for (int32_t k = in.count(16); k > 0; --k) {
+        const ObjectRef from = packageRef(), to = packageRef();
+        if (from && to)
+            surfaceSwaps_.world[{from.package, from.exportIndex}] = to;
+    }
+    surfaceSwaps_.serial = 1;
     for (int32_t k = in.count(8); k > 0; --k) {
         const std::string cls = in.str();
         const int32_t count = in.i32();

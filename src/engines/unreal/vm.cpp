@@ -1053,8 +1053,10 @@ public:
 
     struct Iteration {
         std::vector<Value> items;
+        std::vector<Value> items2; // its second out parameter's, item by item (ListActors' entry)
         size_t next = 0;
         Value* out = nullptr;
+        Value* out2 = nullptr;
         int body = 0;
     };
     struct Frame {
@@ -1128,8 +1130,11 @@ public:
                 it.body = pc + 1;
                 iterate(f, arg(x, 0), it);
                 const bool empty = it.items.empty() || !it.out;
-                if (!empty)
+                if (!empty) {
                     vm_.assign(*it.out, it.items[0]);
+                    if (it.out2 && !it.items2.empty())
+                        vm_.assign(*it.out2, it.items2[0]);
+                }
                 it.next = 1;
                 f.iterations.push_back(std::move(it));
                 pc = empty ? at(f, uint32_t(x.value)) : pc + 1;
@@ -1143,6 +1148,8 @@ public:
                            !it.items[it.next].asObject())
                         ++it.next;
                     if (it.next < it.items.size()) {
+                        if (it.out2 && it.next < it.items2.size())
+                            vm_.assign(*it.out2, it.items2[it.next]);
                         vm_.assign(*it.out, it.items[it.next++]);
                         pc = it.body;
                         continue;
@@ -1413,7 +1420,7 @@ public:
     }
 
     Value invoke(VmFunction* fn, VmObject* self, std::vector<Value> args, const std::vector<Value*>& outs,
-                 std::vector<bool> given, std::vector<Value>* items) {
+                 std::vector<bool> given, std::vector<Value>* items, std::vector<Value>* items2 = nullptr) {
         if (vm_.depth_ >= kMaxDepth) {
             vm_.reportError("calls nested too deep, at " + fn->qualified);
             return fn->returnValue ? fn->returnValue->zero() : Value();
@@ -1442,6 +1449,8 @@ public:
                     vm_.assign(*outs[k], c.args[k]);
             if (items)
                 *items = std::move(c.items);
+            if (items2)
+                *items2 = std::move(c.items2);
             if (c.latentSeconds >= 0)
                 vm_.pendingLatent_ = c.latentSeconds;
             if (fn->returnValue)
@@ -1513,12 +1522,14 @@ private:
                 args[k] = *outs[k];
                 if (!it.out)
                     it.out = outs[k];
+                else if (!it.out2)
+                    it.out2 = outs[k];
             } else {
                 args[k] = vm_.convert(eval(f, a, f.self), p);
             }
         }
         // The out parameters aren't written back: the loop sets the first.
-        invoke(fn, target, std::move(args), {}, std::move(given), &it.items);
+        invoke(fn, target, std::move(args), {}, std::move(given), &it.items, &it.items2);
     }
 
     Value conversion(uint8_t t, const Value& v) {

@@ -166,6 +166,14 @@ void ScriptLevel::beginPlay(const std::string& defaultGame) {
     // scripts check before acting on ticks: CTVE_Spline's).
     if (Value* v = levelInfo_->find(vm_, "bStartup"))
         *v = Value::boolValue(true);
+    // High detail, as the engine sets it from the client's settings
+    // (LowDetailTextures off, as Default.ini has it): the effects in full
+    // (an arc's 25 segments, not 5). Reluva's reading of which setting.
+    if (Value* v = levelInfo_->find(vm_, "bHighDetailMode")) {
+        const std::string* client = vm_.configSetting("Engine.Engine", "ViewportManager");
+        const std::string* low = client ? vm_.configSetting(*client, "LowDetailTextures") : nullptr;
+        *v = Value::boolValue(!low || lowerText(*low) != "true");
+    }
     // The game type: the level's own, else the default.
     VmClass* gameClass = nullptr;
     if (Value* v = levelInfo_->find(vm_, "DefaultGameType"); v && v->asObject() && v->o->asClass)
@@ -371,6 +379,8 @@ void ScriptLevel::tick(float seconds) {
             vm_.callEvent(a, "UpdateEyeHeight", {Value::floatValue(seconds)});
         if (!a->deleted)
             animate(a, seconds);
+        if (!a->deleted)
+            moveMultiMeshes(a, seconds);
         // A life span running out: Expired, then gone.
         if (Value* life = a->deleted ? nullptr : prop(a, "LifeSpan"); life && life->asFloat() > 0) {
             life->f -= seconds;
@@ -438,6 +448,36 @@ void ScriptLevel::destroy(VmObject* a) {
         v->i = 1;
     a->deleted = true;
     bends_.erase(a);
+    ghosts_.erase(std::remove(ghosts_.begin(), ghosts_.end(), a), ghosts_.end());
+    decals_.erase(a);
+    sparkFlash_.erase(a);
+}
+
+void ScriptLevel::makeGhost(VmObject* a, bool ghost) {
+    if (!a || a->deleted)
+        return;
+    const bool now = std::find(ghosts_.begin(), ghosts_.end(), a) != ghosts_.end();
+    if (ghost == now)
+        return;
+    if (ghost) {
+        actors_.erase(std::remove(actors_.begin(), actors_.end(), a), actors_.end());
+        ghosts_.push_back(a);
+        touching_.erase(a);
+    } else {
+        ghosts_.erase(std::remove(ghosts_.begin(), ghosts_.end(), a), ghosts_.end());
+        actors_.push_back(a);
+    }
+    if (Value* v = prop(a, "bIsGhost"))
+        *v = Value::boolValue(ghost);
+    collidersTick_ = -1;
+}
+
+void ScriptLevel::tickActor(VmObject* a, float seconds) {
+    if (!a || a->deleted)
+        return;
+    vm_.tick(a, seconds);
+    if (!a->deleted)
+        animate(a, seconds);
 }
 
 namespace {
@@ -595,6 +635,7 @@ void registerEngineNatives(Vm& vm) {
     registerConsoleNatives(vm);
     registerSaveNatives(vm);
     registerSoundNatives(vm);
+    registerEffectNatives(vm);
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     auto B = [](bool v) { return Value::boolValue(v); };
 
@@ -691,6 +732,68 @@ void registerEngineNatives(Vm& vm) {
                 c.items.push_back(v);
         }
     });
+    // ListActors(class<Actor> BaseClass, out Actor Actor, out ActorListEntry
+    // ListEntry, Actor inActor): the actors in inActor's ActorList (its
+    // scripts fill it with what it's seen: ScanForActors) of the class, each
+    // with its entry; empty entries left out.
+    reg("Actor.ListActors", [](NativeCall& c) {
+        VmObject* of = c.o(3);
+        const VmObject* cls = c.o(0);
+        const VmProperty* p = of && of->cls ? of->cls->findProperty(c.vm.name("ActorList")) : nullptr;
+        if (!p || !p->structType)
+            return;
+        const VmProperty* item = p->structType->findProperty(c.vm.name("Item"));
+        if (!item)
+            return;
+        for (int k = 0; k < p->arrayDim && size_t(p->slot + k) < of->values.size(); ++k) {
+            const Value& entry = of->values[size_t(p->slot + k)];
+            if (size_t(item->slot) >= entry.fields.size())
+                continue;
+            VmObject* a = entry.fields[size_t(item->slot)].asObject();
+            if (!a || a->deleted || (cls && cls->asClass && !(a->cls && a->cls->isA(cls->asClass))))
+                continue;
+            c.items.push_back(Value::objectValue(a));
+            c.items2.push_back(entry);
+        }
+    });
+    // GhostActors(class<Actor> BaseClass, out Actor Actor, optional name
+    // MatchTag, optional bool bDontUnghostAutomatically): the ghosts of the
+    // class with that tag, each an actor again unless asked not to.
+    reg("Actor.GhostActors", [](NativeCall& c) {
+        if (!c.vm.level)
+            return;
+        const VmObject* cls = c.o(0);
+        const bool byTag = c.given.size() > 2 && c.given[2] && c.i(2) != 0;
+        const std::vector<VmObject*> ghosts = c.vm.level->ghosts();
+        for (VmObject* a : ghosts) {
+            if (a->deleted || (cls && cls->asClass && !(a->cls && a->cls->isA(cls->asClass))))
+                continue;
+            if (const Value* tag = a->find(c.vm, "Tag"); byTag && (!tag || tag->i != c.i(2)))
+                continue;
+            if (!c.b(3))
+                c.vm.level->makeGhost(a, false);
+            c.items.push_back(Value::objectValue(a));
+        }
+    });
+    // MakeGhost(bool bGhost): out of the level, or back.
+    reg("Actor.MakeGhost", [](NativeCall& c) {
+        if (c.vm.level)
+            c.vm.level->makeGhost(c.self, c.b(0));
+    });
+    // ScriptTick(float DeltaTime): the actor ticked by its owner, the HUD
+    // its portrait, so it moves while the game's paused; when it isn't,
+    // the level ticks it already, and once a tick is enough.
+    reg("Actor.ScriptTick", [](NativeCall& c) {
+        if (c.vm.level && c.vm.level->paused())
+            c.vm.level->tickActor(c.self, c.f(0));
+    });
+    // GetRendererFlags(): what the renderer does itself. Bit 2 hides The
+    // Fallen's blob shadows (CTV_Shadow) where it draws shadows of its
+    // own; Reluva's renderers draw none, so no flags.
+    reg("Actor.GetRendererFlags", [](NativeCall& c) { c.result = Value::intValue(0); });
+    // UpdateMultiSkins(): its MultiSkins changed. The page reads them each
+    // frame, so there's nothing to bring up to date.
+    reg("Actor.UpdateMultiSkins", [](NativeCall&) {});
     reg("Actor.ChildActors", [](NativeCall& c) {
         for (Value& v : actorsOf(c.vm, c.args[0]))
             if (Value* owner = v.o->find(c.vm, "Owner"); owner && owner->o == c.self)

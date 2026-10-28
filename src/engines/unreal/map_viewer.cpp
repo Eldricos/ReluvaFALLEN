@@ -133,6 +133,9 @@ void MapViewer::unload() {
         renderer_->destroyTexture(t);
     textures_.clear();
     batches_.clear();
+    surfRanges_.clear();
+    swappedBatches_.clear();
+    swappedSerial_ = -1;
     animatedLightmaps_.clear();
     animatedTextures_.clear();
     changingLights_.clear();
@@ -277,8 +280,12 @@ void MapViewer::load(int index) {
         batch.firstIndex = uint32_t(indices.size());
         const auto [textureId, size] = textureFor(*pkg, textureRef);
         batch.texture = textureId;
+        batch.textureRef = ctx_.packages.resolve(*pkg, textureRef);
         for (const Polygon* p : group) {
             const auto base = uint32_t(vertices.size());
+            if (p->points.size() >= 3)
+                surfRanges_[p->surf].push_back(
+                    {batches_.size(), uint32_t(indices.size()), uint32_t(p->points.size() - 2) * 3});
             const gfx::Vec3 n = toWorld(p->normal);
             const float facing = n[0] * light[0] + n[1] * light[1] + n[2] * light[2];
             const auto shade = uint8_t((flags & polyflag::Unlit) ? 255 : 150 + int(90 * facing));
@@ -902,7 +909,8 @@ void MapViewer::update(uint64_t nowMs) {
         // surfaces leaving it showing.
         const gfx::Vec3 eye = toWorld(*sky_);
         renderer_->beginFrame(gfx::multiply(proj, gfx::lookAlong(eye, forward, {0, 0, 1})), eye, {20, 24, 40});
-        drawBatches(batches_, mesh_, gfx::identity(), true);
+        drawBatches(levelBatches(), mesh_, gfx::identity(), true);
+        drawSurfaceSwaps();
         renderer_->clearDepth();
         renderer_->setView(viewProj, pos_);
     } else {
@@ -925,7 +933,8 @@ void MapViewer::update(uint64_t nowMs) {
         }
         renderer_->draw(call);
     }
-    drawBatches(batches_, mesh_, gfx::identity(), true);
+    drawBatches(levelBatches(), mesh_, gfx::identity(), true);
+    drawSurfaceSwaps();
     for (size_t i = 0; i < movers_.size(); ++i) {
         const MoverDraw& m = movers_[i];
         VmObject* live = play_ && i < moverActors_.size() ? moverActors_[i] : nullptr;
@@ -1118,17 +1127,19 @@ void MapViewer::drawSprites(const std::vector<SpriteDraw>& sprites, const gfx::V
             if (blend != (blendedPass == 1))
                 continue;
             // Vertical sprites stay upright, turning only about Z.
-            const gfx::Vec3 u = d.vertical ? gfx::Vec3{0, 0, 1} : up;
+            const gfx::Vec3 u = d.oriented ? d.up : d.vertical ? gfx::Vec3{0, 0, 1} : up;
+            const gfx::Vec3 r = d.oriented ? d.right : right;
             gfx::DrawCall call;
             call.mesh = spriteQuad_;
             call.indexCount = 6;
             call.model = gfx::identity();
             for (size_t k = 0; k < 3; ++k) {
-                call.model[k] = right[k] * d.width;
+                call.model[k] = r[k] * d.width;
                 call.model[4 + k] = u[k] * d.height;
                 call.model[8 + k] = -forward[k];
                 call.model[12 + k] = d.at[k];
             }
+            call.state.depthBias = d.oriented;
             call.texture = textured_ ? d.texture : 0;
             call.color = {d.color[0], d.color[1], d.color[2], 1};
             call.state.cull = gfx::Cull::None;
@@ -1246,8 +1257,48 @@ gfx::Mat4 MapViewer::moverPlacement(const Mover& m, const Vec3f& location, const
     return gfx::multiply(m4, translation({-m.prePivot[0], -m.prePivot[1], -m.prePivot[2]}));
 }
 
+// The level's batches, playing: with the textures the scripts have swapped
+// for others everywhere (SetSurfaceTexture's bReplaceAllWorld).
+const std::vector<MapViewer::Batch>& MapViewer::levelBatches() {
+    if (!play_ || play_->level().surfaceSwaps().world.empty())
+        return batches_;
+    const ScriptLevel::SurfaceSwaps& swaps = play_->level().surfaceSwaps();
+    if (swappedSerial_ != swaps.serial) {
+        swappedSerial_ = swaps.serial;
+        swappedBatches_ = batches_;
+        for (Batch& b : swappedBatches_)
+            if (auto it = swaps.world.find({b.textureRef.package, b.textureRef.exportIndex}); it != swaps.world.end())
+                b.texture = textureOf(it->second).first;
+    }
+    return swappedBatches_;
+}
+
+// One surface's texture swapped (SetSurfaceTexture): its polygons drawn
+// again over themselves with the new one, then its lightmap. The texture
+// coordinates are the old texture's, so a new one of another size would
+// be stretched; The Fallen's switches swap textures of one size.
+void MapViewer::drawSurfaceSwaps() {
+    if (!play_)
+        return;
+    for (const auto& [surf, tex] : play_->level().surfaceSwaps().surfaces) {
+        auto it = surfRanges_.find(surf);
+        if (it == surfRanges_.end())
+            continue;
+        const gfx::TextureId texture = textureOf(tex).first;
+        for (const SurfRange& r : it->second) {
+            if (r.batch >= batches_.size())
+                continue;
+            Batch b = batches_[r.batch];
+            b.firstIndex = r.firstIndex;
+            b.indexCount = r.indexCount;
+            b.texture = texture;
+            drawBatches({b}, mesh_, gfx::identity(), true, true);
+        }
+    }
+}
+
 void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh, const gfx::Mat4& model,
-                            bool levelLit) {
+                            bool levelLit, bool over) {
     auto lit = [&](const Batch& b) {
         return levelLit && lightmaps_ && b.lightmap && !blended(b.polyFlags) &&
                !(b.polyFlags & (polyflag::FakeBackdrop | polyflag::Unlit));
@@ -1269,6 +1320,8 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
             call.color = {kExposure, kExposure, kExposure, 1};
         if (b.polyFlags & polyflag::Masked)
             call.state.alphaTest = gfx::AlphaTest::Ge128;
+        if (over) // drawn over what's there already
+            call.state.depthEqual = true;
         if (b.polyFlags & polyflag::Translucent) {
             call.state.src = gfx::Blend::One;
             call.state.dst = gfx::Blend::OneMinusSrcColor;
@@ -1591,6 +1644,7 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
     std::vector<SpriteDraw> sprites;
     for (VmObject* a : play_->level().actors())
         drawLiveActor(a, sprites);
+    addDecals(sprites);
     drawSprites(sprites, forward, right);
 }
 
@@ -1613,6 +1667,16 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
     asAsked();
     if (look.hidden && !evenHidden)
         return;
+    // The Fallen's copies of it (MultiMesh), drawn in its place unless it
+    // asks to be drawn itself as well.
+    if (!hud) {
+        std::vector<LevelPlay::Copy> copies;
+        if (play_->copies(a, copies)) {
+            drawCopies(a, look, copies, sprites);
+            if (!look.renderInitial)
+                return;
+        }
+    }
     if (look.drawType == kDrawMesh && look.mesh) {
         // About to be drawn: its scripts get their say first, and it's
         // drawn as they leave it.
@@ -1661,6 +1725,88 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
         const float glow = look.scaleGlow * kExposure;
         d.color = {glow, glow, glow};
         sprites.push_back(d);
+    }
+}
+
+// An actor's copies: its mesh posed as it is (its animation now) in each
+// one's place, turned, scaled by DrawScale and along its own axes by
+// AxisScale, in its style, as bright as its ScaleGlow (where it's lit, or
+// wholly if the actor's unlit); or, for a sprite, its texture (the copy's
+// own, else the actor's) facing the camera.
+void MapViewer::drawCopies(VmObject* a, const LevelPlay::Look& look, const std::vector<LevelPlay::Copy>& copies,
+                           std::vector<SpriteDraw>& sprites) {
+    constexpr int kDrawSprite = 1, kDrawMesh = 2, kDrawVerticalSprite = 5, kDrawSpriteAnimOnce = 7;
+    play_->drawn(a);
+    if (look.drawType == kDrawMesh && look.mesh) {
+        const int at = liveMesh(look.mesh, look.animSequence);
+        if (at < 0)
+            return;
+        const Mesh& mesh = meshes_[size_t(at)];
+        std::vector<gfx::TextureId> skins;
+        for (size_t k = 0; k < std::max<size_t>(mesh.textures.size(), 8); ++k) {
+            ObjectRef tex = k < look.multiSkins.size() ? look.multiSkins[k] : ObjectRef{};
+            if (!tex)
+                tex = look.skin;
+            if (!tex && k < mesh.textures.size())
+                tex = ctx_.packages.resolve(*look.mesh.package, mesh.textures[k]);
+            skins.push_back(textured_ ? textureOf(tex).first : 0);
+        }
+        const MeshPose pose = poseAtFraction(mesh, mesh.findAnim(look.animSequence), look.animFrame, look.animLoop);
+        for (const LevelPlay::Copy& c : copies) {
+            gfx::Mat4 placement = meshPlacement(c.location, c.rotation, c.drawScale, look.prePivot);
+            for (size_t k = 0; k < 3; ++k) {
+                placement[k] *= c.axisScale[0];
+                placement[4 + k] *= c.axisScale[1];
+                placement[8 + k] *= c.axisScale[2];
+            }
+            MeshLight light = look.unlit ? MeshLight{{1, 1, 1}, {}, {0, 0, 1}} : meshLightAt(c.location);
+            for (size_t k = 0; k < 3; ++k) {
+                light.ambient[k] *= c.scaleGlow;
+                light.directed[k] *= c.scaleGlow;
+            }
+            drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, pose, skins, light, kExposure, c.style);
+        }
+    } else if (look.drawType == kDrawSprite || look.drawType == kDrawVerticalSprite ||
+               look.drawType == kDrawSpriteAnimOnce) {
+        for (const LevelPlay::Copy& c : copies) {
+            const auto [texture, size] = textureOf(c.texture ? c.texture : look.texture);
+            if (!texture)
+                continue;
+            SpriteDraw d;
+            d.texture = texture;
+            d.at = toWorld(c.location);
+            d.width = float(size[0]) * c.drawScale;
+            d.height = float(size[1]) * c.drawScale;
+            d.style = c.style;
+            d.vertical = look.drawType == kDrawVerticalSprite;
+            const float glow = c.scaleGlow * kExposure;
+            d.color = {glow, glow, glow};
+            sprites.push_back(d);
+        }
+    }
+}
+
+// The decals stuck to the world: their texture flat on the surface, its
+// size by their scale, multiplying what's under it (grey leaves it as it
+// is: marks, scorches, footprints).
+void MapViewer::addDecals(std::vector<SpriteDraw>& sprites) {
+    for (const ScriptLevel::Decal& d : play_->decals()) {
+        const auto [texture, size] = textureOf(d.texture);
+        if (!texture)
+            continue;
+        const std::array<float, 3>& n = d.normal;
+        const std::array<float, 3>& u = d.up;
+        const Vec3f right{u[1] * n[2] - u[2] * n[1], u[2] * n[0] - u[0] * n[2], u[0] * n[1] - u[1] * n[0]};
+        SpriteDraw s;
+        s.texture = texture;
+        s.at = toWorld(Vec3f{d.at[0] + n[0] * 0.5f, d.at[1] + n[1] * 0.5f, d.at[2] + n[2] * 0.5f});
+        s.width = float(size[0]) * d.scale;
+        s.height = float(size[1]) * d.scale;
+        s.style = kStyleModulated;
+        s.oriented = true;
+        s.right = toWorld(right);
+        s.up = toWorld(Vec3f{u[0], u[1], u[2]});
+        sprites.push_back(s);
     }
 }
 

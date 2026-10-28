@@ -111,6 +111,15 @@ public:
     // Whether a box at a point is clear of the world and the movers that
     // block (but `self`).
     bool clear(const std::array<float, 3>& point, const std::array<float, 3>& extent, VmObject* self = nullptr);
+    // A new collision size (ResizeActor), its feet kept where they were
+    // (alignToFloor) or its top (alignToTop); where it no longer fits,
+    // moved to a place nearby that it does (adjustToFit). False, and left as
+    // it was, if it can't be.
+    bool resize(VmObject* actor, float radius, float height, bool alignToFloor, bool adjustToFit, bool alignToTop);
+    // A pawn's way round what blocks it on its way to its Destination
+    // (PickWallAdjust): a step aside, left or right, from which it can go
+    // on; its Destination moved there. False if there's none.
+    bool pickWallAdjust(VmObject* pawn);
     // Puts an actor somewhere it fits, near `point` if it doesn't there;
     // false if there's nowhere near.
     bool place(VmObject* actor, const std::array<float, 3>& point);
@@ -387,7 +396,53 @@ public:
     // The texture of the level's surface a line from start to end meets
     // first; null if it meets none (GetSurfaceTexture: what's underfoot).
     VmObject* surfaceTexture(const std::array<float, 3>& start, const std::array<float, 3>& end);
+    // That surface's index in the level's model; -1 if none.
+    int surfaceAt(const std::array<float, 3>& start, const std::array<float, 3>& end);
+    // Textures the scripts have swapped (SetSurfaceTexture): one surface's,
+    // or every surface with a texture (bReplaceAllWorld), by its old one.
+    // `surfaceSerial` counts the changes.
+    struct SurfaceSwaps {
+        std::map<int, ObjectRef> surfaces;
+        std::map<std::pair<const Package*, int>, ObjectRef> world;
+        int serial = 0;
+    };
+    const SurfaceSwaps& surfaceSwaps() const { return surfaceSwaps_; }
+    void swapSurfaceTexture(int surf, VmObject* texture, bool wholeWorld);
     void destroy(VmObject* actor);
+    // Ghosts (MakeGhost): actors taken out of the level for now, not
+    // ticked, drawn, collided with or found by AllActors, until made
+    // actors again (GhostActors brings them back as it finds them).
+    void makeGhost(VmObject* actor, bool ghost);
+    const std::vector<VmObject*>& ghosts() const { return ghosts_; }
+    // The camera the line being said asks for (its table's CAMERA column:
+    // "CAM(A:x,y,z,pitch,yaw,roll F:fov D:dist)" in the world, R: the same
+    // from the speaker); false if it asks for none of those.
+    bool dialogueCamera(std::array<float, 3>& at, std::array<int32_t, 3>& rotation, float& fov, float& dist);
+    // The Fallen's effects (vm_effects.cpp). An actor's copies (its
+    // MultiMesh list), in use, in order; each tick they move and age.
+    std::vector<VmObject*> multiMeshes(VmObject* actor);
+    void moveMultiMeshes(VmObject* actor, float seconds);
+    void chainSparkTick(VmObject* spark, float seconds);
+    void updateBeamSections(VmObject* beam, float seconds);
+    void sparkTick(VmObject* sparks, float seconds);
+    void weatherTick(VmObject* weather, float seconds, bool fill);
+    // Where the water's surface is on the way from `start` to `end` (the
+    // first point where it goes in or out of a water zone); `start` if it
+    // doesn't cross one.
+    std::array<float, 3> waterLine(const std::array<float, 3>& start, const std::array<float, 3>& end);
+    // Decals stuck to the world: where, facing out which way, their top
+    // which way, their texture and its scale.
+    struct Decal {
+        std::array<float, 3> at{}, normal{}, up{};
+        ObjectRef texture;
+        float scale = 1;
+    };
+    VmObject* attachDecal(VmObject* decal, float distance, const std::array<float, 3>& direction);
+    void detachDecal(VmObject* decal) { decals_.erase(decal); }
+    const std::map<VmObject*, Decal>& decals() const { return decals_; }
+    // One actor's tick on its own (ScriptTick: the HUD's portrait, kept
+    // going while the game's paused): its scripts and its animation.
+    void tickActor(VmObject* actor, float seconds);
 
 private:
     void init(VmObject* actor); // the engine's own properties of a new actor
@@ -539,6 +594,8 @@ private:
     char dialogWho_ = 0;                // K, S or W: whom the player plays
     std::vector<DialogThread> dialogThreads_;
     int nextDialogThread_ = 1;
+    int currentLine_ = -1;              // the line said last (its camera: GetDialogueCameraData)
+    VmObject* currentSpeaker_ = nullptr;
     uint32_t dialogRandom_ = 1;
     std::map<std::string, float> dialogSeconds_; // each voice's length
     bool walkable(VmObject* pawn, const Vec& from, const Vec& to);
@@ -552,6 +609,10 @@ private:
     std::vector<VmObject*> movers_; // the level's, which traces of the world meet
     int editorCameras_ = 0;
     std::vector<VmObject*> actors_;
+    std::vector<VmObject*> ghosts_;
+    SurfaceSwaps surfaceSwaps_;
+    std::map<VmObject*, Decal> decals_;
+    std::map<VmObject*, float> sparkFlash_; // sparks' lights, on for this long yet
     float time_ = 0;
     std::set<int> keysDown_;
     std::string travel_;
@@ -617,6 +678,8 @@ void registerConsoleNatives(Vm& vm);
 void registerSaveNatives(Vm& vm);
 // Sounds and music (vm_sound.cpp).
 void registerSoundNatives(Vm& vm);
+// The Fallen's effects: arcs, beams, decals (vm_effects.cpp).
+void registerEffectNatives(Vm& vm);
 // A map's reach list as stored (object references, not yet actors).
 struct RawReachSpec {
     int distance = 0, start = 0, end = 0, radius = 0, height = 0, flags = 0;
