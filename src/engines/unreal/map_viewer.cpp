@@ -681,7 +681,14 @@ std::string MapViewer::describePlayer() {
     std::snprintf(buf, sizeof buf, " %.2f", double(frame ? frame->asFloat() : 0));
     const Value* rot = p->find(vm, "Rotation");
     const int yaw = rot ? int(std::lround(double(Vm::rotatorOf(*rot)[1] & 0xffff) * 360 / 65536)) : 0;
-    return "at " + vec("Location") + ", yaw " + std::to_string(yaw) + ", velocity " + vec("Velocity") + ", state " + play_->playerState() +
+    std::string weapon = "none";
+    if (const Value* w = p->find(vm, "Weapon"); w && w->asObject()) {
+        weapon = vm.nameText(w->o->name);
+        if (const Value* ammo = w->o->find(vm, "AmmoType"); ammo && ammo->asObject())
+            if (const Value* n = ammo->o->find(vm, "AmmoAmount"))
+                weapon += " (" + std::to_string(n->asInt()) + ")";
+    }
+    return "weapon " + weapon + ", at " + vec("Location") + ", yaw " + std::to_string(yaw) + ", velocity " + vec("Velocity") + ", state " + play_->playerState() +
            ", physics " + std::to_string(physics ? physics->asInt() : -1) + ", anim " +
            (seq ? vm.nameText(seq->i) : std::string("?")) + buf;
 }

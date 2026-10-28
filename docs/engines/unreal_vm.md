@@ -197,6 +197,31 @@ but 8, the same leaf too for 2,738. Actors saved with no region (the
 LevelInfo, brushes: zone 0, leaf -1) aren't in the world, and keep
 none.
 
+A point in no ZoneInfo's zone (zone 0, or one with none) is in the
+LevelInfo's: it's the default zone, as in UE1. Left as None, the
+player's `ViewFlash`, `UnderWaterSounds` and `HandleWalking` read None
+150,000 times in all maps' first 20 seconds.
+
+A pawn's feet, chest (The Fallen's `ChestHeight` up its height, 0.65)
+and eyes are in zones too: `FootRegion`, `ChestRegion` and
+`HeadRegion`, kept as it moves, and `FootZoneChange`, `ChestZoneChange`
+and `HeadZoneChange` when one changes (wading, swimming, breath).
+
+### Noise
+
+The AI hears (`ScriptLevel::makeNoise`). A noise is `MakeNoise(Loudness)`
+or a sound played without `bNoHearNoise` (as loud as its volume). Only a
+pawn's noise is heard: its own, its weapon's or shot's, or what it set
+off (its `Instigator`), as UE1's `MakeNoise` asks; the level's ambient
+emitters aren't (they kept knocking guards out of their states). Each
+other pawn hears it if Loudness x 800 over the distance (halved with the
+world between) reaches its `HearingThreshold` (1 by default: a noise of
+loudness 1 carries 800 units in the open). Then its `HearNoise(Loudness,
+the maker)`: The Fallen's AI searches toward it, or attacks if it can
+see the maker. One noise a pawn every fifth of a second. A guard with no
+enemy, hearing the player, says its FHE line ("Did you hear that?").
+UE1's own rule isn't in the scripts; this is Reluva's.
+
 ### The player logging in
 
 After `beginPlay`, `login` does the engine's side of a player joining,
@@ -254,8 +279,8 @@ What's left before play, by what `ue-run` reports:
 - **Natives not written**: none that a map calls in its first seconds.
   The Fallen's own physics modes are Reluva's reading of the scripts
   (see Movement and Effects).
-- **Speed**: values are copied freely and calls looked up by name; the
-  biggest maps tick at half real time.
+- **Speed**: the biggest map, M03_KiraL2 (4,263 actors), runs 20 seconds
+  of play in about 10.7 s without drawing (21.6 s before the work below).
 - **The game's own mistakes**: `DS9_GrigariSentryDrone` (and its kin)
   `goto 'DetermineAction'` in their `DefensiveStance` state, where it's
   a function, not a label, `DS9_Grigari` `goto 'CheckCloak'` in
@@ -304,7 +329,7 @@ Physics each tick, after the actor's scripts:
 
 | Physics | What it does |
 |---|---|
-| Walking | Acceleration (flattened, at `AccelRate`) against ground friction (the zone's, 8) up to `GroundSpeed`. A smooth move, then down onto the floor if one is within a step, else falling (`Falling`). A floor is a surface facing up at least 0.7 (about 45 degrees). |
+| Walking | Acceleration (flattened, at `AccelRate`) against ground friction (the zone's, 8) up to `GroundSpeed`. A smooth move, then down onto the floor if one is within a step, else falling (`Falling`). A floor is a surface facing up at least 0.7 (about 45 degrees). Against a wall or a mover, `HitWall` (the AI opens doors from it); The Fallen's player gets it as its walking state reads it: X how head-on (its way of moving against the normal), Y its speed, so it stops running against a wall. A move that gets nowhere (the crease where a ramp meets a slope too steep) tries a step too, and is told of the steep wall. |
 | Falling | Gravity (the zone's, −950) and `AirControl` of the acceleration, up to the zone's terminal velocity. Off a wall or a slope too steep to stand on, `HitWall` and the rest of the fall slides along it. On a floor, `Landed`, then walking (pawns) or none, keeping the speed across. As a fall starts, the actor's `FallHeight` is set where it is: The Fallen's `TakeFallingDamage` kills at a drop of more than 800 from it, and its scripts set it only while rising in a jump. Left at 0, every landing on a map far below the origin was fatal. |
 | Swimming, flying | Acceleration against fluid friction up to `WaterSpeed` or `AirSpeed`, smooth moves. Swimmers sink or float by `Buoyancy` against `Mass` and fall once out of water. |
 | Projectile | Its velocity plus acceleration; `HitWall` on the world. |
@@ -319,7 +344,7 @@ and leave undone.
 
 | Physics | What it does |
 |---|---|
-| Interpolating, CTVE_Interpolating | Along a path of interpolation points (`SpecialEvent`'s player paths, the intro's camera): from `Target` to its `Next` by `PhysAlpha`, at `PhysRate` times the point's `RateModifier`, placed and turned between them. At each point, `InterpolateEnd` on the point and the actor (their scripts end the path), then on to the next (past one with `bSkipNextPath`). |
+| Interpolating, CTVE_Interpolating | Along a path of interpolation points (`SpecialEvent`'s player paths, the intro's camera): from `Target` to its `Next` by `PhysAlpha`, at `PhysRate` times the point's `RateModifier`, placed and turned between them. At each point, `InterpolateEnd` on the point and the actor (their scripts end the path), then on to the next (past one with `bSkipNextPath`). No shipped map has interpolation points, so it isn't seen. |
 | Trailer | At its owner's place (and turned as it, with `bTrailerSameRotation`), as UE1's. |
 | Climbing | Up and down a ladder at its `Acceleration.Z` (the scripts': `aForward` x 0.02, 120 a second). At the top, with no ladder at the chest, the ledge found there and `ChangePhysics(Clambering)`; down onto a floor, `Landed` and walking. |
 | Hanging | Along the ledge at its acceleration (`aStrafe` x 0.008), while there's ledge under its hands. |
@@ -350,7 +375,8 @@ the scripts compare with theirs) in `HeadRoom`, the wall's normal in
 The input axes are 20 times the bindings' speeds (`aBaseY` 6000 for a
 held MoveForward), as UE1's input scales a held key's axis. The
 climbing speeds above are the scripts' factors of those.
-Natives: `Move`, `MoveSmooth`, `SetLocation`, `SetPhysics`, `Trace`
+Natives: `Pawn.StopWaiting` (a `Sleep` its state code is in ends),
+`Move`, `MoveSmooth`, `SetLocation`, `SetPhysics`, `Trace`
 (the world and actors' cylinders), `FastTrace`, `PointCheck`, `Pawn`'s
 latent `MoveTo`, `MoveToward`, `TurnTo`, `TurnToward`, `WaitForLanding`
 and `FinishRotation` (each moves the pawn by its acceleration until it
@@ -469,14 +495,22 @@ the natives.
   that no line of that type has, the line with the tag still does: the
   training room asks for `TRAIN01` as TRN, and the table makes it EVT.
 - **Hails** (`PlayDialog("HAL", None, <crewmate>)`, the HUD's
-  communicator): a line of this mission's, as above, if there is one.
-  Else the player's own options to that crewmate (HOP), a need its
-  conditions show first ("Chief, I need ammunition", `LowAmmo`), else
-  asking for a report. Then the answer: its NEXTLINE (O'Brien's
-  "Energizing… now", which beams the ammunition down), else that
-  crewmate's report (HBO, to the player or to no one). Then the sign-off:
-  its RETURNLINE, else the player's HCL. On M06_WorfL1A: "Captain, what
-  is your status?", Sisko's mission report, "Understood. Worf out."
+  communicator): first a need, if the player has one: an option (HOP) to
+  that crewmate whose conditions hold ("Chief, I need rifle ammunition",
+  `LowAmmo`; the line being blocked). Else a line of this mission's, as
+  above. Else the player's other options: asking for a report. Then the
+  answer: its NEXTLINE (O'Brien's "Stand by" then "Energizing… now",
+  which beams the ammunition down, in a beam-down zone; elsewhere the
+  mission's refusal), else that crewmate's report (HBO, to the player or
+  to no one). Then the sign-off: its RETURNLINE, else the player's HCL
+  (not after the crewmate has signed off). On M06_WorfL1A: "Captain,
+  what is your status?", Sisko's mission report, "Understood. Worf out."
+  On M03_KiraL2 with 20 shots left: "Chief, I need rifle ammunition.",
+  "Sir, I can't beam anything to your current position - there's too
+  much ionic distortion.", "Acknowledged. Kira out."
+- **A condition's arguments**: a number where a name parameter comes
+  first leaves the name out: `LowAmmo( 0.2 )` is any weapon under a
+  fifth (taking 0.2 for the weapon's name, it was never true).
 - **RETURNLINE**: a line's return line is played once what its NEXTLINE
   leads to is done ("…What's next?", O'Brien's answers, then Kira's
   "I'm on my way. Kira out.").
@@ -723,7 +757,9 @@ scripts use it; the engine's own code isn't known.
   - A slot (all but none) holds one sound an actor. A new one stops the
     old, unless `bNoOverride`, when it isn't played while the old one
     is.
-  - Not done: the noise the AI hears (`bNoHearNoise`, `MakeNoise`).
+  - Unless `bNoHearNoise`, it's a noise the AI hears, as loud as its
+    volume (below). The Fallen's weapons pass it for all their sounds
+    but the empty click; footsteps don't.
 - **Ambient sounds:** each actor's `AmbientSound`, looping while it has
   one. Heard as far as 25 × (`SoundRadius` + 1) units, at
   `SoundVolume` / 255, its pitch `SoundPitch` / 64. It starts once the
@@ -1402,6 +1438,23 @@ frames): 13 s in all, about 22 ms a frame.
 - The rest is reading the live actors and the camera each frame, plus
   starting play and loading meshes once.
 
-The biggest maps' ticks take twice as long. There, and with drawing
-added, a slower machine falls below 30 frames a second, and the game
-then runs slower than real time.
+The biggest maps' ticks took twice as long. Profiled on M03_KiraL2
+(callgrind, then stack samples later in the run), these made it about
+twice as fast (20 seconds of play: 21.6 s, now about 10.7 s):
+- The moves' loops (blocking, touching, traces) go through only the
+  actors that collide with actors: a list made each tick (again when
+  `SetCollision` changes one), not all 4,000. Traces read the classes'
+  collision slots rather than asking `isA` by name.
+- Movers far from a move are passed over by their brush's bounding
+  sphere before the costly test in their own space. That also ended a
+  bug: a flat mover brush (a force field's sheet) makes a BSP of one
+  plane, solid all the way behind it; CM04_Lab refused 301 placings 2000
+  units from one. Overlaps are also kept inside the brush's box.
+- Names are lower-cased on the stack; a struct's properties are found by
+  an index; a native's code, whether a function is `&&` or `||` and
+  whether it has out parameters are found once; frames make their
+  temporaries' list only when needed; vectors are written in place;
+  values copy their string and fields only when they have them.
+
+The effects' and Core's random numbers start again with each level, so
+a map runs the same alone or in `ue-run -all`.

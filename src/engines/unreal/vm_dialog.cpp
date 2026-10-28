@@ -181,6 +181,16 @@ bool ScriptLevel::testCondition(const std::string& condition) {
                     }
                     if (given >= args.size())
                         break;
+                    // A name left out before a number ("LowAmmo( 0.2 )":
+                    // any weapon, under a fifth): the name stays None.
+                    if (p->type == VType::Name && k + 1 < f->params.size() && args.size() < f->params.size()) {
+                        char* end = nullptr;
+                        std::strtod(args[given].c_str(), &end);
+                        if (end && *end == 0 && !args[given].empty()) {
+                            values.push_back(p->zero());
+                            continue;
+                        }
+                    }
                     const std::string& arg = args[given++];
                     switch (p->type) {
                     case VType::Byte:
@@ -328,10 +338,13 @@ int ScriptLevel::startDialog(VmObject* self, const std::string& type, NameId fil
     DialogThread t;
     const std::string me = playerSpeaker();
     const std::string to = listener && !same(vm_.nameText(listener), "None") ? vm_.nameText(listener) : "";
-    if (same(type, "HAL") && !to.empty() && !me.empty() && filterTag == 0 && lineId.empty() &&
-        (index < 0 || !dialogLineSpecial(index))) {
+    if (same(type, "HAL") && !to.empty() && !me.empty() && filterTag == 0 && lineId.empty()) {
+        // A need (low on ammunition, hurt, poisoned) or the line being
+        // blocked comes first, over the mission's own line, which waits
+        // for the next hail.
         const int option = pickDialogLine("HOP", me, to, false, false, true);
-        if (option >= 0) {
+        const bool need = option >= 0 && !dialogLines_[size_t(option)].condition.empty();
+        if (option >= 0 && (need || index < 0 || !dialogLineSpecial(index))) {
             index = option;
             const DialogLine& l = dialogLines_[size_t(option)];
             if (l.next.empty())
@@ -585,6 +598,10 @@ void ScriptLevel::tickDialog(float seconds) {
         while (next < 0 && !t.followUps.empty()) {
             const DialogThread::FollowUp f = t.followUps.front();
             t.followUps.erase(t.followUps.begin());
+            // Signed off already (the answer's own return line: "Sisko
+            // out."): no second sign-off.
+            if (same(f.type, "HCL") && same(l.type, "HCL"))
+                continue;
             next = pickDialogLine(f.type, f.speaker, f.listener, true, true, false);
         }
         conditionSubject_ = nullptr;
