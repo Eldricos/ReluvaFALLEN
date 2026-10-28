@@ -30,13 +30,27 @@ of tabs space the rest out. Every other row is a line:
 | DIRECTION | the voice actor's direction ("(urgent)") |
 | PAUSE | seconds after the line (a few lines) |
 | NEXTLINE | the key of the line that follows; `?` stands for any character, so one of several |
-| RETURNLINE | the key of a line to go back to (the communicator's menus) |
-| TAG | a label scripts ask for lines by (`HAILOBN01`, `START_K11A`); `DoNotPlay` on some |
+| RETURNLINE | the key of a line to go back to once what NEXTLINE leads to is done: a hail's sign-off ("GENHCLSKO010", "Understood. Sisko out.") |
+| TAG | a label scripts ask for lines by (`HAILOBN01`, `START_K11A`); `DoNotPlay` on some; on the AI's and the injured's lines, the `Dialogue_Tag` of the one actor who says it (`FC1`, `BM2`) |
 | EVENT | what the line sets off: actors with this tag are triggered, or one of the HUD's beam-downs |
 | CONDITION | when it may be said: tests joined by `and` and `or`, maybe after `!` (`SpecialCondition( InTemple ) and ! CommunicationBlocked`, `DS9Phase( 2 )`); one in brackets is a note to the writers |
-| CAMERA | a cut scene camera (`CAM(V:1)`, `CAM(R:19,15,35,5,-144,0 F:90)`) |
+| CAMERA | a cut scene camera (`CAM(R:19,15,35,5,-144,0 F:90)`: R a place and turn from the speaker, A in the world, F the field of view); `V:1` a voice-over (a log), `H:1` heard over the communicator |
 | SPEAKER ANIMATION, LISTENER ANIMATION | an animation each plays (`CnvFirm1`) |
 | SPEAKER FACE, LISTENER FACE | a face (`FEX_DETERMINED`, the names of Pawn's `EFEX_Type`) |
+
+Lines numbered one after another (010, 011) with no NEXTLINE between
+them, the later untagged, are one speech: Kira's log, a Vorta's report.
+
+The type legend in GEN_Dialogue.txt groups them: 1 DIE; 2 CIN; 3 HAL HOP
+HBO HCL TRN (the communicator: a hail, the player's options, the
+crewmate's report, signing off); 4 PAN EXB EXG GSP DWN; 5 FSE; 6 SUR TTP
+GPI KIL FHE EVT HUD TBD; 7 BAT LSE INT LED ACK; 8 AMB REP. No script asks
+for FSE, LSE, KIL, SUR, AMB or REP: the AI's own, the engine's.
+
+The game ships tables for missions 1, 3 to 7 and 10 and the others
+above, but not 11 (or 12, or the training's): their voices are in
+`m11_Dialogue.uax`, `m12_Dialogue.uax` and `trn_Dialogue.uax`, their
+text nowhere.
 
 A line's key is its mission, type, speaker and line ID run together
 (`K01AMBBFC000`); NEXTLINE and RETURNLINE name lines so, across tables

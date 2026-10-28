@@ -4610,13 +4610,15 @@ int cmdUeRun(int argc, char** argv) {
                         "", level.navigationPoints().size(), level.reachSpecs().size(), pf.straight, pf.found,
                         pf.failed, pf.noStart, pf.noEnd, pf.noRoute);
         const auto& dg = level.dialog;
-        if (dg.started + dg.notFound > 0)
+        if (dg.started + dg.notFound + dg.barks > 0)
             std::printf("%-20s dialogue: %zu lines read; %d started (%d lines said), %d with no line to say, "
-                        "%d conditions not known\n",
-                        "", level.dialogLines().size(), dg.started, dg.lines, dg.notFound, dg.unknownConditions);
+                        "%d conditions not known, %d of the AI's own\n",
+                        "", level.dialogLines().size(), dg.started, dg.lines, dg.notFound, dg.unknownConditions,
+                        dg.barks);
         said.started += dg.started;
         said.lines += dg.lines;
         said.notFound += dg.notFound;
+        said.barks += dg.barks;
         paths.straight += pf.straight;
         paths.found += pf.found;
         paths.failed += pf.failed;
@@ -4669,7 +4671,8 @@ int cmdUeRun(int argc, char** argv) {
                 moved.moves, moved.blockedByWorld, moved.blockedByActors, moved.steps, moved.landings, moved.touches,
                 moved.zoneChanges, moved.refused, moved.gaveUp);
     std::printf("paths: %d ways found straight, %d along paths, %d not\n", paths.straight, paths.found, paths.failed);
-    std::printf("dialogue: %d started (%d lines said), %d with no line to say\n", said.started, said.lines, said.notFound);
+    std::printf("dialogue: %d started (%d lines said), %d with no line to say, %d of the AI's own\n", said.started,
+                said.lines, said.notFound, said.barks);
     std::printf("natives not written yet (%zu, by calls):\n", missing.size());
     for (const auto& [n, k] : top(missing, all ? 60 : 40))
         std::printf("  %7d %s\n", n, k.c_str());

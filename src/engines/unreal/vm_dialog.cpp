@@ -168,16 +168,27 @@ bool ScriptLevel::testCondition(const std::string& condition) {
             if (!f) {
                 ++dialog.unknownConditions;
             } else {
+                // An actor parameter is the line's speaker (the AI's own
+                // lines: "FriendClose( 500 )", "PlayerFaceEnemy"), not
+                // written in the table.
                 std::vector<Value> values;
-                for (size_t k = 0; k < f->params.size() && k < args.size(); ++k) {
+                size_t given = 0;
+                for (size_t k = 0; k < f->params.size(); ++k) {
                     const VmProperty* p = f->params[k];
+                    if (p->type == VType::Object) {
+                        values.push_back(Value::objectValue(conditionSubject_));
+                        continue;
+                    }
+                    if (given >= args.size())
+                        break;
+                    const std::string& arg = args[given++];
                     switch (p->type) {
                     case VType::Byte:
-                    case VType::Int: values.push_back(Value::intValue(std::atoi(args[k].c_str()))); break;
-                    case VType::Float: values.push_back(Value::floatValue(std::strtof(args[k].c_str(), nullptr))); break;
-                    case VType::Bool: values.push_back(Value::boolValue(same(args[k], "true"))); break;
-                    case VType::Name: values.push_back(Value::nameValue(vm_.name(args[k]))); break;
-                    case VType::String: values.push_back(Value::stringValue(args[k])); break;
+                    case VType::Int: values.push_back(Value::intValue(std::atoi(arg.c_str()))); break;
+                    case VType::Float: values.push_back(Value::floatValue(std::strtof(arg.c_str(), nullptr))); break;
+                    case VType::Bool: values.push_back(Value::boolValue(same(arg, "true"))); break;
+                    case VType::Name: values.push_back(Value::nameValue(vm_.name(arg))); break;
+                    case VType::String: values.push_back(Value::stringValue(arg)); break;
                     default: values.push_back(p->zero()); break;
                     }
                 }
@@ -228,12 +239,56 @@ int ScriptLevel::findDialogLine(const std::string& type, NameId filterTag, NameI
             continue;
         if (lineId.empty() && dialogFollows_[i])
             continue;
+        if (tag.empty() && !ofThisMission(l))
+            continue;
         if (!l.condition.empty() && !testCondition(l.condition))
             continue;
         matches.push_back(int(i));
     }
+    // A tag names one line: asked for under another type than the table
+    // gives it (the training room's TRAIN01, asked as TRN, is an EVT
+    // line), it's still that line.
+    if (matches.empty() && !tag.empty())
+        for (size_t i = 0; i < dialogLines_.size(); ++i) {
+            const DialogLine& l = dialogLines_[i];
+            if (same(l.tag, tag) && (l.condition.empty() || testCondition(l.condition)))
+                matches.push_back(int(i));
+        }
     index = bestDialogLine(matches);
     return int(matches.size());
+}
+
+// The best line of a type said by `speaker` (a code), to `listener` (a
+// code; with `orUnaddressed`, a line to no one does too), its conditions
+// met; with `anyPlace`, one only reached from another may be picked too
+// (the generic answers and sign-offs a hail ends with). With
+// `needsFirst`, one with a condition (a need: low on ammunition) over
+// one without.
+int ScriptLevel::pickDialogLine(const std::string& type, const std::string& speaker, const std::string& listener,
+                                bool orUnaddressed, bool anyPlace, bool needsFirst, const std::string* actorTag) {
+    loadDialog();
+    std::vector<int> matches, needs;
+    for (size_t i = 0; i < dialogLines_.size(); ++i) {
+        const DialogLine& l = dialogLines_[i];
+        if (!dialogOurs_[i] || !same(l.type, type) || same(l.tag, "DoNotPlay") || !same(l.speaker, speaker))
+            continue;
+        // One actor's own (its Dialogue_Tag the line's tag), and the
+        // start of what it says, not the lines that run on from it.
+        if (actorTag && ((!l.tag.empty() && !same(l.tag, *actorTag)) || runsOn(int(i))))
+            continue;
+        if (!ofThisMission(l))
+            continue;
+        if (!listener.empty() && !same(l.listener, listener) && !(orUnaddressed && l.listener.empty()))
+            continue;
+        if (!anyPlace && dialogFollows_[i])
+            continue;
+        if (!l.condition.empty() && !testCondition(l.condition))
+            continue;
+        matches.push_back(int(i));
+        if (!l.condition.empty())
+            needs.push_back(int(i));
+    }
+    return bestDialogLine(needsFirst && !needs.empty() ? needs : matches);
 }
 
 int ScriptLevel::bestDialogLine(const std::vector<int>& matches) {
@@ -265,17 +320,74 @@ int ScriptLevel::startDialog(VmObject* self, const std::string& type, NameId fil
                              NameId speaker, const std::string& lineId) {
     int index = -1;
     findDialogLine(type, filterTag, listener, speaker, lineId, index);
+    // A hail with nothing of this mission's to say: the player's own
+    // options to whoever it hails (HOP: a need its conditions show, like
+    // ammunition or medical supplies, else asking for a report), then the
+    // answer (its NEXTLINE, else that crewmate's report, HBO), then the
+    // player signing off (its RETURNLINE, else HCL).
+    DialogThread t;
+    const std::string me = playerSpeaker();
+    const std::string to = listener && !same(vm_.nameText(listener), "None") ? vm_.nameText(listener) : "";
+    if (same(type, "HAL") && !to.empty() && !me.empty() && filterTag == 0 && lineId.empty() &&
+        (index < 0 || !dialogLineSpecial(index))) {
+        const int option = pickDialogLine("HOP", me, to, false, false, true);
+        if (option >= 0) {
+            index = option;
+            const DialogLine& l = dialogLines_[size_t(option)];
+            if (l.next.empty())
+                t.followUps.push_back({"HBO", to, me});
+            if (l.back.empty())
+                t.followUps.push_back({"HCL", me, ""});
+        }
+    }
     if (index < 0) {
         ++dialog.notFound;
         return 0;
     }
-    DialogThread t;
     t.id = nextDialogThread_++;
     t.self = self;
     dialogThreads_.push_back(t);
     ++dialog.started;
     beginLine(dialogThreads_.back(), index);
     return t.id;
+}
+
+// A line that runs on from the one numbered just before it, of the same
+// table, mission, type and speaker, with no tag of its own or the same:
+// Kira's log on the Promenade, START_K11A3 (010) then "I haven't been able
+// to sleep..." (011); a Vorta's "...Prisoners A-2..." (000) then "Dispatch
+// guards..." (001). A line with no NEXTLINE goes on to one so.
+int ScriptLevel::runOnFrom(int index) {
+    const DialogLine& l = dialogLines_[size_t(index)];
+    if (l.lineId.size() != 3 || !std::isdigit(uint8_t(l.lineId[2])) || l.lineId[2] == '0')
+        return -1;
+    std::string before = l.lineId;
+    --before[2];
+    for (size_t i = 0; i < dialogLines_.size(); ++i) {
+        const DialogLine& o = dialogLines_[i];
+        if (o.lineId == before && same(o.mission, l.mission) && same(o.type, l.type) && same(o.speaker, l.speaker) &&
+            (l.tag.empty() || same(o.tag, l.tag)) && same(o.table, l.table))
+            return int(i);
+    }
+    return -1;
+}
+
+bool ScriptLevel::runsOn(int index) { return runOnFrom(index) >= 0; }
+
+// Whether a line, asked for by type rather than by its tag, may be said
+// here: one of this map's mission or a general one, or another mission's
+// whose conditions tie it to the story (DS9Phase...). Without the last,
+// a hail on M06 got mission 10's "Aye, sir.", and M04's guards M10's.
+bool ScriptLevel::ofThisMission(const DialogLine& l) {
+    if (dialogNumber_.empty() || generalMission(l.mission) || !l.condition.empty())
+        return true;
+    return l.mission.size() == 3 && upper(l.mission.substr(1)) == dialogNumber_;
+}
+
+// The player's speaker code ("KRA").
+std::string ScriptLevel::playerSpeaker() {
+    const Value* tag = player_ ? prop(player_, "Speaker_Tag") : nullptr;
+    return tag && tag->i ? vm_.nameText(tag->i) : std::string();
 }
 
 bool ScriptLevel::dialogPlaying(int thread) const {
@@ -346,16 +458,37 @@ void ScriptLevel::beginLine(DialogThread& t, int index) {
     t.timeLeft = t.seconds;
     t.pauseLeft = std::max(0.0f, l.pause);
     t.mouthTimer = 0;
+    // Its CAMERA column's flags: V a voice-over (a log), H heard over the
+    // communicator (Level.CurrentLineFlags 16 and 32: the heads don't turn
+    // to the talker; the HUD shows whoever's heard).
+    int flags = 0;
+    {
+        std::string cam = upper(l.camera);
+        cam.erase(std::remove(cam.begin(), cam.end(), ' '), cam.end());
+        if (cam.find("V:1") != std::string::npos)
+            flags |= 16;
+        if (cam.find("H:1") != std::string::npos)
+            flags |= 32;
+    }
+    // A line given back to (its RETURNLINE) once what it leads to is done.
+    if (!l.back.empty())
+        t.returns.push_back(l.back);
     VmObject* asker = t.self && !t.self->deleted ? t.self : levelInfo_;
-    auto actorFor = [&](const std::string& code) -> VmObject* {
+    auto actorFor = [&](const std::string& code, bool speaking) -> VmObject* {
         if (code.empty() || !asker)
             return nullptr;
-        VmObject* a = vm_.callEvent(asker, "GetSpeakerActor", {Value::nameValue(vm_.name(code))}).asObject();
+        // The speaker's an actor with the line's tag (its Dialogue_Tag:
+        // the Bajorans who hand over their cards), else the nearest with
+        // its code; heard over the communicator, the HUD's picture.
+        std::vector<Value> args{Value::nameValue(vm_.name(code))};
+        args.push_back(Value::nameValue(speaking && !l.tag.empty() ? vm_.name(l.tag) : vm_.name("None")));
+        args.push_back(Value::boolValue(speaking && (flags & 32)));
+        VmObject* a = vm_.callEvent(asker, "GetSpeakerActor", args).asObject();
         return a && !a->deleted ? a : nullptr;
     };
-    t.speaker = actorFor(l.speaker);
+    t.speaker = t.forcedSpeaker && !t.forcedSpeaker->deleted ? t.forcedSpeaker : actorFor(l.speaker, true);
     currentSpeaker_ = t.speaker;
-    t.listener = actorFor(l.listener);
+    t.listener = actorFor(l.listener, false);
     auto pawnOrNone = [&](VmObject* a) { return Value::objectValue(a && vm_.isA(a, "Pawn") ? a : nullptr); };
     if (Value* v = prop(levelInfo_, "Talker"))
         *v = pawnOrNone(t.speaker);
@@ -366,7 +499,7 @@ void ScriptLevel::beginLine(DialogThread& t, int index) {
     if (Value* v = prop(levelInfo_, "CurrentLineIndex"))
         *v = Value::intValue(index);
     if (Value* v = prop(levelInfo_, "CurrentLineFlags"))
-        *v = Value::intValue(0);
+        *v = Value::intValue(flags);
     if (!l.event.empty())
         if (VmObject* input = dialogInput()) {
             vm_.callEvent(input, "DoSpecialEvent", {Value::stringValue(l.event)});
@@ -384,7 +517,10 @@ void ScriptLevel::beginLine(DialogThread& t, int index) {
                     v->i = int(k);
     }
     const Value* hud = player_ ? prop(player_, "myHUD") : nullptr;
-    if (hud && hud->asObject() && !l.text.empty())
+    // Text all in brackets is a note for the voice actors ("[GROAN IN PAIN
+    // #1]", the Grigari's "[Blah, blah, blah]"): heard, not shown.
+    const bool note = l.text.size() >= 2 && l.text.front() == '[' && l.text.back() == ']';
+    if (hud && hud->asObject() && !l.text.empty() && !note)
         vm_.callEvent(hud->o, "HudText",
                       {Value::stringValue(l.text), Value::floatValue(t.seconds), Value::nameValue(vm_.name(l.speaker)),
                        Value::objectValue(t.speaker)});
@@ -422,16 +558,36 @@ void ScriptLevel::tickDialog(float seconds) {
             ++k;
             continue;
         }
-        int next = -1;
-        if (!l.next.empty()) {
+        conditionSubject_ = t.forcedSpeaker;
+        auto byKey = [&](const std::string& key) {
             std::vector<int> matches;
             for (size_t i = 0; i < dialogLines_.size(); ++i) {
                 const DialogLine& n = dialogLines_[i];
-                if (dialogKeyMatches(l.next, n.key()) && (n.condition.empty() || testCondition(n.condition)))
+                if (dialogKeyMatches(key, n.key()) && (n.condition.empty() || testCondition(n.condition)))
                     matches.push_back(int(i));
             }
-            next = bestDialogLine(matches);
+            return bestDialogLine(matches);
+        };
+        int next = l.next.empty() ? -1 : byKey(l.next);
+        if (next < 0 && l.next.empty())
+            for (size_t i = 0; i < dialogLines_.size() && next < 0; ++i)
+                if (runOnFrom(int(i)) == t.line &&
+                    (dialogLines_[i].condition.empty() || testCondition(dialogLines_[i].condition)))
+                    next = int(i);
+        // Then back to the line a line before gave (RETURNLINE: the
+        // player signing off once a crewmate has answered), then what's
+        // left of a hail (its answer, its sign-off).
+        while (next < 0 && !t.returns.empty()) {
+            const std::string back = t.returns.back();
+            t.returns.pop_back();
+            next = byKey(back);
         }
+        while (next < 0 && !t.followUps.empty()) {
+            const DialogThread::FollowUp f = t.followUps.front();
+            t.followUps.erase(t.followUps.begin());
+            next = pickDialogLine(f.type, f.speaker, f.listener, true, true, false);
+        }
+        conditionSubject_ = nullptr;
         if (next >= 0) {
             beginLine(t, next);
             ++k;
@@ -517,6 +673,106 @@ bool ScriptLevel::dialogueCamera(std::array<float, 3>& at, std::array<int32_t, 3
               loc[2] + v[2]};
         rotation[1] += rot[1];
     }
+    return true;
+}
+
+// The AI's own lines, which no script asks for: the engine's. A pawn with
+// a speaker code (Speaker_Tag), alive, within earshot of the player, says
+// one when its enemy appears (FSE: "Over there!"), when it loses it
+// (LSE) or when it's dead (KIL), when it gives up (SUR: its scripts'
+// Cowering or Surrender), and now and then while it has no enemy (AMB,
+// else REP: chatter, groans). Its own lines only (its code as the
+// speaker), their conditions about it ("FriendClose( 500 )"). One at a
+// time, not over other dialogue, a few seconds apart for each pawn.
+// When the game said them is Reluva's reading: the tables give only what.
+void ScriptLevel::tickBarks(float seconds) {
+    barkTimer_ -= seconds;
+    for (auto& [pawn, b] : barks_)
+        b.quiet -= seconds, b.ambient -= seconds;
+    if (barkTimer_ > 0 || !player_)
+        return;
+    barkTimer_ = 0.25f; // looked at four times a second
+    const bool talking = !dialogThreads_.empty();
+    const Value* at = prop(player_, "Location");
+    if (!at)
+        return;
+    const auto here = Vm::vectorOf(*at);
+    const NameId none = vm_.name("None");
+    std::uniform_real_distribution<float> unit(0, 1);
+    for (VmObject* a : actors_) {
+        if (a == player_ || a->deleted || !vm_.isA(a, "Pawn"))
+            continue;
+        const Value* code = prop(a, "Speaker_Tag");
+        const Value* health = prop(a, "Health");
+        if (!code || code->i == 0 || code->i == none || !health || health->asInt() <= 0)
+            continue;
+        const Value* loc = prop(a, "Location");
+        if (!loc)
+            continue;
+        const auto p = Vm::vectorOf(*loc);
+        const float dx = p[0] - here[0], dy = p[1] - here[1], dz = p[2] - here[2];
+        const bool near = dx * dx + dy * dy + dz * dz < 1500.0f * 1500.0f;
+        Bark& b = barks_[a];
+        const Value* enemyValue = prop(a, "Enemy");
+        VmObject* enemy = enemyValue ? enemyValue->asObject() : nullptr;
+        if (enemy && enemy->deleted)
+            enemy = nullptr;
+        const NameId state = a->state ? vm_.name(a->state->name) : 0;
+        std::string say;
+        if (enemy && enemy != b.enemy && !b.enemy) {
+            say = "FSE";
+            b.killed = false;
+        } else if (b.enemy && !enemy) {
+            const Value* h = b.enemy->deleted ? nullptr : prop(b.enemy, "Health");
+            say = (!h || h->asInt() <= 0) ? (b.killed ? "" : "KIL") : "LSE";
+        } else if (enemy && !b.killed) {
+            const Value* h = prop(enemy, "Health");
+            if (h && h->asInt() <= 0) {
+                say = "KIL";
+                b.killed = true;
+            }
+        }
+        if (state != b.state && a->state &&
+            (same(a->state->name, "Cowering") || same(a->state->name, "Surrender")))
+            say = "SUR";
+        b.enemy = enemy;
+        b.state = state;
+        if (say.empty() && !enemy && near) {
+            if (!b.ambientSet) {
+                b.ambient = 10 + 30 * unit(barkRandom_);
+                b.ambientSet = true;
+            } else if (b.ambient <= 0) {
+                b.ambient = 20 + 40 * unit(barkRandom_);
+                say = "AMB";
+            }
+        }
+        if (say.empty() || !near || talking || b.quiet > 0)
+            continue;
+        if (startBark(a, say) || (say == "AMB" && startBark(a, "REP"))) {
+            b.quiet = 4;
+            return; // one at a time
+        }
+    }
+}
+
+bool ScriptLevel::startBark(VmObject* pawn, const std::string& type) {
+    const Value* code = prop(pawn, "Speaker_Tag");
+    if (!code)
+        return false;
+    conditionSubject_ = pawn;
+    const Value* own = prop(pawn, "Dialogue_Tag");
+    const std::string tag = own && own->i && !same(vm_.nameText(own->i), "None") ? vm_.nameText(own->i) : "";
+    const int index = pickDialogLine(type, vm_.nameText(code->i), "", true, false, false, &tag);
+    conditionSubject_ = nullptr;
+    if (index < 0)
+        return false;
+    DialogThread t;
+    t.id = nextDialogThread_++;
+    t.self = pawn;
+    t.forcedSpeaker = pawn;
+    dialogThreads_.push_back(t);
+    ++dialog.barks;
+    beginLine(dialogThreads_.back(), index);
     return true;
 }
 

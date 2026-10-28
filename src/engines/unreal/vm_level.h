@@ -21,6 +21,7 @@
 #include <array>
 #include <filesystem>
 #include <map>
+#include <random>
 #include <memory>
 #include <set>
 #include <string>
@@ -233,7 +234,7 @@ public:
     const std::vector<std::pair<std::string, std::string>>* intSection(const std::string& file,
                                                                        const std::string& section);
     struct DialogStats {
-        int started = 0, lines = 0, notFound = 0, unknownConditions = 0;
+        int started = 0, lines = 0, notFound = 0, unknownConditions = 0, barks = 0;
     } dialog;
     struct PathStats {
         int straight = 0, found = 0, failed = 0;
@@ -602,7 +603,35 @@ private:
         VmObject* speaker = nullptr;
         VmObject* listener = nullptr;
         float seconds = 0, timeLeft = 0, pauseLeft = 0, mouthTimer = 0;
+        VmObject* forcedSpeaker = nullptr; // the AI's own lines: the pawn that says them
+        std::vector<std::string> returns;  // the RETURNLINEs given, to go back to in turn
+        struct FollowUp {
+            std::string type, speaker, listener; // a hail's answer and sign-off
+        };
+        std::vector<FollowUp> followUps;
     };
+    int pickDialogLine(const std::string& type, const std::string& speaker, const std::string& listener,
+                       bool orUnaddressed, bool anyPlace, bool needsFirst, const std::string* actorTag = nullptr);
+    int runOnFrom(int index); // the line this one runs on from, -1 if none
+    bool runsOn(int index);
+    std::string playerSpeaker();
+    bool ofThisMission(const DialogLine& l);
+    // The AI's own lines (FSE on first seeing an enemy, LSE losing it, KIL
+    // killing it, SUR surrendering, AMB and REP now and then): said by the
+    // pawn, its conditions about it.
+    void tickBarks(float seconds);
+    bool startBark(VmObject* pawn, const std::string& type);
+    struct Bark {
+        VmObject* enemy = nullptr;
+        NameId state = 0;
+        float quiet = 0;    // seconds before it may say another
+        float ambient = 0;  // before its next ambient line
+        bool ambientSet = false, killed = false;
+    };
+    std::map<VmObject*, Bark> barks_;
+    float barkTimer_ = 0;
+    std::mt19937 barkRandom_{13579};
+    VmObject* conditionSubject_ = nullptr; // whose conditions (the actor the tests ask about)
     void loadDialog();
     VmObject* dialogInput();
     int bestDialogLine(const std::vector<int>& matches);

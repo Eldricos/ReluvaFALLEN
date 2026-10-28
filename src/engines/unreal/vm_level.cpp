@@ -402,8 +402,10 @@ void ScriptLevel::tick(float seconds) {
     // menus).
     if (VmObject* con = console())
         vm_.callEvent(con, "Tick", {Value::floatValue(seconds)});
-    if (!stopped)
+    if (!stopped) {
         tickDialog(seconds);
+        tickBarks(seconds);
+    }
     tickFlis(seconds);
     ++ticks_;
     actors_.erase(std::remove_if(actors_.begin(), actors_.end(), [](VmObject* a) { return a->deleted; }),
@@ -458,6 +460,7 @@ void ScriptLevel::destroy(VmObject* a) {
     sparkFlash_.erase(a);
     ledgePush_.erase(a);
     clambers_.erase(a);
+    barks_.erase(a);
 }
 
 void ScriptLevel::makeGhost(VmObject* a, bool ghost) {

@@ -444,8 +444,8 @@ the natives.
   - who says it, and to whom: the actor's `GetSpeakerActor` for their
     codes (one near the camera, else the HUD's picture of someone on the
     communicator);
-  - the level's `Talker`, `Listener`, `CurrentLineType` and
-    `CurrentLineIndex` set for the scripts (the heads look at the
+  - the level's `Talker`, `Listener`, `CurrentLineType`,
+    `CurrentLineIndex` and `CurrentLineFlags` set for the scripts (the heads look at the
     talker, the cut scenes' directors aim at it);
   - its event set off (`DoSpecialEvent`, then `DoEvent`: the actors with
     that tag triggered), its animations played (`PlayDialogAnim`) and the
@@ -459,23 +459,70 @@ the natives.
     of a second apart, the shape from the letter being said). This is
     Reluva's own: the game's lip-sync data isn't read;
   - then its pause, then the line its NEXTLINE names (`?` any character;
-    of those that fit, the best as above), or the end: the talker and
-    listener cleared.
-- **`DialogTick`**, the dialogue input's each tick while the HUD allows,
-  does nothing. The lines play on the level's own tick, the cut scenes'
-  too, which it isn't called in. What else the game's engine did there
-  isn't known; most likely the AI's own lines (AMB, KIL, FSE...), which
-  no script asks for.
-- On M01_KiraL1A, the opening cut scene's line is shown as Kira says it.
-  Hailing O'Brien plays Kira's line, then his answer through its
-  NEXTLINE. Over all maps' first 20 seconds, 33 dialogues start and 3
-  calls find no line, none of them in the tables: a training line
-  (`TRAIN01`), CM11_LabRitual's `START_G11B`, and a speech trigger on
+    of those that fit, the best as above), else the one it runs on to,
+    else a return line or what's left of a hail (below), or the end: the
+    talker and listener cleared.
+- **Which lines, asked for by type** (not by tag): this map's mission's,
+  general ones, and another mission's only when its conditions tie it
+  to the story (`DS9Phase`...). Without that, a hail on M06 got mission
+  10's "Aye, sir.", and M04's guards M10's lines. Asked for by a tag
+  that no line of that type has, the line with the tag still does: the
+  training room asks for `TRAIN01` as TRN, and the table makes it EVT.
+- **Hails** (`PlayDialog("HAL", None, <crewmate>)`, the HUD's
+  communicator): a line of this mission's, as above, if there is one.
+  Else the player's own options to that crewmate (HOP), a need its
+  conditions show first ("Chief, I need ammunition", `LowAmmo`), else
+  asking for a report. Then the answer: its NEXTLINE (O'Brien's
+  "Energizing… now", which beams the ammunition down), else that
+  crewmate's report (HBO, to the player or to no one). Then the sign-off:
+  its RETURNLINE, else the player's HCL. On M06_WorfL1A: "Captain, what
+  is your status?", Sisko's mission report, "Understood. Worf out."
+- **RETURNLINE**: a line's return line is played once what its NEXTLINE
+  leads to is done ("…What's next?", O'Brien's answers, then Kira's
+  "I'm on my way. Kira out.").
+- **Running on**: a line with no NEXTLINE goes on to the one numbered
+  just after it, of the same table, mission, type and speaker, with no
+  tag of its own (or the same). Kira's log on the Promenade asks for
+  `START_K11A3` (010), which runs on to "I haven't been able to sleep…"
+  (011); M01's opening, 005 to 006 and 007.
+- **The CAMERA column's flags**: `V:1` a voice-over (a log), `H:1` heard
+  over the communicator. They become `Level.CurrentLineFlags` 16 and 32
+  (Pawn's head tracking then doesn't turn to the talker), and an H line's
+  speaker is the HUD's picture of them (`GetSpeakerActor`'s
+  `bForceUseHudMeshActor`). A line's place and turn (`A:`, `R:`) are the
+  scripts' to ask for (`GetDialogueCameraData`, the cut scenes'
+  directors and speech triggers).
+- **Who says it**: the actor whose `Dialogue_Tag` is the line's tag if
+  there's one (the Bajorans who hand over their cards, `BM2`), else the
+  nearest with the speaker's code.
+- **Notes for the voice actors**, text all in brackets ("[GROAN IN PAIN
+  #1]", the Grigari's "[Blah, blah, blah]"), are heard but not shown.
+- **The AI's own lines**, which no script asks for (`tickBarks`). A pawn
+  with a speaker code, alive and within 1500 of the player, says one:
+  - FSE when it first has an enemy ("We have an armed militia operative
+    loose in the arena");
+  - LSE when it loses it, KIL when it's dead;
+  - SUR when its scripts put it in `Cowering` or `Surrender`;
+  - AMB now and then while it has no enemy (every 20 to 60 seconds), else
+    REP (the injured: "Hey! Over here!").
+  
+  Only its own lines: its speaker code, and a tagged line only for the
+  actor with that `Dialogue_Tag` (a Vorta's watch-station report is that
+  Vorta's). The start of what it says, not the lines that run on from it.
+  Their conditions are about it: an actor parameter (`FriendClose( 500 )`,
+  `PlayerFaceEnemy`, `EnemyIsA( DS9_JemHadar )`) is the speaking pawn,
+  not written in the table. One at a time, not over other dialogue,
+  4 seconds apart for each pawn. When the game said them is Reluva's
+  reading: the tables say only what. `DialogTick` itself does nothing.
+- Over all maps' first 20 seconds, 36 dialogues start (123 lines said),
+  the AI says 62 lines, and 2 calls find no line: CM11_LabRitual's
+  `START_G11B` (mission 11's table isn't in the game: its voices are, in
+  `m11_Dialogue.uax`, as are `m12_` and `trn_`) and a speech trigger on
   M04_SiskoL1 with no type.
 
-Each line's voice plays as it starts (below, Sound). Not done:
-RETURNLINE (the communicator's menus) and the CAMERA column; the AI's
-own lines.
+Each line's voice plays as it starts (below, Sound). Lip-sync: the game
+ships no lip data for its voices, so the mouth's shapes come from the
+line's letters (above).
 
 ### The HUD
 
