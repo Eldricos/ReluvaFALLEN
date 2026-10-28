@@ -79,7 +79,7 @@ public:
             while (sys_.pollEvent(ev)) {
                 if (ev.type == EventType::Quit || ev.type == EventType::ReturnToLauncher)
                     return Error::success();
-                if (ev.type == EventType::KeyDown && ev.key == key::Escape)
+                if (ev.type == EventType::KeyDown && ev.key == key::Escape && !pages[page]->ownsKey(ev.key))
                     return Error::success();
                 if (ev.type == EventType::KeyDown && ev.key == key::Tab) {
                     size_t next = page;

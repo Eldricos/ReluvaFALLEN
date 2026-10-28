@@ -52,7 +52,10 @@ public:
     // Login; a viewport and console given to it; then Possess,
     // TravelPostAccept and the game type's PostLogin. nullptr, with
     // `error`, if Login refuses.
-    VmObject* login(const std::string& playerClass, const std::string& playerName, std::string& error);
+    // `portal`: the tag of the start to begin at (a travel URL's
+    // "Map/Portal"), else the first.
+    VmObject* login(const std::string& playerClass, const std::string& playerName, std::string& error,
+                    const std::string& portal = {});
     VmObject* player() const { return player_; }
 
     // Where a point is in the level: its zone and leaf, found down the
@@ -312,6 +315,22 @@ public:
     Vm& vm() { return vm_; }
     const Package& map() const { return map_; }
     VmObject* levelInfo() const { return levelInfo_; }
+    // Paused: Level.Pauser set (SetPause: the menus). Time stands still;
+    // only the player's PlayerTick and actors with bAlwaysTick (the HUD)
+    // run.
+    bool paused() const;
+    // The console's side (vm_console.cpp): the keys held down (EInputKey
+    // codes, for IsKeyDown), where the game asked to travel (ClientTravel:
+    // "CM01a_SW/CM01_A_Sisko01", a map and the start to log in at), and
+    // whether it asked to quit (ConsoleCommand "Exit").
+    // The player's console (its viewport's), if it has one.
+    VmObject* console();
+    std::set<int>& keysDown() { return keysDown_; }
+    std::string& travel() { return travel_; }
+    bool& quitAsked() { return quitAsked_; }
+    // Skipping a cut scene (FastForward): the level run at speed until the
+    // game turns it off, when the letterbox goes.
+    bool& fastForward() { return fastForward_; }
     VmObject* game() const { return game_; }
     const std::vector<VmObject*>& actors() const { return actors_; }
     float time() const { return time_; }
@@ -485,6 +504,10 @@ private:
     int editorCameras_ = 0;
     std::vector<VmObject*> actors_;
     float time_ = 0;
+    std::set<int> keysDown_;
+    std::string travel_;
+    bool quitAsked_ = false;
+    bool fastForward_ = false;
 };
 
 // A setting from a game's .ini ("Engine.Engine", "DefaultGame"); empty if
@@ -533,6 +556,8 @@ void registerDialogNatives(Vm& vm);
 void registerDocumentNatives(Vm& vm);
 // The HUD's canvas (vm_canvas.cpp).
 void registerCanvasNatives(Vm& vm);
+// The console's commands, keys and travel (vm_console.cpp).
+void registerConsoleNatives(Vm& vm);
 // A map's reach list as stored (object references, not yet actors).
 struct RawReachSpec {
     int distance = 0, start = 0, end = 0, radius = 0, height = 0, flags = 0;

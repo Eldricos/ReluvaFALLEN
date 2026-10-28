@@ -187,6 +187,7 @@ if(RELUVA_ENGINE_UNREAL)
         src/engines/unreal/vm_attach.cpp
         src/engines/unreal/vm_paths.cpp
         src/engines/unreal/vm_dialog.cpp
+        src/engines/unreal/vm_console.cpp
         src/engines/unreal/vm_documents.cpp
         src/engines/unreal/vm_canvas.cpp
         src/engines/unreal/font.cpp

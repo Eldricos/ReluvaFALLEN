@@ -125,6 +125,7 @@ void MapViewer::unload() {
             renderer_->destroyMesh(g.mesh);
     gpuMeshes_.clear();
     meshes_.clear();
+    liveMeshes_.clear(); // indexes into meshes_
     meshActors_.clear();
     jump_ = -1;
     sky_.reset();
@@ -644,9 +645,57 @@ void MapViewer::toStart() {
     pitch_ = 0;
 }
 
+namespace {
+
+// A key as the engine names it to the console (EInputKey): 13 Enter, 27
+// Escape, 37 to 40 the arrows, letters and digits as their capitals' ASCII,
+// 0x70 F1...; 0 for one it doesn't know.
+int inputKey(uint32_t k) {
+    if (k >= 'a' && k <= 'z')
+        return int(k - 'a' + 'A');
+    if ((k >= '0' && k <= '9') || k == key::Space || k == key::Tab || k == key::Backspace || k == key::Escape)
+        return int(k);
+    if (k >= key::F1 && k < key::F1 + 12)
+        return int(0x70 + k - key::F1);
+    switch (k) {
+    case key::Return: case key::KpEnter: return 13;
+    case key::Left: return 37;
+    case key::Up: return 38;
+    case key::Right: return 39;
+    case key::Down: return 40;
+    case key::LShift: case key::RShift: return 16;
+    case key::LCtrl: case key::RCtrl: return 17;
+    case key::LAlt: case key::RAlt: return 18;
+    case key::PageUp: return 0x21;
+    case key::PageDown: return 0x22;
+    case key::End: return 0x23;
+    case key::Home: return 0x24;
+    case key::Insert: return 0x2d;
+    case key::Delete: return 0x2e;
+    default: return 0;
+    }
+}
+
+} // namespace
+
 void MapViewer::handleEvent(const Event& ev) {
     if (!renderer_ || names_.empty())
         return;
+    // Playing with the game's view, each key goes to the game's console
+    // first, as the engine hands them on: while its menus show, it takes
+    // the arrows and Enter, and the page leaves them be.
+    if (play_ && !freeCam_ && (ev.type == EventType::KeyDown || ev.type == EventType::KeyUp) && !ev.repeat &&
+        !(ev.type == EventType::KeyDown && ev.key == 'v'))
+        if (const int k = inputKey(ev.key)) {
+            // The menu's keys (Enter, the arrows) are the game's whatever
+            // KeyEvent answers: the HUD's says false having acted on Enter.
+            const bool menuKey = play_->menuShowing() && (k == 13 || (k >= 37 && k <= 40));
+            if ((play_->consoleKey(k, ev.type == EventType::KeyDown) || menuKey) && ev.type == EventType::KeyDown) {
+                for (bool& h : held_)
+                    h = false;
+                return;
+            }
+        }
     auto hold = [&](uint32_t k, bool down) {
         if (play_ && !freeCam_) // playing, the arrows turn and look, and Ctrl or F fires
             switch (k) {
@@ -688,6 +737,10 @@ void MapViewer::handleEvent(const Event& ev) {
                 play_->pressKey(std::string(1, char(ev.key)));
             else if (ev.key >= key::F1 && ev.key < key::F1 + 12) // the communicator, the tricorder...
                 play_->pressKey("F" + std::to_string(ev.key - key::F1 + 1));
+            else if (ev.key == key::Escape) { // the game's menu (ShowMenu)
+                play_->pressKey("Escape");
+                return;
+            }
         }
         if (hold(ev.key, true) || ev.repeat)
             return;
@@ -754,6 +807,13 @@ void MapViewer::handleEvent(const Event& ev) {
                     m.target = (m.key + 1) % m.mover.numKeys;
                     m.t = 0;
                 }
+    } else if (play_ && !freeCam_ && play_->windowsOpen() &&
+               (ev.type == EventType::MouseMove || ev.type == EventType::MouseDown || ev.type == EventType::MouseUp)) {
+        // The game's windows (the options) open: the mouse is theirs, its
+        // pointer where the page's is, its buttons keys 1 and 2.
+        play_->consoleMouse(float(ev.mouseX), float(ev.mouseY));
+        if (ev.type != EventType::MouseMove && (ev.button == MouseButton::Left || ev.button == MouseButton::Right))
+            play_->consoleKey(ev.button == MouseButton::Left ? 1 : 2, ev.type == EventType::MouseDown);
     } else if (ev.type == EventType::MouseDown && ev.button == MouseButton::Left) {
         dragging_ = true;
         lastX_ = ev.mouseX;
@@ -780,8 +840,13 @@ void MapViewer::update(uint64_t nowMs) {
     const float dt = lastMs_ ? std::min(0.1f, float(nowMs - lastMs_) / 1000.0f) : 0.0f;
     lastMs_ = nowMs;
 
-    if (play_)
+    if (play_) {
         updatePlay(dt);
+        if (play_->quitAsked())
+            stopPlay();
+        else if (const std::string url = play_->takeTravel(); !url.empty())
+            travel(url);
+    }
     if (!play_ || freeCam_) { // flying: not playing, or playing with the camera let loose (V)
         if (!play_)
             fov_ = 90; // Unreal's default field of view, across
@@ -1250,7 +1315,8 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
     lines.push_back(!play_     ? "Enter plays the level"
                     : freeCam_ ? "Playing, the camera loose (V back to the game's): W/S/A/D, Space/C and drag fly it"
                                : "Playing (Enter stops): W/S move, A/D step aside, arrows turn and look, drag to look, Space "
-                                 "jumps, Ctrl or F fires, 0-9 pick weapons, F1-F12 as the game binds them, V lets the camera loose");
+                                 "jumps, Ctrl or F fires, 0-9 pick weapons, F1-F12 as the game binds them, Esc the game's menu, V lets "
+                                 "the camera loose");
     char where[200];
     // Shown in Unreal's own coordinates.
     std::snprintf(where, sizeof where, "at %.0f %.0f %.0f, %.0f fps; lightmaps %s, brightness x%.2f, display gamma %.2f",
@@ -1345,13 +1411,28 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
 
 // --- Playing --------------------------------------------------------------------------------
 
-void MapViewer::startPlay() {
+void MapViewer::travel(const std::string& url) {
+    std::string where = url.substr(0, url.find('?'));
+    const size_t cut = where.find_first_of("/#");
+    const std::string portal = cut == std::string::npos ? std::string() : where.substr(cut + 1);
+    std::string map = where.substr(0, cut);
+    if (const size_t dot = map.rfind('.'); dot != std::string::npos)
+        map = map.substr(0, dot);
+    if (!selectMap(map)) {
+        stopPlay();
+        playError_ = "travel to " + url + ": no map " + map;
+        return;
+    }
+    startPlay(portal);
+}
+
+void MapViewer::startPlay(const std::string& portal) {
     stopPlay();
     const Package* pkg = names_.empty() ? nullptr : ctx_.packages.get(names_[size_t(index_)]);
     if (!pkg || !error_.empty())
         return;
     auto play = std::make_unique<LevelPlay>(ctx_.packages, *pkg);
-    if (Error err = play->start()) {
+    if (Error err = play->start(portal)) {
         playError_ = err.message;
         return;
     }

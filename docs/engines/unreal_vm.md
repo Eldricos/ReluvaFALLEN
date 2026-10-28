@@ -4,8 +4,9 @@ Status: **runs The Fallen's levels with the player in them**: the
 Maps page plays a level (Enter), its scripts live, the player moved by
 the keyboard and mouse, seen from the game's own camera, the AI finding
 its way along the level's paths and the characters' lines shown as
-they're said, and its own HUD drawn over it. It isn't the game yet:
-nothing makes a sound, and the menus aren't drawn. Every class of the game loads (`vm.cpp`), every default
+they're said, and its own HUD and menus drawn over it, the menus
+travelling from map to map. It isn't the game yet: nothing makes a
+sound, and games can't be saved or loaded. Every class of the game loads (`vm.cpp`), every default
 property converts to its type, and all 74 maps start: their actors made,
 the game type spawned, the start-up events sent, the player logged in as
 the level's character, then twenty seconds of ticks, with no crash. The
@@ -59,7 +60,16 @@ from the `.ini` files as the class loads (`Vm::applyConfig`):
 
 So the HUD shows dialogue (`bDisplayDialog=True`) but not cut scenes'
 subtitles (`bDisplaySubtitles=False`), as DefUser.ini has it, and the
-player's mouse sensitivity is 3.
+player's mouse sensitivity is 3. A console command's `set` (the options
+windows, below) changes a setting for as long as the VM runs, before the
+files' (`Vm::setConfig`); the files aren't written.
+
+Classes' `localized` properties, the text players read (menu items,
+messages), come from the game's `.int` files (`Vm::applyLocalized`): the
+class's own section, by its name alone (`[DS9_Hud]`), of its package's
+`.int`, else of `Classes.int`, where The Fallen keeps them all (2,131
+lines), in the `int` folder beside System. Without them the HUD's menus
+had bullets and no words ("RESUME GAME", "MISSION OBJECTIVES"...).
 
 An object as a string (`string(Level)`, `$`) is its path, as UnrealScript
 gives it:
@@ -92,7 +102,7 @@ What it does:
   leave their right side unevaluated when the left decides.
 - `None`: reading through it gives an empty value and is counted
   ("Accessed None"), as the original logs and carries on.
-- Control: jumps, `switch`/`case`, `foreach` (the iterator native gives
+- Control: jumps, `switch`/`case` (below), `foreach` (the iterator native gives
   its results, the loop assigns each to its out parameter in turn,
   skipping actors destroyed meanwhile), `return`, `stop`, labels and
   `goto` in state code (a missing label is reported and the code carries
@@ -127,6 +137,15 @@ iterators (`AllActors`, `ChildActors`, `BasedActors`, `RadiusActors` and
 the visible ones by radius, `RadiusPawns`, `AllPawns`), the pawn list, animation
 groups from the actor's mesh. A native not written yet returns an empty
 value and is counted.
+
+A `switch` finds its case itself: the labels in turn, each one's value
+against the switch's, jumping on to the next label until one matches or
+the default. A `case` label reached by falling through from the case
+above is passed over, not tested again. Labels with no code between them
+share the code after the last (`case 38: case 40: case 13:` in the
+console's `KeyEvent`). Testing each label as it was reached took the
+first match on to the next label, failed it there and jumped past the
+shared code: the menu's arrows never reached the HUD.
 
 ## A level
 
@@ -452,6 +471,12 @@ The natives:
   is the world's view: `ResetCanvas` asks for one with the HUD actor's
   own place and rotation, which nothing sets, so taking it as the
   player's view is Reluva's reading.
+- **Tiles in a frame** are placed from its corner and cut to it, and the
+  canvas's clip (`ClipX`, `ClipY`) becomes its size, as the scripts
+  expect. The info pad's documents are drawn from 0, 0 and scroll
+  inside their window. The star map's blocks scroll inside theirs, scaled
+  by the clip the HUD saved before setting the frame (`saveClipX`). The
+  tricorder takes `GetScreenCoords` as a share of `ClipX`.
 - **`DrawActor`, `DrawClippedActor`** draw the actor where it is, in the
   current frame (`DrawClippedActor` in its own rectangle, the frame's
   camera), the depth cleared first if asked; the page draws it, hidden or
@@ -460,8 +485,9 @@ The natives:
   it. The HUD uses these for the communicator's portrait (the speaker's
   head, a camera 78 units in front of it at 10°), the tricorder's dots
   and markers, beacons and the beam-down cloud.
-- **`GetScreenCoords(Location, X, Y, Scale)`** is where a place falls on
-  the screen in the current frame's view; false behind it.
+- **`GetScreenCoords(Location, X, Y, Scale)`** is where a place falls in
+  the current frame's view, from the frame's corner as tiles are placed;
+  false behind it.
 - `DrawPortal` isn't drawn: no script calls it.
 
 The Fallen's HUD (`DS9_Hud`) is built from textures that draw themselves
@@ -509,6 +535,76 @@ The keys:
 
 With the game's HUD drawn, the page leaves the objectives and subtitles
 to it and puts its status line between the HUD's panels.
+
+### The menus
+
+The Fallen's menus are the HUD's own, drawn on its canvas, and UWindow's
+options windows, drawn by the console (`UMenu.DS9_Console`).
+
+Keys reach the console first, as the engine hands them on
+(`LevelPlay::consoleKey`, the console's `KeyEvent` with the key's
+`EInputKey` code: 13 Enter, 27 Escape, 37 to 40 the arrows). The
+Fallen's console passes the arrows and Enter to the HUD
+(`GetKeyEvent`), which acts on them while a menu shows. What the console
+doesn't take goes on to the bindings: Escape is `ShowMenu`. While the
+menu shows, the Maps page leaves the arrows and Enter to the game
+whatever `KeyEvent` answers, as the HUD's answers false having acted on
+Enter. The page's own Escape (leaving) waits until play stops. The keys
+held are kept for `IsKeyDown`.
+
+`ShowMenu` opens the info pad and pauses (`SetPause`: `Level.Pauser`
+set). Paused, time stands still: only the player's `PlayerTick` and the
+actors with `bAlwaysTick` run (the HUD, whose `Tick` runs the menu). The
+FLC textures and the console still tick, the dialogue doesn't.
+
+On M04_KiraL1:
+- **The info pad:** Resume Game, Mission Objectives, Tactical Data,
+  Communications Log, Retrieved Files, Main Menu. Mission Objectives
+  lists them and shows the selected one's document, its text and
+  picture, in the pad's lower window.
+- **The main menu:** New Game, Load Game, Save Game, Options, Quit, with
+  the star map scrolling in its window above. New Game asks the
+  character (Sisko, Kira, Worf), then the game or the training mission,
+  then confirms. Saying yes fades out and travels (`ClientTravel`
+  "CM01a_SW/CM01_A_Sisko01"), and the page loads that map and plays it
+  from the start the portal tags: the opening cut scene.
+
+The game's own start is `Title.dsm` (Default.ini's `LocalMap`): the
+publishers' logos, a cut scene. Escape during a cut scene fast-forwards
+it (`FastForward`): the page runs the level as fast as it can, up to a
+twentieth of a second's work a frame, until the game turns it off when
+the letterbox goes. Then `CM_SpaceStation/intro`, whose start tagged
+`Intro` makes it the intro level (`bIntroLevel`). The credits roll over
+the station fly-by, and Escape skips them to the main menu, with no Save
+Game.
+
+Options opens UWindow (the console's `Menuing` state, then `UWindow`):
+the engine calls the console's `PostRender` after the player's, and its
+`Tick` every tick, paused or not, and the windows are all script, drawn
+through the same canvas. The options window has Game, Video, Audio,
+Controls and Input pages. While it's open the mouse is the windows': the
+page puts the console's `MouseX`, `MouseY` where its pointer is, and its
+buttons are keys 1 and 2. Escape closes the window.
+
+Console commands (`ConsoleCommand`, `vm_console.cpp`):
+- `get Section Key` gives a setting (`ini:Engine.Engine.ViewportManager
+  Brightness`: the section of the class the ini names), else a class's
+  default; `get ... Class` the class it names.
+- `set` changes one (above), and the class's property in its defaults and
+  every object of it.
+- `KEYNAME n`, `KEYBINDING Key` and `SET Input Key Command` read and change
+  the bindings. The controls page lists them ("LEFTMOUSE OR CTRL"), and
+  the page's keys follow what it sets.
+- `GetCurrentRes`, `GetRes` give the page's size; the colour depth is 32.
+- `Exit` stops playing.
+- The rest (sound, saving, detail) do nothing yet.
+
+Not done:
+- Saving and loading games: Load Game has no games to list.
+- The video driver's caption: SoftDrv's isn't in any `.int`.
+- The world and skin detail lists: their values are the engine's
+  settings, which no `.ini` here holds.
+- The mouse in the HUD's own menus: their mouse code returns at once.
 
 ### Documents and objectives
 
@@ -947,9 +1043,11 @@ game.
 `reluva-tool ue-play` plays the page without a window, through a
 software renderer (`tools/soft_renderer.cpp`: textured, depth tested,
 blended triangles, enough to see a frame), driven by steps:
-`play`, `wait <s>`, `hold <key> <s>`, `down`/`up <key>`, `press <key>`,
+`play`, `wait <s>`, `hold <key> <s>`, `down`/`up <key>`, `press <key>`
+(letters, `left` `right` `up` `down`, `space`, `enter`, `escape`, `f1`...),
+`travel <url>` (as the game's `ClientTravel`: "CM_SpaceStation/intro"),
 `watch <actor>` (the camera let loose in front of a live actor),
-`drag <dx> <dy>`, `shot <file.ppm>`. Checked that way:
+`drag <dx> <dy>`, `click <x> <y>`, `shot <file.ppm>`. Checked that way:
 - **M01_KiraL2:** Kira runs down the stone corridor from behind, the
   camera swinging to her side, and turns into the wall with the camera
   pulled in beside her.

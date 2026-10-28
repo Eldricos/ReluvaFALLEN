@@ -88,6 +88,9 @@ public:
     virtual void handleEvent(const Event& ev) = 0;
     virtual void update(uint64_t /*nowMs*/) {}
     virtual bool uses3D() const { return false; }
+    // A key the page takes before the viewer's own use of it (Escape
+    // leaving): a game's while it plays.
+    virtual bool ownsKey(uint32_t /*key*/) const { return false; }
 
 protected:
     void clear(uint8_t r, uint8_t g, uint8_t b);
@@ -237,6 +240,11 @@ public:
     // Shows the map of that name (once active); false if there's none.
     bool selectMap(const std::string& name);
     bool playing() const { return play_ != nullptr; }
+    // The game's ClientTravel ("CM01a_SW/CM01_A_Sisko01?options"): that
+    // map loaded and played from the start the portal tags.
+    void travel(const std::string& url);
+    // Playing with the game's own view, Escape is the game's (its menu).
+    bool ownsKey(uint32_t k) const override { return play_ && !freeCam_ && k == key::Escape; }
     // Playing: the camera let loose, in front of the live actor of that
     // name looking at it; false if there's none.
     bool watchActor(const std::string& name);
@@ -317,7 +325,7 @@ private:
     MeshLight meshLightAt(const Vec3f& location) const;
 
     // Playing (Enter): the level live, drawn as its scripts have it.
-    void startPlay();
+    void startPlay(const std::string& portal = {});
     void stopPlay();
     void updatePlay(float dt);
     void drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right);

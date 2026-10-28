@@ -204,7 +204,8 @@ void ScriptLevel::beginPlay(const std::string& defaultGame) {
         *v = Value::boolValue(true);
 }
 
-VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& playerName, std::string& error) {
+VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& playerName, std::string& error,
+                            const std::string& portal) {
     error.clear();
     if (!game_) {
         error = "no game type to log in to";
@@ -213,7 +214,7 @@ VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& 
     // Which start, and so which character.
     VmClass* cls = nullptr;
     if (VmFunction* find = vm_.findFunction(game_, vm_.name("FindPlayerStart"))) {
-        const Value start = vm_.invoke(find, game_, {Value::objectValue(nullptr), Value::byteValue(255), Value::stringValue("")});
+        const Value start = vm_.invoke(find, game_, {Value::objectValue(nullptr), Value::byteValue(255), Value::stringValue(portal)});
         if (VmObject* s = start.asObject())
             if (Value* p = s->find(vm_, "Player"); p && p->asObject() && p->o->asClass)
                 cls = p->o->asClass;
@@ -235,7 +236,7 @@ VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& 
     const std::string options = "?Name=" + playerName + "?Class=" + cls->package->name() + "." + cls->name;
     Value message = Value::stringValue("");
     const Value pawn = vm_.invoke(login, game_,
-                                  {Value::stringValue(""), Value::stringValue(options), message, Value::objectValue(cls->object)},
+                                  {Value::stringValue(portal), Value::stringValue(options), message, Value::objectValue(cls->object)},
                                   {nullptr, nullptr, &message, nullptr});
     player_ = pawn.asObject();
     if (!player_) {
@@ -305,10 +306,18 @@ void ScriptLevel::updateRegion(VmObject* a) {
         vm_.assign(*region, regionAt(Vm::vectorOf(*location)));
 }
 
+bool ScriptLevel::paused() const {
+    const Value* v = levelInfo_ ? levelInfo_->find(vm_, "Pauser") : nullptr;
+    return v && !v->s.empty();
+}
+
 void ScriptLevel::tick(float seconds) {
-    time_ += seconds;
-    if (Value* v = levelInfo_->find(vm_, "TimeSeconds"))
-        v->f += seconds;
+    const bool stopped = paused();
+    if (!stopped) {
+        time_ += seconds;
+        if (Value* v = levelInfo_->find(vm_, "TimeSeconds"))
+            v->f += seconds;
+    }
     if (Value* v = levelInfo_->find(vm_, "DeltaTime"))
         v->f = seconds;
     // Actors spawned during the tick wait for the next. The player's
@@ -318,6 +327,15 @@ void ScriptLevel::tick(float seconds) {
     for (VmObject* a : now) {
         if (a->deleted)
             continue;
+        if (stopped && a != player_) {
+            const Value* always = prop(a, "bAlwaysTick");
+            if (!always || !always->asBool())
+                continue;
+        }
+        if (stopped && a == player_) {
+            vm_.callEvent(a, "PlayerTick", {Value::floatValue(seconds)});
+            continue;
+        }
         if (a == player_) {
             // The input axes, as the engine sets them each frame: those
             // the keys are bound to (DefUser.ini's MoveForward is "Axis
@@ -361,7 +379,12 @@ void ScriptLevel::tick(float seconds) {
     }
     // What's attached (C3DAttach) goes where its holder now is.
     placeAttached();
-    tickDialog(seconds);
+    // The console ticks as the client does, paused or not (its UWindow
+    // menus).
+    if (VmObject* con = console())
+        vm_.callEvent(con, "Tick", {Value::floatValue(seconds)});
+    if (!stopped)
+        tickDialog(seconds);
     tickFlis(seconds);
     ++ticks_;
     actors_.erase(std::remove_if(actors_.begin(), actors_.end(), [](VmObject* a) { return a->deleted; }),
@@ -565,6 +588,7 @@ void registerEngineNatives(Vm& vm) {
     registerDialogNatives(vm);
     registerDocumentNatives(vm);
     registerCanvasNatives(vm);
+    registerConsoleNatives(vm);
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     auto B = [](bool v) { return Value::boolValue(v); };
 

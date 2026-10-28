@@ -6,7 +6,9 @@
 #include "common/fs.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <utility>
 
 namespace reluva::unreal {
 
@@ -21,15 +23,28 @@ LevelPlay::LevelPlay(const PackageSet& packages, const Package& map)
         names_[k] = vm_->name(names[k]);
 }
 
-Error LevelPlay::start() {
+Error LevelPlay::start(const std::string& portal) {
     if (Error err = level_->load())
         return err;
     level_->beginPlay(defaultGameType(packages_));
-    player_ = level_->login(iniSetting(packages_, "URL", "Class"), iniSetting(packages_, "URL", "Name"), loginError_);
+    player_ = level_->login(iniSetting(packages_, "URL", "Class"), iniSetting(packages_, "URL", "Name"), loginError_,
+                            portal);
     return Error::success();
 }
 
 void LevelPlay::advance(float seconds, int maxTicks) {
+    // A cut scene fast-forwarded: as many ticks as fit in a frame's time
+    // (a twentieth of a second of the scripts' running), however few were
+    // owed, until the game turns it off.
+    if (level_->fastForward()) {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+        for (int ticks = 0; ticks < 300 && level_->fastForward() && std::chrono::steady_clock::now() < until; ++ticks) {
+            level_->tick(kTick);
+            time_ += kTick;
+        }
+        owed_ = 0;
+        return;
+    }
     owed_ += std::max(0.0f, seconds);
     int ticks = 0;
     while (owed_ >= kTick && ticks < maxTicks) {
@@ -52,10 +67,11 @@ void LevelPlay::press(const char* exec) {
         vm_->invoke(f, player_, {Value::floatValue(0)});
 }
 
-// A setting of the player's [Engine.Input]: User.ini's, else DefUser.ini's.
+// A setting of the player's [Engine.Input]: as the game last set it (the
+// controls page), else User.ini's, else DefUser.ini's.
 std::string LevelPlay::inputSetting(const std::string& key) const {
-    std::string v = iniSetting(packages_, "User.ini", "Engine.Input", key);
-    return v.empty() ? iniSetting(packages_, "DefUser.ini", "Engine.Input", key) : v;
+    const std::string* v = vm_->configSetting("Engine.Input", key);
+    return v ? *v : std::string();
 }
 
 bool LevelPlay::pressKey(const std::string& key, bool down) {
@@ -132,6 +148,54 @@ bool LevelPlay::pressKey(const std::string& key, bool down) {
         vm_->invoke(f, player_, args);
     }
     return any;
+}
+
+bool LevelPlay::consoleKey(int inputKey, bool down) {
+    if (!player_ || player_->deleted)
+        return false;
+    VmObject* console = level_->console();
+    if (!console)
+        return false;
+    if (down)
+        level_->keysDown().insert(inputKey);
+    else
+        level_->keysDown().erase(inputKey);
+    // EInputAction: 1 pressed, 3 let go.
+    return vm_->callEvent(console, "KeyEvent",
+                          {Value::byteValue(inputKey), Value::byteValue(down ? 1 : 3), Value::floatValue(0)})
+        .asBool();
+}
+
+bool LevelPlay::paused() const {
+    return level_->paused();
+}
+
+bool LevelPlay::windowsOpen() const {
+    VmObject* console = level_->console();
+    const Value* v = console ? console->find(*vm_, "bUWindowActive") : nullptr;
+    return v && v->asBool();
+}
+
+void LevelPlay::consoleMouse(float x, float y) {
+    if (VmObject* console = level_->console()) {
+        if (Value* v = console->find(*vm_, "MouseX"))
+            *v = Value::floatValue(x);
+        if (Value* v = console->find(*vm_, "MouseY"))
+            *v = Value::floatValue(y);
+    }
+}
+
+bool LevelPlay::menuShowing() const {
+    const Value* v = player_ && !player_->deleted ? player_->find(*vm_, "bShowMenu") : nullptr;
+    return v && v->asBool();
+}
+
+std::string LevelPlay::takeTravel() {
+    return std::exchange(level_->travel(), std::string());
+}
+
+bool LevelPlay::quitAsked() const {
+    return level_->quitAsked();
 }
 
 LevelPlay::View LevelPlay::view() {

@@ -244,7 +244,11 @@ public:
     VmObject* findObject(std::string_view path, const VmClass* of = nullptr);
     // A class's config properties from the .ini files (Vm::applyConfig).
     void applyConfig(VmClass& cls);
+    // A class's localized properties from the .int files (Vm::applyLocalized).
+    void applyLocalized(VmClass& cls);
     const std::string* configSetting(const std::string& section, const std::string& key);
+    void setConfig(const std::string& section, const std::string& key, const std::string& value);
+    void setFromText(const VmProperty& prop, Value& v, const std::string& text);
     // An object's name or a class's, as scripts see it.
     std::string objectName(const VmObject* o) const;
     std::string pathName(const VmObject* o); // string() of it: "Package.Name"
@@ -299,6 +303,8 @@ private:
     std::map<std::pair<const Package*, int>, std::unique_ptr<VmStruct>> structs_;
     using IniFile = std::map<std::string, std::map<std::string, std::string>>; // section, key (lower case): value
     std::map<std::string, IniFile> iniFiles_;
+    IniFile configSet_; // settings changed while running (setConfig)
+    const IniFile& iniFileAt(const std::filesystem::path& file);
     std::map<std::pair<const Package*, int>, VmProperty*> properties_;
     std::deque<VmProperty> propertyStore_;
     std::deque<std::vector<NameId>> enumStore_;

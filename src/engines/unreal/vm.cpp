@@ -351,6 +351,7 @@ VmStruct* Vm::structAt(const Package& package, int exportIndex) {
             continue;
         c->defaults[size_t(at)] = valueOf(*prop, package, p);
     }
+    applyLocalized(*c);
     applyConfig(*c);
     classObject(c);
     return c;
@@ -376,81 +377,132 @@ void Vm::applyConfig(VmClass& c) {
                     section = up->package->name() + "." + up->name;
         for (int k = 0; k < prop->arrayDim; ++k) {
             const std::string key = prop->arrayDim > 1 ? prop->name + "[" + std::to_string(k) + "]" : prop->name;
-            const std::string* text = configSetting(section, key);
-            if (!text)
-                continue;
-            Value& v = c.defaults[size_t(prop->slot + k)];
-            switch (prop->type) {
-            case VType::Bool: v = Value::boolValue(lower(*text) == "true" || *text == "1"); break;
-            case VType::Int: v = Value::intValue(std::atoi(text->c_str())); break;
-            case VType::Float: v = Value::floatValue(std::strtof(text->c_str(), nullptr)); break;
-            case VType::Name: v = Value::nameValue(name(*text)); break;
-            case VType::String: v = Value::stringValue(*text); break;
-            case VType::Byte: {
-                int b = std::atoi(text->c_str());
-                if (prop->enumNames)
-                    for (size_t e = 0; e < prop->enumNames->size(); ++e)
-                        if (lower(nameText((*prop->enumNames)[e])) == lower(*text))
-                            b = int(e);
-                v = Value::byteValue(b);
-                break;
-            }
-            case VType::Object:
-                if (VmObject* o = findObject(*text))
-                    v = Value::objectValue(o);
-                break;
-            default: break;
-            }
+            if (const std::string* text = configSetting(section, key))
+                setFromText(*prop, c.defaults[size_t(prop->slot + k)], *text);
         }
     }
 }
 
-// A setting from the .ini files, in the order applyConfig says; each file
-// read once.
-const std::string* Vm::configSetting(const std::string& section, const std::string& key) {
-    const std::filesystem::path system = packages_.iniFile().parent_path();
-    for (const std::filesystem::path& file :
-         {system / "User.ini", system / "DefUser.ini", packages_.iniFile()}) {
-        const std::string fileKey = file.string();
-        auto it = iniFiles_.find(fileKey);
-        if (it == iniFiles_.end()) {
-            IniFile parsed;
-            FILE* f = std::fopen(fileKey.c_str(), "rb");
-            if (f) {
-                std::string text;
-                char buf[4096];
-                for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;)
-                    text.append(buf, n);
-                std::fclose(f);
-                std::map<std::string, std::string>* current = nullptr;
-                size_t at = 0;
-                while (at < text.size()) {
-                    size_t end = text.find('\n', at);
-                    if (end == std::string::npos)
-                        end = text.size();
-                    std::string line = text.substr(at, end - at);
-                    at = end + 1;
-                    while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
-                        line.pop_back();
-                    if (line.size() >= 2 && line.front() == '[' && line.back() == ']') {
-                        current = &parsed[lower(line.substr(1, line.size() - 2))];
-                        continue;
-                    }
-                    const size_t eq = line.find('=');
-                    if (current && eq != std::string::npos)
-                        current->emplace(lower(line.substr(0, eq)), line.substr(eq + 1));
-                }
+// A property's value from its text as the .ini files and console commands
+// write it ("True", "0.5", an enum's name, an object's path); structs and
+// arrays are left as they are.
+void Vm::setFromText(const VmProperty& prop, Value& v, const std::string& text) {
+    switch (prop.type) {
+    case VType::Bool: v = Value::boolValue(lower(text) == "true" || text == "1"); break;
+    case VType::Int: v = Value::intValue(std::atoi(text.c_str())); break;
+    case VType::Float: v = Value::floatValue(std::strtof(text.c_str(), nullptr)); break;
+    case VType::Name: v = Value::nameValue(name(text)); break;
+    case VType::String: v = Value::stringValue(text); break;
+    case VType::Byte: {
+        int b = std::atoi(text.c_str());
+        if (prop.enumNames)
+            for (size_t e = 0; e < prop.enumNames->size(); ++e)
+                if (lower(nameText((*prop.enumNames)[e])) == lower(text))
+                    b = int(e);
+        v = Value::byteValue(b);
+        break;
+    }
+    case VType::Object:
+        if (VmObject* o = findObject(text))
+            v = Value::objectValue(o);
+        break;
+    default: break;
+    }
+}
+
+// A setting changed while running (a console command's "set"): it comes
+// before the .ini files' for as long as this VM lasts; the files aren't
+// written.
+void Vm::setConfig(const std::string& section, const std::string& key, const std::string& value) {
+    configSet_[lower(section)][lower(key)] = value;
+}
+
+// A text file of [Section] and Key=Value lines (an .ini, an .int), sections
+// and keys in lower case; read once. Empty if it isn't there.
+const Vm::IniFile& Vm::iniFileAt(const std::filesystem::path& file) {
+    const std::string fileKey = file.string();
+    auto it = iniFiles_.find(fileKey);
+    if (it != iniFiles_.end())
+        return it->second;
+    IniFile parsed;
+    if (FILE* f = std::fopen(fileKey.c_str(), "rb")) {
+        std::string text;
+        char buf[4096];
+        for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;)
+            text.append(buf, n);
+        std::fclose(f);
+        std::map<std::string, std::string>* current = nullptr;
+        size_t at = 0;
+        while (at < text.size()) {
+            size_t end = text.find('\n', at);
+            if (end == std::string::npos)
+                end = text.size();
+            std::string line = text.substr(at, end - at);
+            at = end + 1;
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+                line.pop_back();
+            if (line.size() >= 2 && line.front() == '[' && line.back() == ']') {
+                current = &parsed[lower(line.substr(1, line.size() - 2))];
+                continue;
             }
-            it = iniFiles_.emplace(fileKey, std::move(parsed)).first;
+            const size_t eq = line.find('=');
+            if (current && eq != std::string::npos)
+                current->emplace(lower(line.substr(0, eq)), line.substr(eq + 1));
         }
-        auto sec = it->second.find(lower(section));
-        if (sec == it->second.end())
+    }
+    return iniFiles_.emplace(fileKey, std::move(parsed)).first->second;
+}
+
+// A setting from the .ini files, in the order applyConfig says. One set
+// while running comes first.
+const std::string* Vm::configSetting(const std::string& section, const std::string& key) {
+    if (auto sec = configSet_.find(lower(section)); sec != configSet_.end())
+        if (auto value = sec->second.find(lower(key)); value != sec->second.end())
+            return &value->second;
+    const std::filesystem::path system = packages_.iniFile().parent_path();
+    for (const std::filesystem::path& file : {system / "User.ini", system / "DefUser.ini", packages_.iniFile()}) {
+        const IniFile& ini = iniFileAt(file);
+        auto sec = ini.find(lower(section));
+        if (sec == ini.end())
             continue;
         auto value = sec->second.find(lower(key));
         if (value != sec->second.end())
             return &value->second;
     }
     return nullptr;
+}
+
+// A class's localized properties (the text players read: menu items,
+// messages) from the game's .int files: the class's own section
+// ([DS9_Hud], by its name alone) of its package's .int, else of
+// Classes.int, where The Fallen keeps them all; looked for in the int
+// folder beside System, then in System. What a parent's section set is
+// inherited with its defaults.
+void Vm::applyLocalized(VmClass& c) {
+    if (!c.package)
+        return;
+    const std::filesystem::path system = packages_.iniFile().parent_path();
+    std::vector<const std::map<std::string, std::string>*> sections;
+    for (const std::filesystem::path& folder : {system.parent_path() / "int", system.parent_path() / "Int", system})
+        for (const std::string& file : {c.package->name() + ".int", std::string("Classes.int")}) {
+            const IniFile& ini = iniFileAt(folder / file);
+            if (auto sec = ini.find(lower(c.name)); sec != ini.end())
+                sections.push_back(&sec->second);
+        }
+    if (sections.empty())
+        return;
+    for (const VmProperty* prop : c.properties) {
+        if (!(prop->flags & propflag::Localized) || prop->type == VType::Struct)
+            continue;
+        for (int k = 0; k < prop->arrayDim; ++k) {
+            const std::string key = lower(prop->arrayDim > 1 ? prop->name + "[" + std::to_string(k) + "]" : prop->name);
+            for (const auto* sec : sections)
+                if (auto value = sec->find(key); value != sec->end()) {
+                    setFromText(*prop, c.defaults[size_t(prop->slot + k)], value->second);
+                    break;
+                }
+        }
+    }
 }
 
 void Vm::loadStruct(VmStruct& s, const ScriptObject& so) {
@@ -1041,16 +1093,27 @@ public:
                     f.result = eval(f, x.args[0], f.self);
                 return Flow::Return;
             case token::Stop: return Flow::Stop;
-            case token::Switch:
+            // The switch finds its case: each label in turn, to the first
+            // that matches or the default. A label reached by falling
+            // through from the case above is passed over, as the engine
+            // does ("case 38: case 40: ..." share their code).
+            case token::Switch: {
                 f.switchValue = eval(f, arg(x, 0), f.self);
                 ++pc;
+                for (int guard = 0; guard < 10000 && pc >= 0 && size_t(pc) < code.statements.size(); ++guard) {
+                    const int ci = code.statements[size_t(pc)];
+                    if (ci < 0 || code.exprs[size_t(ci)].token != token::Case)
+                        break;
+                    const Expr& c = code.exprs[size_t(ci)];
+                    if (c.value == 0xffff || vm_.equal(f.switchValue, eval(f, arg(c, 0), f.self))) {
+                        ++pc;
+                        break;
+                    }
+                    pc = at(f, uint32_t(c.value));
+                }
                 continue;
-            case token::Case:
-                if (x.value == 0xffff || vm_.equal(f.switchValue, eval(f, arg(x, 0), f.self)))
-                    ++pc;
-                else
-                    pc = at(f, uint32_t(x.value));
-                continue;
+            }
+            case token::Case: ++pc; continue;
             case token::Iterator: {
                 Iteration it;
                 it.body = pc + 1;

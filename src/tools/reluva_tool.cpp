@@ -4717,14 +4717,17 @@ private:
 
 // ue-play <game folder> <map> [step...]: the Maps page on that map, driven
 // by steps, its frames drawn in software. Steps: play (Enter), wait <s>,
-// hold <key> <s> (w a s d left right up down space f), down <key> and
+// travel <url> (to "Map/Portal" and playing, as the game's ClientTravel),
+// hold <key> <s> (w a s d left right up down space enter escape f), down <key> and
 // up <key> (held across other steps), press <key>, watch <actor> (the
 // camera let loose in front of it),
-// drag <dx> <dy>, shot <file.ppm> (the next frame, saved).
+// drag <dx> <dy>, click <x> <y> (the left button, there), shot <file.ppm>
+// (the next frame, saved).
 int cmdUePlay(int argc, char** argv) {
     if (argc < 4) {
         std::fprintf(stderr, "usage: reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | "
-                             "down <key> | up <key> | press <key> | watch <actor> | drag <dx> <dy> | shot <file.ppm>]...\n");
+                             "down <key> | up <key> | press <key> | travel <url> | watch <actor> | drag <dx> <dy> | "
+                             "click <x> <y> | shot <file.ppm>]...\n");
         return 2;
     }
     using namespace reluva::unreal;
@@ -4759,6 +4762,7 @@ int cmdUePlay(int argc, char** argv) {
         if (k == "down") return reluva::key::Down;
         if (k == "space") return reluva::key::Space;
         if (k == "enter") return reluva::key::Return;
+        if (k == "escape") return reluva::key::Escape;
         if (k.size() >= 2 && (k[0] == 'f' || k[0] == 'F') && std::isdigit(uint8_t(k[1])))
             return reluva::key::F1 + uint32_t(std::atoi(k.c_str() + 1) - 1);
         return k.empty() ? 0 : uint32_t(k[0]);
@@ -4788,6 +4792,10 @@ int cmdUePlay(int argc, char** argv) {
             for (int f = 0; f < int(s * 30); ++f)
                 frame();
             send(reluva::EventType::KeyUp, key);
+        } else if (step == "travel" && i + 1 < argc) {
+            page.travel(argv[++i]);
+            std::printf("travel: %s\n", page.playing() ? "playing" : "didn't start");
+            frame();
         } else if (step == "watch" && i + 1 < argc) {
             const std::string who = argv[++i];
             std::printf("watch %s: %s\n", who.c_str(), page.watchActor(who) ? "looking at it" : "no such actor");
@@ -4799,6 +4807,17 @@ int cmdUePlay(int argc, char** argv) {
             send(reluva::EventType::KeyDown, key);
             frame();
             send(reluva::EventType::KeyUp, key);
+        } else if (step == "click" && i + 2 < argc) {
+            reluva::Event ev;
+            ev.mouseX = std::atoi(argv[++i]);
+            ev.mouseY = std::atoi(argv[++i]);
+            ev.button = reluva::MouseButton::Left;
+            for (const reluva::EventType type :
+                 {reluva::EventType::MouseMove, reluva::EventType::MouseDown, reluva::EventType::MouseUp}) {
+                ev.type = type;
+                page.handleEvent(ev);
+                frame();
+            }
         } else if (step == "drag" && i + 2 < argc) {
             const int dx = std::atoi(argv[++i]), dy = std::atoi(argv[++i]);
             reluva::Event ev;

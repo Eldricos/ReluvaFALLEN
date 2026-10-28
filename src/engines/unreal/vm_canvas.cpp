@@ -54,7 +54,8 @@ VmObject* ScriptLevel::canvas() {
 
 // A frame's HUD: the canvas made ready (Reset, its size and clip the
 // screen's), then the player's PreRender and PostRender with it, which
-// hand it to its HUD. What the scripts draw is in hud().
+// hand it to its HUD, then the console's PostRender. What the scripts draw
+// is in hud().
 void ScriptLevel::renderHud(const HudView& view) {
     hud_ = {};
     hudView_ = hudFrame_ = view;
@@ -81,6 +82,20 @@ void ScriptLevel::renderHud(const HudView& view) {
     setFloat("CurY", 0);
     vm_.callEvent(player_, "PreRender", {Value::objectValue(c)});
     vm_.callEvent(player_, "PostRender", {Value::objectValue(c)});
+    // Then the console's (its messages; the UWindow menus while they're
+    // open), on the same canvas, its frame the screen.
+    if (VmObject* con = console()) {
+        for (const auto& [name, size] : {std::pair{"FrameX", view.width}, std::pair{"FrameY", view.height}})
+            if (Value* p = prop(con, name))
+                *p = Value::floatValue(float(size));
+        vm_.callEvent(c, "Reset");
+        setFloat("ClipX", float(view.width));
+        setFloat("ClipY", float(view.height));
+        setFloat("OrgX", 0);
+        setFloat("OrgY", 0);
+        hudFrame_ = view;
+        vm_.callEvent(con, "PostRender", {Value::objectValue(c)});
+    }
 }
 
 void ScriptLevel::trackFli(VmObject* tex) {
@@ -185,33 +200,41 @@ void registerCanvasNatives(Vm& vm) {
         set("CurYL", p.curYL);
     };
     // A tile: `tex`'s rectangle (u, v, ul, vl in texels) drawn xl by yl at
-    // (x, y) on the screen; with `clip`, cut to the canvas's clip (from its
-    // origin), the texture's rectangle cut with it.
+    // (x, y) in the render frame (SetRenderFrame: from its corner, cut to
+    // it); with `clip`, cut to the canvas's clip (from its origin) too, the
+    // texture's rectangle cut with it.
     auto tile = [](NativeCall& c, const Pen& p, VmObject* tex, float x, float y, float xl, float yl, float u, float v,
                    float ul, float vl, bool clip, bool text) {
         if (!c.vm.level || !tex || !tex->package || p.style == kStyleNone || xl <= 0 || yl <= 0)
             return;
+        auto cut = [](float& at, float& size, float& tu, float& tul, float lo, float hi) {
+            if (at < lo) {
+                const float d = lo - at;
+                tu += tul * d / size;
+                tul -= tul * d / size;
+                size -= d;
+                at = lo;
+            }
+            if (at + size > hi) {
+                const float d = at + size - hi;
+                tul -= tul * d / size;
+                size -= d;
+            }
+        };
         if (clip) {
             const float right = p.orgX + p.clipX, bottom = p.orgY + p.clipY;
             if (x >= right || y >= bottom || x + xl <= p.orgX || y + yl <= p.orgY)
                 return;
-            auto cut = [](float& at, float& size, float& tu, float& tul, float lo, float hi) {
-                if (at < lo) {
-                    const float d = lo - at;
-                    tu += tul * d / size;
-                    tul -= tul * d / size;
-                    size -= d;
-                    at = lo;
-                }
-                if (at + size > hi) {
-                    const float d = at + size - hi;
-                    tul -= tul * d / size;
-                    size -= d;
-                }
-            };
             cut(x, xl, u, ul, p.orgX, right);
             cut(y, yl, v, vl, p.orgY, bottom);
         }
+        const ScriptLevel::HudView& frame = c.vm.level->hudFrame();
+        if (x >= float(frame.width) || y >= float(frame.height) || x + xl <= 0 || y + yl <= 0)
+            return;
+        cut(x, xl, u, ul, 0, float(frame.width));
+        cut(y, yl, v, vl, 0, float(frame.height));
+        x += float(frame.x);
+        y += float(frame.y);
         ScriptLevel::HudTile t;
         t.texture = {tex->package, tex->exportIndex};
         t.x = x;
@@ -384,7 +407,7 @@ void registerCanvasNatives(Vm& vm) {
     // tricorder's markers, a talker's head in its portrait.
     // DrawClippedActor(Actor A, bool WireFrame, int X, int Y, int XB, int YB,
     // optional bool ClearZ) the same in a rectangle X by Y at (XB, YB) (as
-    // UWindow calls it: width, height, left, top).
+    // UWindow calls it: width, height, left, top), from the frame's corner.
     auto drawActor = [](NativeCall& c, VmObject* a, bool clearZ, const ScriptLevel::HudView& view) {
         if (!c.vm.level || !a)
             return;
@@ -412,18 +435,24 @@ void registerCanvasNatives(Vm& vm) {
         ScriptLevel::HudView v = c.vm.level->hudFrame();
         v.width = std::max(1, c.i(2));
         v.height = std::max(1, c.i(3));
-        v.x = c.i(4);
-        v.y = c.i(5);
+        v.x += c.i(4);
+        v.y += c.i(5);
         drawActor(c, c.o(0), c.b(6), v);
     });
     // SetRenderFrame(int X, int Y, int Width, int Height, Vector CamLocation,
     // Rotator CamRotation, optional int FOV, optional bool ClearZ): the view
     // the actors drawn next are drawn in, the depth cleared first with
     // ClearZ (the portraits, the tricorder's picture of the player; the
-    // HUD's ResetCanvas sets the whole screen back).
+    // HUD's ResetCanvas sets the whole screen back). Tiles drawn after it
+    // are placed from its corner and cut to it, and the canvas's clip
+    // (ClipX, ClipY) becomes its size: the star map's blocks scroll inside
+    // their window from 0, 0, scaled by the clip it saved before.
     reg("Canvas.SetRenderFrame", [](NativeCall& c) {
         if (!c.vm.level)
             return;
+        for (const auto& [name, size] : {std::pair{"ClipX", c.i(2)}, std::pair{"ClipY", c.i(3)}})
+            if (Value* v = c.self ? c.self->find(c.vm, name) : nullptr)
+                *v = Value::floatValue(float(std::max(1, size)));
         ScriptLevel::HudView& v = c.vm.level->hudFrame();
         v.x = c.i(0);
         v.y = c.i(1);
@@ -441,7 +470,9 @@ void registerCanvasNatives(Vm& vm) {
         c.vm.level->hudFrameClear() = c.given.size() > 7 && c.given[7] && c.b(7);
     });
     // GetScreenCoords(Vector Location, out int X, out int Y, out float Scale):
-    // where a place is on the screen in the frame's view; false behind it.
+    // where a place is in the frame's view, from the frame's corner as
+    // tiles are placed (the tricorder puts its bracket there, as a share of
+    // the clip); false behind it.
     reg("Canvas.GetScreenCoords", [](NativeCall& c) {
         c.result = Value::boolValue(false);
         if (!c.vm.level)
@@ -455,8 +486,8 @@ void registerCanvasNatives(Vm& vm) {
         if (ahead <= 1)
             return;
         const float focal = float(v.width) / 2 / std::tan(v.fov * 3.14159265f / 360);
-        c.args[1] = Value::intValue(v.x + int(float(v.width) / 2 + dot(1) / ahead * focal));
-        c.args[2] = Value::intValue(v.y + int(float(v.height) / 2 - dot(2) / ahead * focal));
+        c.args[1] = Value::intValue(int(float(v.width) / 2 + dot(1) / ahead * focal));
+        c.args[2] = Value::intValue(int(float(v.height) / 2 - dot(2) / ahead * focal));
         c.args[3] = Value::floatValue(focal / ahead);
         c.result = Value::boolValue(true);
     });

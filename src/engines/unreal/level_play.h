@@ -27,8 +27,9 @@ public:
     static constexpr float kTick = 1.0f / 30; // seconds a tick moves the level on
 
     LevelPlay(const PackageSet& packages, const Package& map);
-    // Starts the level and logs a player in (as the .ini's [URL] says).
-    Error start();
+    // Starts the level and logs a player in (as the .ini's [URL] says), at
+    // the start tagged `portal` if one is given.
+    Error start(const std::string& portal = {});
 
     // Moves the level on by `seconds` of real time, in whole ticks: at
     // most `maxTicks` at once, so when the scripts can't keep up the game
@@ -41,6 +42,28 @@ public:
     // ([Engine.Input] in User.ini, else DefUser.ini: "2=Rifle"): the exec
     // functions it names, the buttons it holds. False if it's bound to none.
     bool pressKey(const std::string& key, bool down = true);
+    // A key going down or up as the engine first hands it on: to the
+    // console's KeyEvent (`inputKey` an EInputKey: 13 Enter, 27 Escape, 37
+    // to 40 the arrows, 0x70 F1...). The Fallen's console gives the arrows
+    // and Enter to the HUD while its menus show. True if it took the key;
+    // otherwise it's the bindings' (pressKey).
+    bool consoleKey(int inputKey, bool down);
+    // The game paused (Level.Pauser set: the menus).
+    bool paused() const;
+    // The game's UWindow windows open (the options): the console's
+    // Root.bUWindowActive; the mouse is theirs then.
+    bool windowsOpen() const;
+    // Where the mouse is (in the screen's pixels) for those windows: the
+    // console's MouseX and MouseY.
+    void consoleMouse(float x, float y);
+    // The game's menu showing (the player's bShowMenu): the keys are all
+    // the game's then.
+    bool menuShowing() const;
+    // Where the game asked to travel ("CM01a_SW/CM01_A_Sisko01": a map,
+    // then the start to begin at), once: empty after.
+    std::string takeTravel();
+    // The game asked to quit (its menu's Quit).
+    bool quitAsked() const;
 
     // Where the camera is, as the game puts it each frame
     // (PlayerCalcView): behind the player, or a cut scene's camera.
