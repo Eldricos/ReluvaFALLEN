@@ -521,14 +521,15 @@ void ScriptLevel::tick(float seconds) {
                 {"aBaseY", controls.forward * 300 * kHeld}, {"aStrafe", controls.strafe * 300 * kHeld},
                 {"aBaseX", controls.turn * 150 * kHeld},    {"aLookUp", controls.lookUp * 300 * kHeld},
                 {"aMouseX", controls.mouseX}, {"aMouseY", controls.mouseY},
-                {"aUp", controls.jump ? 300.0f * kHeld : 0.0f},
+                {"aUp", ((controls.jump ? 300.0f : 0.0f) - (controls.duck ? 300.0f : 0.0f)) * kHeld},
                 {"aForward", 0}, {"aTurn", 0}, {"aBaseZ", 0},
             };
             for (const auto& [axis, value] : axes)
                 if (Value* v = a->find(vm_, axis))
                     v->f = value;
             controls.mouseX = controls.mouseY = 0; // the mouse's movement goes into one tick
-            for (const auto& [button, held] : {std::pair{"bExtra1", controls.jump}, std::pair{"bFire", controls.fire}})
+            for (const auto& [button, held] :
+                 {std::pair{"bExtra1", controls.jump}, std::pair{"bDuck", controls.duck}, std::pair{"bFire", controls.fire}})
                 if (Value* v = a->find(vm_, button))
                     v->i = held ? 1 : 0;
             vm_.callEvent(a, "PlayerInput", {Value::floatValue(seconds)});

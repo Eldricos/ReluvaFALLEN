@@ -1552,7 +1552,7 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
     lines.push_back(!play_     ? "Enter plays the level"
                     : freeCam_ ? "Playing, the camera loose (V back to the game's): W/S/A/D, Space/C and drag fly it"
                                : "Playing (Enter stops): W/S move, A/D step aside, arrows turn and look, drag to look, Space "
-                                 "jumps, Ctrl or F fires, 0-9 pick weapons, F1-F12 as the game binds them, Esc the game's menu, V lets "
+                                 "jumps, C crouches, Ctrl or F fires, 0-9 pick weapons, F1-F12 as the game binds them, Esc the game's menu, V lets "
                                  "the camera loose");
     char where[240];
     // Shown in Unreal's own coordinates.
@@ -1775,6 +1775,7 @@ void MapViewer::updatePlay(float dt) {
     c.mouseX += mouseDx_;
     c.mouseY += mouseDy_;
     c.jump = held_[Up];
+    c.duck = held_[Down]; // C, as the game binds it (Duck)
     c.fire = held_[Fire];
     mouseDx_ = mouseDy_ = 0;
     play_->advance(dt);

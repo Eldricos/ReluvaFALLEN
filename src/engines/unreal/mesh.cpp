@@ -678,6 +678,11 @@ struct BonePoser {
                         d[a] += f * (r.f32(k.positions + 16 * (i + 1) + 4 + 4 * a) - d[a]);
                 }
             }
+            // Its keys are in 3ds Max's axes (Z up, the figure facing -Y, its
+            // right -X); the skeleton's are Y up, facing -Z, right +X (the
+            // rotation keys are in those already). A crouch's drop was
+            // going backwards, a run's bob forwards and back.
+            d = {-d[0], d[2], d[1]};
             for (size_t a = 0; a < 3; ++a)
                 m[9 + a] += sane(d[a]) ? d[a] : 0;
         }

@@ -5135,18 +5135,15 @@ int cmdUeProbe(int argc, char** argv) {
 // advance (`<Animation><Point>Loc`, in the skeleton's units): each
 // animation posed through its frames, the point where it comes nearest
 // the place, and its axes there taken in the triangle's frame or in the
-// frame of the bone the triangle moves with (mesh.md).
-int cmdUePoints(int argc, char** argv) {
-    if (argc != 3) {
-        std::fprintf(stderr, "usage: reluva-tool ue-points <game folder>\n");
-        return 2;
-    }
+// frame of the bone the triangle moves with (mesh.md). Each place's line
+// printed if `print`.
+struct PointsCheck {
+    int places = 0, within5 = 0, triangleX = 0, boneX = 0;
+    double miss = 0; // units, all together
+};
+PointsCheck checkAttachPoints(const reluva::unreal::PackageSet& set, bool print) {
     using namespace reluva::unreal;
-    PackageSet set;
-    if (reluva::Error err = set.open(argv[2], "")) {
-        std::fprintf(stderr, "%s\n", err.message.c_str());
-        return 1;
-    }
+    PointsCheck out;
     const std::vector<AnimationSet> sets = findAnimationSets(set);
     auto sub = [](Vec3f a, Vec3f b) { return Vec3f{a[0] - b[0], a[1] - b[1], a[2] - b[2]}; };
     auto dot = [](Vec3f a, Vec3f b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
@@ -5174,7 +5171,6 @@ int cmdUePoints(int argc, char** argv) {
     };
     // The axes as one (rows' dot products summed: 3 the same) and the X
     // axis alone, either way (the barrel's line, for a gun's tip).
-    int places = 0, triangleX = 0, boneX = 0;
     for (const std::string& name : set.names()) {
         const Package* pkg = set.get(name);
         if (!pkg)
@@ -5210,6 +5206,7 @@ int cmdUePoints(int argc, char** argv) {
                 const int bone = poser->mainBone(t.vertex);
                 // The frame where the point comes nearest the place.
                 float best = 1e30f, at = 0;
+                Vec3f miss{};
                 std::vector<Vec3f> verts;
                 for (int f = 0; f <= 60; ++f) {
                     if (!poser->pose(anim, float(f) / 60, {}, verts))
@@ -5222,10 +5219,12 @@ int cmdUePoints(int argc, char** argv) {
                     if (dot(d, d) < best) {
                         best = dot(d, d);
                         at = float(f) / 60;
+                        miss = d;
                     }
                 }
                 if (best >= 1e30f) {
-                    std::printf("%-24s %-24s no animation %s\n", pkg->objectName(int32_t(i) + 1).c_str(), pre.name.c_str(),
+                    if (print)
+                        std::printf("%-24s %-24s no animation %s\n", pkg->objectName(int32_t(i) + 1).c_str(), pre.name.c_str(),
                                 anim.c_str());
                     continue;
                 }
@@ -5248,18 +5247,40 @@ int cmdUePoints(int argc, char** argv) {
                     byBone = match(boneAxes, pre.axes);
                     xBone = std::fabs(dot(boneAxes[0], pre.axes[0]));
                 }
-                ++places;
-                triangleX += xTriangle >= 0.95f;
-                boneX += xBone >= 0.95f;
-                std::printf("%-24s %-24s %5.1f units off at %.2f; axes by the triangle %5.2f (X %.2f), by %s %5.2f (X %.2f)\n",
-                            pkg->objectName(int32_t(i) + 1).c_str(), pre.name.c_str(), std::sqrt(best), at, byTriangle,
-                            xTriangle, poser->boneName(bone).c_str(), byBone, xBone);
+                ++out.places;
+                out.within5 += std::sqrt(best) <= 5;
+                out.miss += std::sqrt(best);
+                out.triangleX += xTriangle >= 0.95f;
+                out.boneX += xBone >= 0.95f;
+                if (print)
+                    std::printf("%-22s %-20s %5.1f off (%5.1f %5.1f %5.1f) at %.2f; axes by the triangle %5.2f (X %.2f), "
+                                "by %s %5.2f (X %.2f)\n",
+                                pkg->objectName(int32_t(i) + 1).c_str(), pre.name.c_str(), std::sqrt(best), miss[0],
+                                miss[1], miss[2], at, byTriangle, xTriangle, poser->boneName(bone).c_str(), byBone, xBone);
             }
         }
     }
-    if (places)
-        std::printf("%d places: X along the place's (within 0.95) taken in the triangle's axes %d, in its bone's %d\n",
-                    places, triangleX, boneX);
+    return out;
+}
+
+void printPointsCheck(const PointsCheck& c) {
+    if (c.places)
+        std::printf("attachment points against %d precomputed places: %.1f units off on average, %d within 5; the X "
+                    "axis along the place's (within 0.95) taken in the triangle's axes %d, in its bone's %d\n",
+                    c.places, c.miss / c.places, c.within5, c.triangleX, c.boneX);
+}
+
+int cmdUePoints(int argc, char** argv) {
+    if (argc != 3) {
+        std::fprintf(stderr, "usage: reluva-tool ue-points <game folder>\n");
+        return 2;
+    }
+    reluva::unreal::PackageSet set;
+    if (reluva::Error err = set.open(argv[2], "")) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    printPointsCheck(checkAttachPoints(set, true));
     return 0;
 }
 
@@ -5639,6 +5660,7 @@ int cmdUeCheck(int argc, char** argv) {
     for (const auto& [turn, t] : meshTurns)
         std::printf("meshes with an imported-model block, float copy %s: %d (e.g. %s)\n", turn.c_str(), t.first,
                     t.second.c_str());
+    printPointsCheck(checkAttachPoints(set, false));
     for (const auto& [what, t] : tallies) {
         std::printf("%-9s %6d decoded, %6d failed\n", what.c_str(), t.ok, t.failed);
         for (const std::string& ex : t.examples)

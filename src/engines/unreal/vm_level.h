@@ -77,9 +77,10 @@ public:
         // The mouse's movement since the last tick (the input's aMouseX,
         // aMouseY), used up by the next.
         float mouseX = 0, mouseY = 0;
-        // Buttons held: jump (Space: bExtra1, and aUp up) and fire (bFire).
-        // Pressing one also calls its exec function (LevelPlay::press).
-        bool jump = false, fire = false;
+        // Buttons held: jump (Space: bExtra1, and aUp up), duck (C: bDuck,
+        // and aUp down) and fire (bFire). Pressing one also calls its exec
+        // function (LevelPlay::press).
+        bool jump = false, duck = false, fire = false;
     } controls;
 
     // Moves the world on: the player's input (PlayerInput) and PlayerTick,

@@ -120,7 +120,7 @@ mesh's name and textures' file names, after it its body parts' names
 | 12 floats | the bone's placement in its parent's space: rows X, Y, Z, then the origin |
 | i32 | 7 for root, 4 for most, 0 for some |
 | `(c, c, f)` | c clips, one per animation |
-| per clip: `(n, n, f)` and n x (time, x, y, z) floats | position keys: times in seconds, an offset to the placement's origin |
+| per clip: `(n, n, f)` and n x (time, x, y, z) floats | position keys: times in seconds, an offset to the placement's origin, in 3ds Max's axes (below) |
 | per clip: `(m, m, f)` and m x (float time, 6 bytes) | rotation keys: a quaternion, below |
 | per clip: 8 bytes | (0, 0), (0, 1), (1, 1) seen |
 | `(h, h, 4)` | h children, whose records follow |
@@ -134,7 +134,19 @@ vertices are), then w - 1 as a signed 16-bit fraction of 32767
 **Posing.** A bone's place at time t of a clip: turned by its rotation
 key's quaternion taken as rows of a matrix (i.e. by its conjugate, as row
 vectors turn), then by its placement's turn, at its placement's origin
-plus its position key; then its parent's, up to the root. A vertex is the
+plus its position key; then its parent's, up to the root.
+
+The position keys are in 3ds Max's axes, not the skeleton's: Z up, the
+figure facing -Y with its right at -X. The skeleton's are Y up, the
+figure facing -Z (the guns point that way) with its right at +X (the
+right clavicle is at X +4), so a key (x, y, z) is the offset (-x, z, y).
+The rotation keys are in the skeleton's axes already. Mostly it's the
+pelvis that has these keys, so standing poses hardly show it. Taken as
+they were, a crouch's drop of 27 units went backwards (the figure folded
+its legs in the air, its hips at standing height), and a run's bob went
+forwards and back. Taken in Max's axes, the crouch is down at the floor,
+and the gun tips come within 5.8 units of the precomputed places on
+average, against 12.4 (below: the crouched shot's from about 40 to 5). A vertex is the
 weighted sum, over its bones, of its position there (`p * bone * parent *
 ...`, row vectors), in the same units as packed vertices after Scale and
 Origin (KiraCellLight's one bone, `root`, gives exactly its packed
@@ -244,8 +256,8 @@ shot's tip is lowest and a shot from the shoulder highest.
 They're in the skeleton's units (Scale applied, from the origin, the
 import turn not applied), not the float copy's. Checked: JemHaddar has a
 GunTip of its own (type 1, on its gun). Posed through each firing
-animation, the tip comes within 1.3 units of `FireRunFGunTipLoc`, 3.5 of
-`FireRunLGunTipLoc` and 8 to 12 of four more. Read in the float copy's
+animation, the tip comes within 2 to 5.4 units of six of its seven places
+(the seventh, `FireRunRGunTipLoc`, below). Read in the float copy's
 space, it is 18 to 100 units off every one.
 
 Checked:
@@ -255,10 +267,14 @@ Checked:
 - A type 1 point is at its triangle's middle, its turn and offset in the
   axes of the bone the triangle moves with (its three corners' weights
   summed, the most). `reluva-tool ue-points` checks this against the
-  precomputed places: 65 of them name a type 1 point and an animation
-  (`<Animation><Point>Loc`). With each animation posed through its
-  frames, the point comes within 0.6 to 18 units of the place, except
-  `FireCrchGunTipLoc`, about 40 off in every mesh. Its X, the barrel,
+  precomputed places, and `ue-check` prints its summary: 65 of the 74
+  name a type 1 point and an animation (`<Animation><Point>Loc`; two
+  more name a `Fire` their meshes haven't). With each animation posed
+  through its frames, the point comes 5.8 units from its place on
+  average, 31 within 5. The exception is `FireRunRGunTipLoc`, 10 to 17
+  units off on every mesh, nearly all of it the tip being lower than the
+  place: the game's pose for that shot held the gun higher than the
+  animation's keys do here, for a reason not found. Its X, the barrel,
   lies along the place's X (within 0.95, either way) in 28 of the 65
   taken in the bone's axes, and in 1 taken in the triangle's own (X
   along its first edge, Z its normal, as before). The other two axes are

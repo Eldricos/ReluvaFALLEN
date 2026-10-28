@@ -1426,7 +1426,8 @@ falling further behind. The Maps page plays one with Enter:
   aside, Left/Right turn, Up/Down look, and dragging the mouse turns
   and looks (`aMouseX`/`aMouseY`, used up by one tick). Space jumps
   (`bExtra1` and `aUp` held, and the `Jump` exec function called once).
-  Ctrl or F fires (`bFire` and `Fire`). The number keys call the exec
+  C crouches, as the game binds it to `Duck` (`bDuck` held and `aUp`
+  down). Ctrl or F fires (`bFire` and `Fire`). The number keys call the exec
   functions the game binds them to (`[Engine.Input]` in User.ini, else
   DefUser.ini: 2 is `Rifle`, 0 `HolsterWeapon`).
 - **The camera** is where the game puts it: the page calls the player's
