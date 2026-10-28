@@ -1744,20 +1744,20 @@ std::unique_ptr<LayeredPoser> LayeredPoser::open(const Package& package, int ind
     for (const NamedClip& c : clips)
         if (!c.keys.empty())
             impl->faceClips.push_back(c);
+    impl->vertexBones.resize(frame);
+    for (size_t i = 0; i < impl->bones.size(); ++i) {
+        const BoneRecord& b = impl->bones[i];
+        for (uint32_t j = 0; j < b.vertices; ++j) {
+            const size_t v = r.u32(b.indices + 4 * size_t(j));
+            const float w = r.f32(b.weights + 4 * size_t(j));
+            if (v < frame && sane(w) && w > 0)
+                impl->vertexBones[v].push_back({uint32_t(i), w});
+        }
+    }
     if (!impl->faceClips.empty()) {
         const size_t at = impl->faceClips[0].keys[0].second;
         for (size_t v = 0; v < frame; ++v)
             impl->neutral.push_back(unpackVertex(r.u32(at + 4 * v)));
-        impl->vertexBones.resize(frame);
-        for (size_t i = 0; i < impl->bones.size(); ++i) {
-            const BoneRecord& b = impl->bones[i];
-            for (uint32_t j = 0; j < b.vertices; ++j) {
-                const size_t v = r.u32(b.indices + 4 * size_t(j));
-                const float w = r.f32(b.weights + 4 * size_t(j));
-                if (v < frame && sane(w) && w > 0)
-                    impl->vertexBones[v].push_back({uint32_t(i), w});
-            }
-        }
         // The neutral face is in BaseReference's pose (to within a few
         // units at the hands, on Quark), else the bones' own placements.
         std::vector<Mat43> ref(impl->bones.size());
@@ -2160,6 +2160,26 @@ bool LayeredPoser::skeleton(std::string_view base, float fraction, const std::ve
 }
 
 int LayeredPoser::boneIndex(std::string_view name) const { return impl->indexOf(name); }
+
+std::string LayeredPoser::boneName(int index) const {
+    return index >= 0 && size_t(index) < impl->bones.size() ? impl->bones[size_t(index)].name : std::string();
+}
+
+int LayeredPoser::mainBone(const std::array<int32_t, 3>& vertices) const {
+    std::map<uint32_t, float> sum;
+    for (const int32_t v : vertices)
+        if (v >= 0 && size_t(v) < impl->vertexBones.size())
+            for (const auto& [b, w] : impl->vertexBones[size_t(v)])
+                sum[b] += w;
+    int best = -1;
+    float most = 0;
+    for (const auto& [b, w] : sum)
+        if (w > most) {
+            most = w;
+            best = int(b);
+        }
+    return best;
+}
 
 bool LayeredPoser::boneInSkeleton(std::string_view base, float fraction, const std::vector<Layer>& layers,
                                   std::string_view name, Vec3f& origin, std::array<Vec3f, 3>& axes,

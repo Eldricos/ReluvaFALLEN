@@ -223,9 +223,16 @@ What the type means:
   prison rat's `BitePoint` (no turn, no offset) is a triangle at the end
   of its body on its middle line. The phaser rifle's `FirePoint` (offset
   half a unit) is a triangle at the very end of its barrel.
-- **Type 2** is from the mesh's own origin, in the float copy's space.
-  The breather's `Face` is at its origin; the rifle's hand grips are a
-  few units out.
+- **Type 2** is from the mesh's own origin, in the skeleton's units
+  (Scale applied, the import turn not), as the precomputed places below
+  are. The breather's `Face` is at its origin. The phaser rifle lies
+  along its Z, the muzzle at -17, the stock at +16: its `RightHand` grip
+  is 3 units below at +10 (the pistol grip at the back) and its
+  `LeftHand` beside it at -2.8, forward of the middle. Read in the float
+  copy's space instead (the rifle has none: it's the usual turn guessed),
+  the right hand is 10 units below, outside the rifle. Over all 67
+  type 2 points, 29 are nearer their mesh's surface read so, 8 read the
+  float copy's way.
 
 Then come `(s, s, 5)`, the shared animation sets the mesh's animations
 come from (`shared.MaleTwo`, `shared.Male`), and `(m, m, 4)` places
@@ -245,8 +252,21 @@ Checked:
 - On The Fallen, all 419 meshes with the block read: 429 attachment
   points in 135 meshes, every triangle within its mesh, and 74
   precomputed places in 14.
-- How a triangle's own axes are set isn't stored. Reluva takes the
-  triangle's middle, X along its first edge and Z along its normal.
+- A type 1 point is at its triangle's middle, its turn and offset in the
+  axes of the bone the triangle moves with (its three corners' weights
+  summed, the most). `reluva-tool ue-points` checks this against the
+  precomputed places: 65 of them name a type 1 point and an animation
+  (`<Animation><Point>Loc`). With each animation posed through its
+  frames, the point comes within 0.6 to 18 units of the place, except
+  `FireCrchGunTipLoc`, about 40 off in every mesh. Its X, the barrel,
+  lies along the place's X (within 0.95, either way) in 28 of the 65
+  taken in the bone's axes, and in 1 taken in the triangle's own (X
+  along its first edge, Z its normal, as before). The other two axes are
+  turned about the barrel by an angle each mesh keeps across its poses,
+  and on CardassianOfficer and the Jem'Hadar lance the point's X is the
+  place's Y: the meshes' artists set their points' axes their own ways.
+  A pose with no skeleton (an animation of vertex keys) uses the
+  triangle's own axes.
 
 On Kira, standing:
 - **Hands and feet:** her `RightHand` point is on her right at hip

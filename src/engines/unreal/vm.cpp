@@ -1073,6 +1073,11 @@ VmClass* Vm::intrinsic(std::string_view className) {
     return it == intrinsics_.end() ? nullptr : it->second.get();
 }
 
+const NativeFn* Vm::findNative(std::string_view qualifiedName) const {
+    auto it = natives_.find(lower(qualifiedName));
+    return it == natives_.end() ? nullptr : &it->second;
+}
+
 void Vm::registerNative(std::string_view qualifiedName, NativeFn fn) {
     natives_[lower(qualifiedName)] = std::move(fn);
     ++nativeGeneration_;

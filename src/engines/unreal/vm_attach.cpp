@@ -234,14 +234,17 @@ void ScriptLevel::toWorld(VmObject* a, Vec& at, Axes* axes) {
 }
 
 // An attachment point's place and axes in the actor's own space (before
-// DrawScale). On a triangle: from the triangle's middle, its axes X along
-// its first edge, Z along its normal (Reluva's reading: the data doesn't
-// say), the point's turn and offset in them. On the mesh's origin: its
-// turn and offset from the float copy's space.
+// DrawScale). On a triangle: from the triangle's middle, the point's turn
+// and offset in the axes of the bone the triangle moves with (`bone`: that
+// bone in the skeleton's space, posed as `verts`; `skeleton`: where the
+// skeleton's axes go in the actor's), else in the triangle's own (X along
+// its first edge, Z along its normal): reluva-tool ue-points checks both
+// against the meshes' precomputed places, and the bone's fits (mesh.md).
+// On the mesh's origin: its turn and offset in the skeleton's units.
 namespace {
 
 bool pointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttachPoint& point, Vec& at, Axes& axes,
-                bool precomputed = false) {
+                const std::array<float, 12>* bone = nullptr, const Axes* skeleton = nullptr) {
     if (point.type == 1) {
         if (!verts || point.triangle < 0 || size_t(point.triangle) >= mesh.tris.size())
             return false;
@@ -254,33 +257,41 @@ bool pointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttac
         }
         const Vec x = unit(sub(c[1], c[0]));
         const Vec z = unit(cross(sub(c[1], c[0]), sub(c[2], c[0])));
-        const Axes frame{x, cross(z, x), z};
+        Axes frame{x, cross(z, x), z};
+        if (bone && skeleton)
+            for (size_t r = 0; r < 3; ++r) {
+                Vec row{};
+                for (size_t k = 0; k < 3; ++k)
+                    row = add(row, mul((*skeleton)[k], (*bone)[r * 3 + k]));
+                frame[r] = unit(row);
+            }
         at = mul(add(add(c[0], c[1]), c[2]), 1.0f / 3);
         for (size_t j = 0; j < 3; ++j)
             at = add(at, mul(frame[j], point.offset[j]));
         axes = inFrame(point.axes, frame);
         return true;
     }
-    // From the origin: a precomputed place in the skeleton's units (Scale
-    // applied, the import turn not), a type 2 point in the float copy's
-    // (see mesh.md).
-    if (precomputed) {
-        at = placeMeshScaled(mesh, point.offset);
-        for (size_t k = 0; k < 3; ++k)
-            axes[k] = unit(placeMeshScaled(mesh, point.axes[k]));
-        return true;
-    }
-    at = placeMeshFloatVector(mesh, point.offset);
+    // From the origin, in the skeleton's units (Scale applied, the import
+    // turn not): the precomputed places and type 2 points alike (mesh.md).
+    at = placeMeshScaled(mesh, point.offset);
     for (size_t k = 0; k < 3; ++k)
-        axes[k] = unit(placeMeshFloatVector(mesh, point.axes[k]));
+        axes[k] = unit(placeMeshScaled(mesh, point.axes[k]));
     return true;
 }
 
 } // namespace
 
-bool ScriptLevel::attachFrame(VmObject* a, ActorMesh& m, const MeshAttachPoint& point, Vec& at, Axes& axes,
-                              bool precomputed) {
-    return pointFrame(m.mesh, point.type == 1 ? posedVertices(a, m) : nullptr, point, at, axes, precomputed);
+bool ScriptLevel::attachFrame(VmObject* a, ActorMesh& m, const MeshAttachPoint& point, Vec& at, Axes& axes) {
+    if (point.type != 1)
+        return pointFrame(m.mesh, nullptr, point, at, axes);
+    const std::vector<Vec>* verts = posedVertices(a, m);
+    // The bone its triangle moves with, as this tick has it.
+    const std::array<float, 12>* bone = nullptr;
+    if (m.poser && point.triangle >= 0 && size_t(point.triangle) < m.mesh.tris.size())
+        if (const int b = m.poser->mainBone(m.mesh.tris[size_t(point.triangle)].vertex); b >= 0)
+            if (const auto* worlds = posedSkeleton(a, m); worlds && size_t(b) < worlds->size())
+                bone = &(*worlds)[size_t(b)];
+    return pointFrame(m.mesh, verts, point, at, axes, bone, &m.skeleton);
 }
 
 bool ScriptLevel::attachPointAt(VmObject* a, NameId name, bool precomputed, bool world, Vec& location, Rot& rotation) {
@@ -289,7 +300,7 @@ bool ScriptLevel::attachPointAt(VmObject* a, NameId name, bool precomputed, bool
         m ? findPoint(precomputed ? m->mesh.precomputedPoints : m->mesh.attachPoints, vm_.nameText(name)) : nullptr;
     Vec at{};
     Axes axes{};
-    if (!point || !attachFrame(a, *m, *point, at, axes, precomputed))
+    if (!point || !attachFrame(a, *m, *point, at, axes))
         return false;
     if (world) {
         toWorld(a, at, &axes);
@@ -299,6 +310,28 @@ bool ScriptLevel::attachPointAt(VmObject* a, NameId name, bool precomputed, bool
     location = at;
     rotation = rotOf(axes);
     return true;
+}
+
+// The skeleton posed once a tick, with its layers and its scripts' bends,
+// as it's drawn (the heads ask after their bones every tick, and posing it
+// took as long as the rest of their scripts). None if it can't be posed.
+const std::vector<std::array<float, 12>>* ScriptLevel::posedSkeleton(VmObject* a, ActorMesh& m) {
+    auto& [tick, worlds] = posedBones_[a];
+    if (tick != ticks_ + 1 || worlds.empty()) {
+        tick = ticks_ + 1;
+        worlds.clear();
+        const Value* seqValue = prop(a, "AnimSequence");
+        const Value* frameValue = prop(a, "AnimFrame");
+        if (!m.poser || !seqValue || !seqValue->i)
+            return nullptr;
+        std::vector<std::string> names;
+        const std::vector<LayeredPoser::Layer> layers = posedLayers(a, m, names);
+        const LayeredPoser::Adjust adjust = adjustOf(a, m);
+        if (!m.poser->skeleton(vm_.nameText(seqValue->i), frameValue ? frameValue->asFloat() : 0, layers, worlds,
+                               &adjust))
+            worlds.clear();
+    }
+    return worlds.empty() ? nullptr : &worlds;
 }
 
 bool ScriptLevel::boneAt(VmObject* a, NameId bone, BonePlace place, Vec& location, Rot& rotation) {
@@ -336,17 +369,10 @@ bool ScriptLevel::boneAt(VmObject* a, NameId bone, BonePlace place, Vec& locatio
         rotation = rotOf(scriptAxes(local));
         return true;
     }
-    // The skeleton posed once a tick (the heads ask after their bones every
-    // tick, and posing it took as long as the rest of their scripts).
-    auto& [tick, worlds] = posedBones_[a];
-    if (tick != ticks_ + 1 || worlds.empty()) {
-        tick = ticks_ + 1;
-        pose();
-        if (!m->poser->skeleton(seq, frame, layers, worlds, &adjust))
-            worlds.clear();
-    }
-    if (worlds.empty())
+    const std::vector<std::array<float, 12>>* posed = posedSkeleton(a, *m);
+    if (!posed)
         return false;
+    const std::vector<std::array<float, 12>>& worlds = *posed;
     // The bone, and for FromParent its parent, where they are.
     auto placed = [&](const std::string& which, Vec& at, Axes& axes, bool world) {
         const NameId key = vm_.name(which);
@@ -662,7 +688,8 @@ bool ScriptLevel::measureEffectors(VmObject* a, ActorMesh& m, Bends& b, const La
     std::vector<std::string> names;
     const std::vector<LayeredPoser::Layer> layers = posedLayers(a, m, names);
     std::vector<Vec> verts;
-    if (!m.poser->pose(seq, frame, layers, verts, adjust))
+    std::vector<std::array<float, 12>> worlds;
+    if (!m.poser->pose(seq, frame, layers, verts, adjust) || !m.poser->skeleton(seq, frame, layers, worlds, adjust))
         return false;
     for (size_t l = 0; l < 4; ++l) {
         Bends::Effector& e = b.effectors[l];
@@ -675,7 +702,13 @@ bool ScriptLevel::measureEffectors(VmObject* a, ActorMesh& m, Bends& b, const La
         if (!m.poser->boneInSkeleton(seq, frame, layers, kLimbs[l].bone, origin, bone, adjust))
             continue; // no such limb
         e.tick = ticks_ + 1;
-        if (!point || !pointFrame(m.mesh, &verts, *point, at, axes)) {
+        const int pointBone = point && point->type == 1 && point->triangle >= 0 &&
+                                      size_t(point->triangle) < m.mesh.tris.size()
+                                  ? m.poser->mainBone(m.mesh.tris[size_t(point->triangle)].vertex)
+                                  : -1;
+        const std::array<float, 12>* boneWorld =
+            pointBone >= 0 && size_t(pointBone) < worlds.size() ? &worlds[size_t(pointBone)] : nullptr;
+        if (!point || !pointFrame(m.mesh, &verts, *point, at, axes, boneWorld, &m.skeleton)) {
             // The bone itself reaches, turned as the scripts take its axes.
             for (size_t k = 0; k < 3; ++k)
                 e.axes[k] = {kScriptAxes[k][0], kScriptAxes[k][1], kScriptAxes[k][2]};

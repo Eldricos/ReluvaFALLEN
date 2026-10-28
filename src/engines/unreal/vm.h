@@ -273,7 +273,8 @@ public:
     VmClass* nativeClass(std::string_view className); // made if need be (Mesh, LodMesh, Sound...)
 
     void registerNative(std::string_view qualifiedName, NativeFn fn);
-    bool hasNative(std::string_view qualifiedName) const { return natives_.count(std::string(qualifiedName)) > 0; }
+    bool hasNative(std::string_view qualifiedName) const { return findNative(qualifiedName) != nullptr; }
+    const NativeFn* findNative(std::string_view qualifiedName) const;
 
     // Core's structs, and values of them.
     const VmStruct* coreStruct(std::string_view name);

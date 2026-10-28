@@ -1386,12 +1386,11 @@ On M01_KiraL2, standing, Kira's points and bones are:
 - `Face` in front of her head.
 
 On M11_KiraL1, an ensign's tricorder hangs upright at her belt. On
-M04_KiraL1, once 2 is pressed, Kira raises the phaser rifle to her right
-shoulder with both hands on it. Its tip is 17 units ahead.
+M04_KiraL1, once 2 is pressed, Kira holds the phaser rifle at her hip
+facing where she faces, both hands on its grips, its muzzle 27 units
+ahead of the right hand's.
 
 Not done:
-- How a triangle's frame is set is a guess, so a point's turn may be
-  off, though not its place, since the offsets are a few units at most.
 - The meanings above are Reluva's readings of how the scripts use the
   natives: the order of a bone's axes, the axes `C3DApplyRotation` turns
   about, the actor's axes for `C3DApplyWorldRotation`, and what reaches
@@ -1403,11 +1402,16 @@ Not done:
   `C3DApplyWorldRotation`'s) back off. With the second's `Val` not 0,
   the chain's reach is done to the actor's own animation, before the
   layers go over it, rather than after them.
-- Type 2 points are read in the float copy's space: read in the
-  skeleton's, as the precomputed places are, more of them lie nearer
-  their mesh's surface (29 of 67, against 8), but the phaser rifle's
-  grips then put Kira's hands inside her, so which is right isn't
-  settled.
+- Points on triangles turn with their triangle's bone, and points from
+  the origin are in the skeleton's units ([mesh.md](../formats/unreal/mesh.md),
+  `reluva-tool ue-points`). With them, Kira holds the phaser rifle at
+  her hip, the right hand on its grip at the back and the left under the
+  barrel. That needed `Rotator * Rotator` (The Fallen's own operator,
+  `Object.uc`'s native 292) to turn the second rotator on in the
+  first's frame, as `CTV_Player` turns the player's weapon by its
+  `IK_PreRotate`: it was multiplying them part by part, so a weapon with
+  no pre-turn was left at no rotation at all, facing the world's X
+  whichever way she faced.
 
 ## Playing a level
 

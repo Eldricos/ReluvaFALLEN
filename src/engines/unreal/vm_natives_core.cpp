@@ -257,9 +257,19 @@ void registerCoreNatives(Vm& vm) {
     auto scaled = [](const Rot& r, float s) { return Rot{int32_t(float(r[0]) * s), int32_t(float(r[1]) * s), int32_t(float(r[2]) * s)}; };
     reg("Multiply_RotatorFloat", [=](NativeCall& c) { const Rot r = scaled(rot(c.args[0]), c.f(1)); c.result = R(r[0], r[1], r[2]); });
     reg("Multiply_FloatRotator", [=](NativeCall& c) { const Rot r = scaled(rot(c.args[1]), c.f(0)); c.result = R(r[0], r[1], r[2]); });
+    // The Fallen's own (Object.uc's native 292; the player's weapon is
+    // turned by its IK_PreRotate so): B turned on in A's frame, its axes
+    // taken in A's. A zero B leaves A as it is.
     reg("Multiply_RotatorRotator", [=](NativeCall& c) {
-        const Rot a = rot(c.args[0]), b = rot(c.args[1]);
-        c.result = R(a[0] * b[0], a[1] * b[1], a[2] * b[2]);
+        const auto a = axes(rot(c.args[0])), b = axes(rot(c.args[1]));
+        std::array<Vec, 3> out{};
+        for (size_t k = 0; k < 3; ++k)
+            for (size_t j = 0; j < 3; ++j)
+                out[k] = add(out[k], mul(a[j], b[k][j]));
+        const Vec &x = out[0], &y = out[1], &z = out[2];
+        const float u = 32768 / kPi;
+        c.result = R(int32_t(std::lround(std::atan2(x[2], std::sqrt(x[0] * x[0] + x[1] * x[1])) * u)),
+                     int32_t(std::lround(std::atan2(x[1], x[0]) * u)), int32_t(std::lround(std::atan2(-y[2], z[2]) * u)));
     });
     reg("Divide_RotatorFloat", [=](NativeCall& c) {
         const Rot r = scaled(rot(c.args[0]), c.f(1) != 0 ? 1 / c.f(1) : 0);

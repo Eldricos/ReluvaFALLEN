@@ -228,6 +228,10 @@ public:
     bool skeleton(std::string_view base, float fraction, const std::vector<Layer>& layers,
                   std::vector<std::array<float, 12>>& worlds, const Adjust* adjust = nullptr) const;
     int boneIndex(std::string_view name) const;
+    std::string boneName(int index) const;
+    // The bone that moves these vertices most (by their weights summed): a
+    // triangle's, which its attachment point turns with. -1 if none.
+    int mainBone(const std::array<int32_t, 3>& vertices) const;
     // The same in the skeleton's space (as Adjust).
     bool boneInSkeleton(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
                         Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust = nullptr) const;

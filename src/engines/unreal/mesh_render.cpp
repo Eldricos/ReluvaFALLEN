@@ -91,18 +91,6 @@ Vec3f placeMeshVertex(const Mesh& mesh, const Vec3f& v, MeshTurn turn, int yawQu
                       turn, yawQuarters);
 }
 
-Vec3f placeMeshFloatVector(const Mesh& mesh, const Vec3f& v, MeshTurn turn, int yawQuarters) {
-    // The float copy is the scaled vertices turned by the import turn; back
-    // from it by the turn's transpose.
-    Vec3f s = v;
-    if (mesh.importAxes) {
-        const auto& m = *mesh.importAxes;
-        s = {m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2], m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2],
-             m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2]};
-    }
-    return turnScaled(mesh, s, turn, yawQuarters);
-}
-
 Vec3f placeMeshScaled(const Mesh& mesh, const Vec3f& v, MeshTurn turn, int yawQuarters) {
     return turnScaled(mesh, v, turn, yawQuarters);
 }

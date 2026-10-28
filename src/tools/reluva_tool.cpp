@@ -107,6 +107,7 @@
 //   reluva-tool ue-run <game folder> <map | -all> [seconds]  run a level's scripts: start-up events,
 //                                                  then ticks; report errors and natives missing
 //   reluva-tool ue-extract <game folder> <package> <export>  write a texture as .tga (one that plays a second in), a sound or music
+//   reluva-tool ue-points <game folder>  check attachment points against the meshes' precomputed places
 //                                                  as the file it holds
 
 #include "common/audio/decode.h"
@@ -5129,6 +5130,139 @@ int cmdUeProbe(int argc, char** argv) {
     return 0;
 }
 
+// Checks how attachment points on triangles (type 1) are placed and
+// turned against the places The Fallen's meshes keep worked out in
+// advance (`<Animation><Point>Loc`, in the skeleton's units): each
+// animation posed through its frames, the point where it comes nearest
+// the place, and its axes there taken in the triangle's frame or in the
+// frame of the bone the triangle moves with (mesh.md).
+int cmdUePoints(int argc, char** argv) {
+    if (argc != 3) {
+        std::fprintf(stderr, "usage: reluva-tool ue-points <game folder>\n");
+        return 2;
+    }
+    using namespace reluva::unreal;
+    PackageSet set;
+    if (reluva::Error err = set.open(argv[2], "")) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    const std::vector<AnimationSet> sets = findAnimationSets(set);
+    auto sub = [](Vec3f a, Vec3f b) { return Vec3f{a[0] - b[0], a[1] - b[1], a[2] - b[2]}; };
+    auto dot = [](Vec3f a, Vec3f b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    auto cross = [](Vec3f a, Vec3f b) {
+        return Vec3f{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+    };
+    auto unit = [&](Vec3f v) {
+        const float l = std::sqrt(dot(v, v));
+        return l > 0 ? Vec3f{v[0] / l, v[1] / l, v[2] / l} : v;
+    };
+    // A point's axes (rows) in a frame (rows), and how well they match
+    // others: the rows' dot products summed, 3 for the same.
+    auto inFrame = [&](const std::array<Vec3f, 3>& axes, const std::array<Vec3f, 3>& frame) {
+        std::array<Vec3f, 3> out{};
+        for (size_t r = 0; r < 3; ++r) {
+            for (size_t j = 0; j < 3; ++j)
+                for (size_t q = 0; q < 3; ++q)
+                    out[r][q] += axes[r][j] * frame[j][q];
+            out[r] = unit(out[r]);
+        }
+        return out;
+    };
+    auto match = [&](const std::array<Vec3f, 3>& a, const std::array<Vec3f, 3>& b) {
+        return dot(a[0], b[0]) + dot(a[1], b[1]) + dot(a[2], b[2]);
+    };
+    // The axes as one (rows' dot products summed: 3 the same) and the X
+    // axis alone, either way (the barrel's line, for a gun's tip).
+    int places = 0, triangleX = 0, boneX = 0;
+    for (const std::string& name : set.names()) {
+        const Package* pkg = set.get(name);
+        if (!pkg)
+            continue;
+        for (size_t i = 0; i < pkg->exports().size(); ++i) {
+            if (!isMeshClass(pkg->className(int32_t(i) + 1)))
+                continue;
+            Mesh m;
+            if (readMesh(*pkg, int(i), m) || m.precomputedPoints.empty() || !m.bones)
+                continue;
+            const auto poser = LayeredPoser::open(*pkg, int(i), sets);
+            if (!poser)
+                continue;
+            auto skeletonOf = [&](const Vec3f& packed) {
+                return Vec3f{(packed[0] - m.origin[0]) * m.scale[0], (packed[1] - m.origin[1]) * m.scale[1],
+                             (packed[2] - m.origin[2]) * m.scale[2]};
+            };
+            for (const MeshAttachPoint& pre : m.precomputedPoints) {
+                // <Animation><Point>Loc: the longest point name that ends it.
+                if (pre.name.size() < 4 || pre.name.substr(pre.name.size() - 3) != "Loc")
+                    continue;
+                const std::string stem = pre.name.substr(0, pre.name.size() - 3);
+                const MeshAttachPoint* point = nullptr;
+                for (const MeshAttachPoint& p : m.attachPoints)
+                    if (p.type == 1 && p.triangle >= 0 && size_t(p.triangle) < m.tris.size() &&
+                        stem.size() > p.name.size() && stem.substr(stem.size() - p.name.size()) == p.name &&
+                        (!point || p.name.size() > point->name.size()))
+                        point = &p;
+                if (!point)
+                    continue;
+                const std::string anim = stem.substr(0, stem.size() - point->name.size());
+                const MeshTri& t = m.tris[size_t(point->triangle)];
+                const int bone = poser->mainBone(t.vertex);
+                // The frame where the point comes nearest the place.
+                float best = 1e30f, at = 0;
+                std::vector<Vec3f> verts;
+                for (int f = 0; f <= 60; ++f) {
+                    if (!poser->pose(anim, float(f) / 60, {}, verts))
+                        break;
+                    Vec3f middle{};
+                    for (size_t k = 0; k < 3; ++k)
+                        for (size_t c = 0; c < 3; ++c)
+                            middle[c] += skeletonOf(verts[size_t(t.vertex[k])])[c] / 3;
+                    const Vec3f d = sub(middle, pre.offset);
+                    if (dot(d, d) < best) {
+                        best = dot(d, d);
+                        at = float(f) / 60;
+                    }
+                }
+                if (best >= 1e30f) {
+                    std::printf("%-24s %-24s no animation %s\n", pkg->objectName(int32_t(i) + 1).c_str(), pre.name.c_str(),
+                                anim.c_str());
+                    continue;
+                }
+                poser->pose(anim, at, {}, verts);
+                Vec3f c[3];
+                for (size_t k = 0; k < 3; ++k)
+                    c[k] = skeletonOf(verts[size_t(t.vertex[k])]);
+                const Vec3f x = unit(sub(c[1], c[0])), z = unit(cross(sub(c[1], c[0]), sub(c[2], c[0])));
+                const std::array<Vec3f, 3> triangleAxes = inFrame(point->axes, {x, cross(z, x), z});
+                const float byTriangle = match(triangleAxes, pre.axes);
+                const float xTriangle = std::fabs(dot(triangleAxes[0], pre.axes[0]));
+                float byBone = -3, xBone = 0;
+                std::vector<std::array<float, 12>> worlds;
+                if (bone >= 0 && poser->skeleton(anim, at, {}, worlds) && size_t(bone) < worlds.size()) {
+                    std::array<Vec3f, 3> frame{};
+                    for (size_t r = 0; r < 3; ++r)
+                        frame[r] = unit({worlds[size_t(bone)][r * 3], worlds[size_t(bone)][r * 3 + 1],
+                                         worlds[size_t(bone)][r * 3 + 2]});
+                    const std::array<Vec3f, 3> boneAxes = inFrame(point->axes, frame);
+                    byBone = match(boneAxes, pre.axes);
+                    xBone = std::fabs(dot(boneAxes[0], pre.axes[0]));
+                }
+                ++places;
+                triangleX += xTriangle >= 0.95f;
+                boneX += xBone >= 0.95f;
+                std::printf("%-24s %-24s %5.1f units off at %.2f; axes by the triangle %5.2f (X %.2f), by %s %5.2f (X %.2f)\n",
+                            pkg->objectName(int32_t(i) + 1).c_str(), pre.name.c_str(), std::sqrt(best), at, byTriangle,
+                            xTriangle, poser->boneName(bone).c_str(), byBone, xBone);
+            }
+        }
+    }
+    if (places)
+        std::printf("%d places: X along the place's (within 0.95) taken in the triangle's axes %d, in its bone's %d\n",
+                    places, triangleX, boneX);
+    return 0;
+}
+
 int cmdUeExtract(int argc, char** argv) {
     if (argc != 5) {
         std::fprintf(stderr, "usage: reluva-tool ue-extract <game folder> <package name> <export> (writes <export>.tga or .wav...)\n");
@@ -5619,6 +5753,8 @@ int main(int argc, char** argv) {
         return cmdUeRun(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-extract") == 0)
         return cmdUeExtract(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-points") == 0)
+        return cmdUePoints(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-check") == 0)
         return cmdUeCheck(argc, argv);
 #endif
@@ -5674,6 +5810,7 @@ int main(int argc, char** argv) {
                  "  reluva-tool ue-exports <package> [filter]\n"
                  "  reluva-tool ue-props <package> <export>\n"
                  "  reluva-tool ue-extract <game folder> <package name> <export>\n"
+                 "  reluva-tool ue-points <game folder>\n"
                  "  reluva-tool ue-probe <package | game folder> <export> [-all | -at <offset> <bytes>]\n"
                  "  reluva-tool ue-script <game folder> <class | Class.Function | -all <dir>>\n"
                  "  reluva-tool ue-run <game folder> <map | -all> [seconds]\n"

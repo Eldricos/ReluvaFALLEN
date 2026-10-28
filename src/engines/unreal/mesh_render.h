@@ -49,14 +49,11 @@ Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, GpuMesh& out, Mesh
 
 // Where a mesh's packed vertex is, as uploadMesh places it (by Scale and
 // Origin, the import turn, RotOrigin), before the actor's own placement;
-// a vector in its float copy's space (its imported-model block's: type 2
-// attachment points') turned the same way; and one already in the
-// skeleton's units (Scale applied, from the origin: the precomputed
-// places). Unreal's axes.
+// and a point or vector already in the skeleton's units (Scale applied,
+// from the origin: type 2 attachment points, the precomputed places)
+// turned the same way. Unreal's axes.
 Vec3f placeMeshVertex(const Mesh& mesh, const Vec3f& packed, MeshTurn turn = MeshTurn::Reverse,
                       int yawQuarters = kImportYawQuarters);
-Vec3f placeMeshFloatVector(const Mesh& mesh, const Vec3f& v, MeshTurn turn = MeshTurn::Reverse,
-                           int yawQuarters = kImportYawQuarters);
 Vec3f placeMeshScaled(const Mesh& mesh, const Vec3f& v, MeshTurn turn = MeshTurn::Reverse,
                       int yawQuarters = kImportYawQuarters);
 

@@ -1471,6 +1471,27 @@ static void testVm() {
     CHECK(o->find(vm, "Total") && o->find(vm, "Total")->asInt() == 10 && o->find(vm, "Count")->asInt() == 0);
     vm.callEvent(o, "SetCount", {Value::intValue(5)});
     CHECK(o->find(vm, "Count")->asInt() == 5);
+    // Rotator * Rotator (The Fallen's): the second turned on in the first's
+    // frame; none leaves the first as it is.
+    if (const NativeFn* times = vm.findNative("Object.Multiply_RotatorRotator")) {
+        auto multiply = [&](std::array<int32_t, 3> a, std::array<int32_t, 3> b) {
+            NativeCall call{vm, nullptr, nullptr, {vm.rotatorValue(a[0], a[1], a[2]), vm.rotatorValue(b[0], b[1], b[2])},
+                            {true, true}, {}, -1, {}, {}};
+            (*times)(call);
+            return Vm::rotatorOf(call.result);
+        };
+        auto near = [](std::array<int32_t, 3> a, std::array<int32_t, 3> b) {
+            for (size_t k = 0; k < 3; ++k)
+                if (std::abs(int(int16_t(uint16_t((a[k] - b[k]) & 0xffff)))) > 2)
+                    return false;
+            return true;
+        };
+        CHECK(near(multiply({1000, 16384, 0}, {0, 0, 0}), {1000, 16384, 0}));
+        CHECK(near(multiply({0, 16384, 0}, {5000, 0, 0}), {5000, 16384, 0}));
+        CHECK(near(multiply({0, 0, 0}, {0, 8000, 0}), {0, 8000, 0}));
+    } else {
+        CHECK(false);
+    }
     vm.registerNative("Counter.Wait", [](NativeCall& call) { call.latentSeconds = call.f(0); });
     vm.gotoState(o, vm.name("Running"));
     CHECK(o->state && o->state->name == "Running" && o->codeAt == 0);
