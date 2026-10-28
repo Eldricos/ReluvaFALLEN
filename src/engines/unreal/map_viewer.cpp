@@ -814,6 +814,14 @@ void MapViewer::handleEvent(const Event& ev) {
         play_->consoleMouse(float(ev.mouseX), float(ev.mouseY));
         if (ev.type != EventType::MouseMove && (ev.button == MouseButton::Left || ev.button == MouseButton::Right))
             play_->consoleKey(ev.button == MouseButton::Left ? 1 : 2, ev.type == EventType::MouseDown);
+    } else if (play_ && !freeCam_ && play_->menuShowing() &&
+               (ev.type == EventType::MouseDown || ev.type == EventType::MouseUp) &&
+               (ev.button == MouseButton::Left || ev.button == MouseButton::Right)) {
+        // The HUD's menus: the buttons as the game binds them (LeftMouse
+        // Fire selects, RightMouse AltFire steps the choice), not a drag.
+        const bool left = ev.button == MouseButton::Left, down = ev.type == EventType::MouseDown;
+        if (!play_->consoleKey(left ? 1 : 2, down))
+            play_->pressKey(left ? "LeftMouse" : "RightMouse", down);
     } else if (ev.type == EventType::MouseDown && ev.button == MouseButton::Left) {
         dragging_ = true;
         lastX_ = ev.mouseX;
@@ -1411,7 +1419,40 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
 
 // --- Playing --------------------------------------------------------------------------------
 
+Error MapViewer::saveGame(const std::string& name) {
+    if (!play_)
+        return Error::fail("not playing");
+    return play_->level().saveGame(name);
+}
+
 void MapViewer::travel(const std::string& url) {
+    // "?RESTART": the map again, from where it began.
+    const std::string lower = fs::toLower(url);
+    if (lower.rfind("?restart", 0) == 0) {
+        const std::string portal = portal_;
+        startPlay(portal);
+        return;
+    }
+    // "?LOAD=Save1.dss": a saved game, on its own map.
+    if (const size_t load = lower.find("?load="); load != std::string::npos) {
+        std::string name = url.substr(load + 6);
+        name = name.substr(0, name.find('?'));
+        const std::filesystem::path file = ctx_.saveFolder / name;
+        ScriptLevel::SaveInfo info;
+        if (ctx_.saveFolder.empty() || ScriptLevel::readSaveInfo(file, info)) {
+            // None there: the game's word for it (its quick load).
+            if (play_)
+                play_->hudEvent(1010);
+            return;
+        }
+        if (!selectMap(info.map)) {
+            stopPlay();
+            playError_ = "load " + name + ": no map " + info.map;
+            return;
+        }
+        startPlay({}, file);
+        return;
+    }
     std::string where = url.substr(0, url.find('?'));
     const size_t cut = where.find_first_of("/#");
     const std::string portal = cut == std::string::npos ? std::string() : where.substr(cut + 1);
@@ -1426,13 +1467,13 @@ void MapViewer::travel(const std::string& url) {
     startPlay(portal);
 }
 
-void MapViewer::startPlay(const std::string& portal) {
+void MapViewer::startPlay(const std::string& portal, const std::filesystem::path& saved) {
     stopPlay();
     const Package* pkg = names_.empty() ? nullptr : ctx_.packages.get(names_[size_t(index_)]);
     if (!pkg || !error_.empty())
         return;
     auto play = std::make_unique<LevelPlay>(ctx_.packages, *pkg);
-    if (Error err = play->start(portal)) {
+    if (Error err = play->start(portal, saved, ctx_.saveFolder)) {
         playError_ = err.message;
         return;
     }
@@ -1451,6 +1492,7 @@ void MapViewer::startPlay(const std::string& portal) {
         moverActors_.push_back(it == byPath.end() ? nullptr : it->second);
     }
     playError_.clear();
+    portal_ = portal;
     playClock_ = 0;
     held_[Fast] = false;
     play_ = std::move(play);

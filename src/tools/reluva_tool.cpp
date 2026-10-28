@@ -4717,7 +4717,9 @@ private:
 
 // ue-play <game folder> <map> [step...]: the Maps page on that map, driven
 // by steps, its frames drawn in software. Steps: play (Enter), wait <s>,
-// travel <url> (to "Map/Portal" and playing, as the game's ClientTravel),
+// travel <url> (to "Map/Portal" and playing, as the game's ClientTravel;
+// "?load=Save1.dss" a saved game), saves <dir> (where games are saved),
+// savegame <name> (the level saved now: QuickSave, else the next Save<n>),
 // hold <key> <s> (w a s d left right up down space enter escape f), down <key> and
 // up <key> (held across other steps), press <key>, watch <actor> (the
 // camera let loose in front of it),
@@ -4726,8 +4728,8 @@ private:
 int cmdUePlay(int argc, char** argv) {
     if (argc < 4) {
         std::fprintf(stderr, "usage: reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | "
-                             "down <key> | up <key> | press <key> | travel <url> | watch <actor> | drag <dx> <dy> | "
-                             "click <x> <y> | shot <file.ppm>]...\n");
+                             "down <key> | up <key> | press <key> | travel <url> | saves <dir> | watch <actor> | "
+                             "drag <dx> <dy> | click <x> <y> | shot <file.ppm>]...\n");
         return 2;
     }
     using namespace reluva::unreal;
@@ -4792,6 +4794,11 @@ int cmdUePlay(int argc, char** argv) {
             for (int f = 0; f < int(s * 30); ++f)
                 frame();
             send(reluva::EventType::KeyUp, key);
+        } else if (step == "savegame" && i + 1 < argc) {
+            const reluva::Error err = page.saveGame(argv[++i]);
+            std::printf("savegame: %s\n", err ? err.message.c_str() : "saved");
+        } else if (step == "saves" && i + 1 < argc) {
+            ctx.saveFolder = argv[++i];
         } else if (step == "travel" && i + 1 < argc) {
             page.travel(argv[++i]);
             std::printf("travel: %s\n", page.playing() ? "playing" : "didn't start");

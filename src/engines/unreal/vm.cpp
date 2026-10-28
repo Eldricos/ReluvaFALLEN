@@ -8,6 +8,7 @@
 #include "common/fs.h"
 
 #include <algorithm>
+#include <optional>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -472,35 +473,43 @@ const std::string* Vm::configSetting(const std::string& section, const std::stri
     return nullptr;
 }
 
+// A localized text: `key` of [`section`] in `package`.int, else in
+// Classes.int (where The Fallen keeps its classes'), each looked for in the
+// int folder beside System, then in System (the engine's own: Engine.int,
+// SoftDrv.int). Surrounding quotes are dropped. Null if it's nowhere.
+std::optional<std::string> Vm::localized(const std::string& package, const std::string& section,
+                                         const std::string& key) {
+    const std::filesystem::path system = packages_.iniFile().parent_path();
+    for (const std::string& file : {package + ".int", std::string("Classes.int")})
+        for (const std::filesystem::path& folder : {system.parent_path() / "int", system.parent_path() / "Int", system}) {
+            const IniFile& ini = iniFileAt(folder / file);
+            auto sec = ini.find(lower(section));
+            if (sec == ini.end())
+                continue;
+            auto value = sec->second.find(lower(key));
+            if (value == sec->second.end())
+                continue;
+            std::string v = value->second;
+            if (v.size() >= 2 && v.front() == '"' && v.back() == '"')
+                v = v.substr(1, v.size() - 2);
+            return v;
+        }
+    return std::nullopt;
+}
+
 // A class's localized properties (the text players read: menu items,
-// messages) from the game's .int files: the class's own section
-// ([DS9_Hud], by its name alone) of its package's .int, else of
-// Classes.int, where The Fallen keeps them all; looked for in the int
-// folder beside System, then in System. What a parent's section set is
-// inherited with its defaults.
+// messages): its section, by its name alone ([DS9_Hud]), as localized()
+// finds it. What a parent's section set is inherited with its defaults.
 void Vm::applyLocalized(VmClass& c) {
     if (!c.package)
-        return;
-    const std::filesystem::path system = packages_.iniFile().parent_path();
-    std::vector<const std::map<std::string, std::string>*> sections;
-    for (const std::filesystem::path& folder : {system.parent_path() / "int", system.parent_path() / "Int", system})
-        for (const std::string& file : {c.package->name() + ".int", std::string("Classes.int")}) {
-            const IniFile& ini = iniFileAt(folder / file);
-            if (auto sec = ini.find(lower(c.name)); sec != ini.end())
-                sections.push_back(&sec->second);
-        }
-    if (sections.empty())
         return;
     for (const VmProperty* prop : c.properties) {
         if (!(prop->flags & propflag::Localized) || prop->type == VType::Struct)
             continue;
         for (int k = 0; k < prop->arrayDim; ++k) {
-            const std::string key = lower(prop->arrayDim > 1 ? prop->name + "[" + std::to_string(k) + "]" : prop->name);
-            for (const auto* sec : sections)
-                if (auto value = sec->find(key); value != sec->end()) {
-                    setFromText(*prop, c.defaults[size_t(prop->slot + k)], value->second);
-                    break;
-                }
+            const std::string key = prop->arrayDim > 1 ? prop->name + "[" + std::to_string(k) + "]" : prop->name;
+            if (const auto value = localized(c.package->name(), c.name, key))
+                setFromText(*prop, c.defaults[size_t(prop->slot + k)], *value);
         }
     }
 }

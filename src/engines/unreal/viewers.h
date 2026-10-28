@@ -67,6 +67,9 @@ struct ViewerContext {
     // How imported-model meshes are turned, on both 3D pages (M changes it).
     MeshTurn meshTurn = MeshTurn::Reverse;
     int meshYawQuarters = kImportYawQuarters; // and about Z (Y changes it)
+    // Where the game's saved games go (GameTarget::savePath's "Saves");
+    // empty: none can be saved.
+    std::filesystem::path saveFolder{};
     // The Fallen's shared animation sets, read the first time a page needs them.
     std::optional<std::vector<AnimationSet>> animationSets{};
     const std::vector<AnimationSet>& sets() {
@@ -240,6 +243,8 @@ public:
     // Shows the map of that name (once active); false if there's none.
     bool selectMap(const std::string& name);
     bool playing() const { return play_ != nullptr; }
+    // The level being played saved now, as the game's SaveGame command does.
+    Error saveGame(const std::string& name);
     // The game's ClientTravel ("CM01a_SW/CM01_A_Sisko01?options"): that
     // map loaded and played from the start the portal tags.
     void travel(const std::string& url);
@@ -325,7 +330,8 @@ private:
     MeshLight meshLightAt(const Vec3f& location) const;
 
     // Playing (Enter): the level live, drawn as its scripts have it.
-    void startPlay(const std::string& portal = {});
+    // From the start the portal tags, or from a saved game.
+    void startPlay(const std::string& portal = {}, const std::filesystem::path& saved = {});
     void stopPlay();
     void updatePlay(float dt);
     void drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right);
@@ -348,6 +354,7 @@ private:
     int liveMesh(const ObjectRef& mesh, const std::string& anim);
     std::unique_ptr<LevelPlay> play_;
     std::string playError_;
+    std::string portal_; // the start playing began at, for the game's ?RESTART
     std::vector<VmObject*> moverActors_; // each of movers_'s live actor
     std::map<std::pair<const Package*, int>, int> liveMeshes_;
     // Meshes posed at draw time for The Fallen's layered animations: each

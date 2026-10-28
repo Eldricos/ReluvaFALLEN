@@ -23,9 +23,17 @@ LevelPlay::LevelPlay(const PackageSet& packages, const Package& map)
         names_[k] = vm_->name(names[k]);
 }
 
-Error LevelPlay::start(const std::string& portal) {
+Error LevelPlay::start(const std::string& portal, const std::filesystem::path& saved,
+                       const std::filesystem::path& saveFolder) {
     if (Error err = level_->load())
         return err;
+    level_->setSaveFolder(saveFolder);
+    if (!saved.empty()) {
+        if (Error err = level_->restore(saved))
+            return err;
+        player_ = level_->player();
+        return Error::success();
+    }
     level_->beginPlay(defaultGameType(packages_));
     player_ = level_->login(iniSetting(packages_, "URL", "Class"), iniSetting(packages_, "URL", "Name"), loginError_,
                             portal);
@@ -196,6 +204,11 @@ std::string LevelPlay::takeTravel() {
 
 bool LevelPlay::quitAsked() const {
     return level_->quitAsked();
+}
+
+void LevelPlay::hudEvent(int code) {
+    if (const Value* hud = player_ && !player_->deleted ? player_->find(*vm_, "myHUD") : nullptr; hud && hud->asObject())
+        vm_->callEvent(hud->o, "HudEvent", {Value::intValue(code)});
 }
 
 LevelPlay::View LevelPlay::view() {

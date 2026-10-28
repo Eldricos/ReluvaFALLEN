@@ -21,6 +21,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <optional>
 #include <memory>
 #include <set>
 #include <string>
@@ -246,6 +247,8 @@ public:
     void applyConfig(VmClass& cls);
     // A class's localized properties from the .int files (Vm::applyLocalized).
     void applyLocalized(VmClass& cls);
+    std::optional<std::string> localized(const std::string& package, const std::string& section,
+                                         const std::string& key);
     const std::string* configSetting(const std::string& section, const std::string& key);
     void setConfig(const std::string& section, const std::string& key, const std::string& value);
     void setFromText(const VmProperty& prop, Value& v, const std::string& text);
@@ -275,6 +278,11 @@ public:
     void reportError(const std::string& what);
     // Where scripts are running: " in Class.Function", for natives' errors.
     std::string where() const;
+    // A state of a class or its parents, by name; null if none.
+    VmState* findState(VmClass* cls, NameId name);
+    // How many objects of each class have been given made-up names
+    // ("DS9_Hud0"...): a saved game's carry on from where it left off.
+    std::map<const VmClass*, int>& nameCounts() { return nameCounts_; }
 
 private:
     friend class Interpreter;
@@ -284,7 +292,6 @@ private:
     void addProperty(VmStruct& s, const Package& package, int exportIndex, const ScriptObject& so);
     void prepareCode(VmStruct& s);
     VmObject* classObject(VmClass* cls);
-    VmState* findState(VmClass* cls, NameId name);
     VmFunction* nativeFunction(int number);
     void scanNatives();
     Value readStruct(const VmStruct& st, const Package& package, Reader& r);

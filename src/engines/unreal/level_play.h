@@ -28,8 +28,11 @@ public:
 
     LevelPlay(const PackageSet& packages, const Package& map);
     // Starts the level and logs a player in (as the .ini's [URL] says), at
-    // the start tagged `portal` if one is given.
-    Error start(const std::string& portal = {});
+    // the start tagged `portal` if one is given; or, given a saved game of
+    // this map, carries on from it. `saveFolder`: where its games are
+    // saved and listed.
+    Error start(const std::string& portal = {}, const std::filesystem::path& saved = {},
+                const std::filesystem::path& saveFolder = {});
 
     // Moves the level on by `seconds` of real time, in whole ticks: at
     // most `maxTicks` at once, so when the scripts can't keep up the game
@@ -64,6 +67,8 @@ public:
     std::string takeTravel();
     // The game asked to quit (its menu's Quit).
     bool quitAsked() const;
+    // The HUD told of something (HudEvent: 1010, no game to quick load).
+    void hudEvent(int code);
 
     // Where the camera is, as the game puts it each frame
     // (PlayerCalcView): behind the player, or a cut scene's camera.

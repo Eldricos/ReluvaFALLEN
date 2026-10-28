@@ -66,6 +66,12 @@ std::string command(NativeCall& c, const std::string& text) {
             return "Class'" + section + "'";
         if (const std::string* v = c.vm.configSetting(section, w[2]))
             return *v;
+        // The engine's own settings no .ini here holds: the video options'
+        // world and skin detail. Taken as the first of the game's choices
+        // (HIGH, MEDIUM, LOW); Reluva's reading.
+        if (fs::toLower(section) == "windrv.windowsclient" &&
+            (fs::toLower(w[2]) == "texturedetail" || fs::toLower(w[2]) == "skindetail"))
+            return "High";
         if (VmClass* cls = c.vm.findClass(section))
             if (const VmProperty* p = cls->findProperty(c.vm.name(w[2])); p && size_t(p->slot) < cls->defaults.size())
                 return c.vm.toString(cls->defaults[size_t(p->slot)]);
@@ -119,6 +125,13 @@ std::string command(NativeCall& c, const std::string& text) {
         }
         return {};
     }
+    // "SaveGame [QuickSave]": the level saved (vm_save.cpp).
+    if (verb == "savegame") {
+        if (c.vm.level)
+            if (Error err = c.vm.level->saveGame(w.size() > 1 ? w[1] : std::string()); err && c.vm.logger)
+                c.vm.logger("SaveGame: " + err.message);
+        return {};
+    }
     if (verb == "exit" || verb == "quit") {
         if (c.vm.level)
             c.vm.level->quitAsked() = true;
@@ -134,7 +147,7 @@ std::string command(NativeCall& c, const std::string& text) {
     }
     if (verb == "getcurrentcolordepth" || verb == "getcolordepths")
         return "32";
-    // The rest (sound, saving, detail settings) do nothing yet.
+    // The rest (sound, detail settings) do nothing yet.
     return {};
 }
 

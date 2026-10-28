@@ -51,6 +51,8 @@ public:
         } audioOff{sys_};
 
         ViewerContext ctx{sys_, screen_, packages_, game_, warnings, audioOut ? &mixer : nullptr};
+        if (!target_.savePath.empty())
+            ctx.saveFolder = target_.savePath / "Saves";
         std::vector<std::unique_ptr<Page>> pages;
         pages.push_back(std::make_unique<MapViewer>(ctx));
         pages.push_back(std::make_unique<MeshViewer>(ctx));

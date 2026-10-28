@@ -5,8 +5,8 @@ Maps page plays a level (Enter), its scripts live, the player moved by
 the keyboard and mouse, seen from the game's own camera, the AI finding
 its way along the level's paths and the characters' lines shown as
 they're said, and its own HUD and menus drawn over it, the menus
-travelling from map to map. It isn't the game yet: nothing makes a
-sound, and games can't be saved or loaded. Every class of the game loads (`vm.cpp`), every default
+travelling from map to map, and games saved and loaded. It isn't the
+game yet: nothing makes a sound. Every class of the game loads (`vm.cpp`), every default
 property converts to its type, and all 74 maps start: their actors made,
 the game type spawned, the start-up events sent, the player logged in as
 the level's character, then twenty seconds of ticks, with no crash. The
@@ -68,8 +68,12 @@ Classes' `localized` properties, the text players read (menu items,
 messages), come from the game's `.int` files (`Vm::applyLocalized`): the
 class's own section, by its name alone (`[DS9_Hud]`), of its package's
 `.int`, else of `Classes.int`, where The Fallen keeps them all (2,131
-lines), in the `int` folder beside System. Without them the HUD's menus
-had bullets and no words ("RESUME GAME", "MISSION OBJECTIVES"...).
+lines). Each is looked for in the `int` folder beside System, then in
+System, where the engine's own are (Engine.int, UMenu.int, SoftDrv.int).
+Without them the HUD's menus had bullets and no words ("RESUME GAME",
+"MISSION OBJECTIVES"...). `Localize(Section, Key, Package)` reads the
+same files, without the quotes the engine's put round their values. One
+that's missing is `<?int?Package.Section.Key?>`, as the engine marks it.
 
 An object as a string (`string(Level)`, `$`) is its path, as UnrealScript
 gives it:
@@ -596,15 +600,74 @@ Console commands (`ConsoleCommand`, `vm_console.cpp`):
   the bindings. The controls page lists them ("LEFTMOUSE OR CTRL"), and
   the page's keys follow what it sets.
 - `GetCurrentRes`, `GetRes` give the page's size; the colour depth is 32.
+- The world and skin detail (`[WinDrv.WindowsClient]` `TextureDetail`,
+  `SkinDetail`) are the engine's own settings, which no shipped `.ini`
+  holds. They read as High, the first of the game's choices (Reluva's
+  reading).
+- `SaveGame [QuickSave]` saves the level (below).
 - `Exit` stops playing.
-- The rest (sound, saving, detail) do nothing yet.
+- The rest (sound, detail settings) do nothing yet.
 
-Not done:
-- Saving and loading games: Load Game has no games to list.
-- The video driver's caption: SoftDrv's isn't in any `.int`.
-- The world and skin detail lists: their values are the engine's
-  settings, which no `.ini` here holds.
-- The mouse in the HUD's own menus: their mouse code returns at once.
+The mouse in the HUD's own menus: its buttons, as the game binds them.
+The left (`Fire`) selects, as Enter does, and the right (`AltFire`)
+steps the choice on. Its movement does nothing: the HUD's
+`HandleMenuMouse` is compiled to return at once.
+
+On the intro level the player's health is 94: its `Intro` start is 410
+units above the floor, the player falls hidden from it, and the landing
+costs 6 (`TakeFallingDamage`, past −850 a second). Nothing at that start
+stops the fall, so this is the game's own doing; the menu hides it, and
+New Game starts a new player.
+
+### Saved games
+
+`vm_save.cpp` saves a level being played and starts one from a save. The
+file is Reluva's own: the original saves the level as a package, which
+this doesn't read or write. The files take the game's names, in the
+game's save folder (`Saves` in Reluva's folder for it): QuickSave.dsa,
+and Save1.dss, Save2.dss... A file holds:
+- **A header:** the map, a description ("QuickSave", or the level's
+  title, "DS9 - Computer Core"), and when it was saved.
+- **The objects:** the level's actors and every object they lead to that
+  the level made, not the packages' objects, nor the engine's viewport,
+  console and canvas. The map's own actors are written by their export,
+  the rest by class and name. Each has its properties, its state, where
+  its state code is, its Sleep and latent wait, the events it has
+  disabled, and its timer. A map actor missing from the file was
+  destroyed.
+- **The level's records:** the actors' order, the player and game type,
+  the time and ticks, what's touching, moves under way, falls,
+  animation waits and layers, skin channels, attachments, bends and IK,
+  the dialogue (how often each line's been said, the conversations
+  running), and the counts behind made-up names.
+- **The textures' properties:** the scripts change these (the HUD's
+  places, the FLC textures' playing), and the engine keeps them across a
+  load, its packages staying loaded.
+
+Loading starts the map as usual, then puts the file's level in place
+of `BeginPlay` and the player logging in. The player gets a new
+viewport and console, and `bJustLoaded`, as the engine sets it. The
+game isn't paused: it's saved paused (`ExecuteSaveGame`, `QuickSave`).
+
+The game's side is all script:
+- F6 (`QuickSave`) and the main menu's Save Game send `SaveGame`.
+- The Load Game list asks `DrawLoadGameList`, which hands the HUD each
+  game, newest first (`DrawLoadGameFile(Id, name, time)`).
+- `LoadByFileID(Id)` gives the HUD its file, and the HUD travels to
+  `?LOAD=Save1.dss`. The page loads that game's map and carries on
+  from it.
+- F5 (`QuickLoad`) asks to confirm, then travels to
+  `?load=QuickSave.dsa`. With none there, the HUD is told (`HudEvent`
+  1010) and says so.
+- `DeleteByFileID` deletes one.
+- `?RESTART` (`RestartLevel`) plays the map again from where it began.
+
+Checked on M04_KiraL1 (quick save, walk off, quick load: the same
+place, view and HUD) and with the menus' Save and Load.
+
+Not kept: what the engine works out again each tick (posed meshes,
+the colliders' list, the limbs' effectors) and the dialogue table's
+voice lengths.
 
 ### Documents and objectives
 
@@ -1045,7 +1108,9 @@ software renderer (`tools/soft_renderer.cpp`: textured, depth tested,
 blended triangles, enough to see a frame), driven by steps:
 `play`, `wait <s>`, `hold <key> <s>`, `down`/`up <key>`, `press <key>`
 (letters, `left` `right` `up` `down`, `space`, `enter`, `escape`, `f1`...),
-`travel <url>` (as the game's `ClientTravel`: "CM_SpaceStation/intro"),
+`travel <url>` (as the game's `ClientTravel`: "CM_SpaceStation/intro",
+"?load=QuickSave.dsa"), `saves <dir>` (where games are saved),
+`savegame <name>` (saved now: `QuickSave`, else the next `Save<n>`),
 `watch <actor>` (the camera let loose in front of a live actor),
 `drag <dx> <dy>`, `click <x> <y>`, `shot <file.ppm>`. Checked that way:
 - **M01_KiraL2:** Kira runs down the stone corridor from behind, the

@@ -325,6 +325,21 @@ public:
     // whether it asked to quit (ConsoleCommand "Exit").
     // The player's console (its viewport's), if it has one.
     VmObject* console();
+
+    // Saved games (vm_save.cpp), in the folder the page gives: Reluva's
+    // own files, under the game's names (QuickSave.dsa, Save<n>.dss).
+    struct SaveInfo {
+        std::filesystem::path file;
+        std::string map, description; // the map's name; "QuickSave" or the level's title
+        int64_t time = 0;              // when, in seconds since 1970
+    };
+    void setSaveFolder(std::filesystem::path folder) { saveFolder_ = std::move(folder); }
+    static Error readSaveInfo(const std::filesystem::path& file, SaveInfo& out);
+    std::vector<SaveInfo> savedGames() const;
+    Error saveGame(const std::string& name);
+    // The level as a saved game of this map has it, in place of
+    // beginPlay() and login().
+    Error restore(const std::filesystem::path& file);
     std::set<int>& keysDown() { return keysDown_; }
     std::string& travel() { return travel_; }
     bool& quitAsked() { return quitAsked_; }
@@ -343,6 +358,7 @@ public:
 
 private:
     void init(VmObject* actor); // the engine's own properties of a new actor
+    void attachViewport();      // the player's viewport and console
     Value* prop(VmObject* a, const char* name);
     void updateTouching(VmObject* a);
     void steer(VmObject* pawn, float seconds);
@@ -508,6 +524,7 @@ private:
     std::string travel_;
     bool quitAsked_ = false;
     bool fastForward_ = false;
+    std::filesystem::path saveFolder_;
 };
 
 // A setting from a game's .ini ("Engine.Engine", "DefaultGame"); empty if
@@ -558,6 +575,8 @@ void registerDocumentNatives(Vm& vm);
 void registerCanvasNatives(Vm& vm);
 // The console's commands, keys and travel (vm_console.cpp).
 void registerConsoleNatives(Vm& vm);
+// The HUD's saved games list (vm_save.cpp).
+void registerSaveNatives(Vm& vm);
 // A map's reach list as stored (object references, not yet actors).
 struct RawReachSpec {
     int distance = 0, start = 0, end = 0, radius = 0, height = 0, flags = 0;

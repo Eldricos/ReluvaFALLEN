@@ -243,8 +243,17 @@ VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& 
         error = "Login refused: " + (message.s.empty() ? std::string("no reason given") : message.s);
         return nullptr;
     }
-    // The engine's side of the player: a viewport (a class with no script,
-    // made up as a kind of Player) with the .ini's console.
+    attachViewport();
+    vm_.callEvent(player_, "Possess");
+    vm_.callEvent(game_, "AcceptInventory", {Value::objectValue(player_)});
+    vm_.callEvent(player_, "TravelPostAccept");
+    vm_.callEvent(game_, "PostLogin", {Value::objectValue(player_)});
+    return player_;
+}
+
+// The engine's side of the player: a viewport (a class with no script,
+// made up as a kind of Player) with the .ini's console.
+void ScriptLevel::attachViewport() {
     VmClass* playerBase = vm_.findClass("Engine.Player");
     VmClass* viewportClass = vm_.defineIntrinsic("Viewport", playerBase);
     VmObject* viewport = vm_.create(viewportClass, vm_.name("Viewport0"));
@@ -259,11 +268,6 @@ VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& 
     }
     if (Value* v = player_->find(vm_, "Player"))
         v->o = viewport;
-    vm_.callEvent(player_, "Possess");
-    vm_.callEvent(game_, "AcceptInventory", {Value::objectValue(player_)});
-    vm_.callEvent(player_, "TravelPostAccept");
-    vm_.callEvent(game_, "PostLogin", {Value::objectValue(player_)});
-    return player_;
 }
 
 Value ScriptLevel::regionAt(const std::array<float, 3>& p) {
@@ -589,6 +593,7 @@ void registerEngineNatives(Vm& vm) {
     registerDocumentNatives(vm);
     registerCanvasNatives(vm);
     registerConsoleNatives(vm);
+    registerSaveNatives(vm);
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     auto B = [](bool v) { return Value::boolValue(v); };
 

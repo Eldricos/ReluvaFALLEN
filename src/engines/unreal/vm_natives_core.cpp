@@ -361,7 +361,13 @@ void registerCoreNatives(Vm& vm) {
         if (c.vm.logger)
             c.vm.logger("ScriptWarning: " + c.s(0));
     });
-    reg("Localize", [=](NativeCall& c) { c.result = S(""); });
+    // Localize(string SectionName, string KeyName, string PackageName): its
+    // text from the .int files (Vm::localized), else "<?...?>" as the
+    // engine marks a missing one.
+    reg("Localize", [=](NativeCall& c) {
+        const auto v = c.vm.localized(c.s(2), c.s(0), c.s(1));
+        c.result = S(v ? *v : "<?int?" + c.s(2) + "." + c.s(0) + "." + c.s(1) + "?>");
+    });
     reg("GotoState", [=](NativeCall& c) {
         const NameId state = c.given.size() > 0 && c.given[0] ? c.i(0) : 0;
         c.vm.gotoState(c.self, state, c.given.size() > 1 && c.given[1] ? c.i(1) : 0);
