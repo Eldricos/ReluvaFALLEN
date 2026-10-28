@@ -114,7 +114,13 @@ sets its pixel to at least its heat):
   the clouds and Stars dot heat at random near the spot; the lightnings
   draw jagged lines (Line and Ramp to the point A, B; Sphere outwards).
   At most `SparksLimit` moving sparks at once.
-- Not yet: `DrawMode`'s lathes (2 textures) are drawn as normal.
+- `DrawMode` (`dmode` in Fire.u: DRAW_Normal, DRAW_Lathe, DRAW_Lathe_2
+  to DRAW_Lathe_4): a lathe turns the sparks round the texture's
+  middle, each spark's heat put again at its copies turned 1/2, 1/3 or
+  1/4 of the way round for Lathe_2 to Lathe_4, and right round, a pixel
+  apart, for DRAW_Lathe. Only the Cardassian phaser's `pulsecap` (in
+  CARD.u and DS9.u) uses one, Lathe_4: its sparks, a glow round the
+  middle already, become four-fold.
 
 The 108 fire textures hold 26,859 sparks; Sparkle (9,403), Jugglers,
 Burn, Emit, Signal and Blaze are most of them. Many textures are
@@ -138,8 +144,15 @@ AreaClamp holding cells flat; the taps now and then.
 
 A wet texture shows its `SourceTexture` with each pixel moved by the
 slope there (times `WaveAmp` / 128, up to 16 pixels); water and wave
-textures show the slope through their palette (128 flat). WaveTexture's
-bump-map lighting isn't done yet.
+textures show the slope through their palette (128 flat). A wave
+texture is lit instead, as a bumpy surface (its slope, without
+`WaveAmp`'s scaling, which is the wet textures' distortion): from the
+direction `BumpMapAngle` (256 a turn), slopes facing the light brighter
+and those facing away darker by `BumpMapLight` / 128; past a slope of
+(255 - `PhongSize`) / 4 towards it, a highlight adds `PhongRange` / 64
+times as much again. The four wave textures (`FX.Lripple04_a` and the
+disruptor's ring, hit and MyTex4) have palettes dark at 128 and bright
+above, so it's their crests that show.
 
 ### Ice (IceTexture)
 

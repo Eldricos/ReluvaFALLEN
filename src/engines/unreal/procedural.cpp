@@ -150,6 +150,10 @@ public:
         keep_ = props.byte("RenderHeat", 220);
         masked_ = props.boolean("bMasked");
         limit_ = size_t(std::clamp<int32_t>(props.integer("SparksLimit", 1024), 16, 4096));
+        // DrawMode (dmode in Fire.u): DRAW_Normal, DRAW_Lathe, then
+        // DRAW_Lathe_2 to _4, the sparks repeated 2 to 4 times round.
+        const uint8_t mode = props.byte("DrawMode");
+        lathe_ = mode == 1 ? 1 : mode >= 2 && mode <= 4 ? mode : 0;
         heat_.assign(size_t(w) * size_t(h), 0);
         next_.assign(heat_.size(), 0);
         for (SparkData& s : sparks_) {
@@ -187,8 +191,20 @@ private:
         return heat_[size_t(y) * size_t(w_) + size_t(x)];
     }
     void put(int x, int y, float heat) {
+        const auto h = uint8_t(std::clamp(heat, 0.0f, 255.0f));
         uint8_t& v = at(x, y);
-        v = std::max(v, uint8_t(std::clamp(heat, 0.0f, 255.0f)));
+        v = std::max(v, h);
+        if (!lathe_)
+            return;
+        // Turned round the middle: as many copies as the lathe has, or
+        // with DRAW_Lathe one a pixel all the way round.
+        const float dx = float(x) + 0.5f - float(w_) / 2, dy = float(y) + 0.5f - float(h_) / 2;
+        const int copies = lathe_ > 1 ? lathe_ : std::clamp(int(std::ceil(2 * kPi * std::hypot(dx, dy))), 1, 1024);
+        for (int k = 1; k < copies; ++k) {
+            const float a = 2 * kPi * float(k) / float(copies), c = std::cos(a), sn = std::sin(a);
+            uint8_t& u = at(int(std::floor(float(w_) / 2 + dx * c - dy * sn)), int(std::floor(float(h_) / 2 + dx * sn + dy * c)));
+            u = std::max(u, h);
+        }
     }
     void emit(float x, float y, float vx, float vy, float heat, int life, float gravity = 0) {
         if (particles_.size() < limit_)
@@ -371,6 +387,7 @@ private:
     bool rising_ = false, masked_ = false;
     int keep_ = 220;
     size_t limit_ = 1024;
+    int lathe_ = 0; // copies round the middle (1: a ring), 0 for none
     uint32_t step_ = 0;
     float pending_ = 0;
 };
@@ -402,8 +419,20 @@ public:
           const char* kind)
         : w_(w), h_(h), fw_(std::max(1, w / 2)), fh_(std::max(1, h / 2)), palette_(palette), drops_(std::move(drops)),
           source_(std::move(source)), kind_(kind), random_(uint32_t(w * 31 + h)) {
-        amplitude_ = float(props.byte("WaveAmp", 128)) / 128;
+        amplitude_ = std::max(1.0f, float(props.byte("WaveAmp", 128))) / 128;
         masked_ = props.boolean("bMasked");
+        // A wave texture is lit as a bumpy surface: from BumpMapAngle
+        // round (256 a turn), BumpMapLight strong, slopes facing the light
+        // past what PhongSize leaves (the larger, the sooner) shining by
+        // PhongRange.
+        if (std::string_view(kind) == "wave") {
+            const float angle = 2 * kPi * float(props.byte("BumpMapAngle")) / 256;
+            lightX_ = std::cos(angle) * float(props.byte("BumpMapLight", 32)) / 128;
+            lightY_ = std::sin(angle) * float(props.byte("BumpMapLight", 32)) / 128;
+            phongFrom_ = float(255 - props.byte("PhongSize")) / 4;
+            phong_ = float(props.byte("PhongRange")) / 64;
+            bump_ = true;
+        }
         height_.assign(size_t(fw_) * size_t(fh_), 0);
         before_ = next_ = height_;
         for (DropData& d : drops_) {
@@ -547,6 +576,12 @@ private:
                     ux = ux < 0 ? ux + w_ : ux >= w_ ? ux - w_ : ux;
                     uy = uy < 0 ? uy + h_ : uy >= h_ ? uy - h_ : uy;
                     std::copy_n(source_.pixel(ux, uy), 4, p);
+                } else if (bump_) {
+                    const float shade = (sx * lightX_ + sy * lightY_) / amplitude_;
+                    const float shine = shade > phongFrom_ ? (shade - phongFrom_) * phong_ : 0;
+                    const int v = std::clamp(128 + int(shade + shine), 0, 255);
+                    std::copy_n(palette_.rgba.data() + size_t(v) * 4, 3, p);
+                    p[3] = masked_ && v == 0 ? 0 : 255;
                 } else {
                     const int v = std::clamp(128 + int((sx + sy) / 4), 0, 255);
                     std::copy_n(palette_.rgba.data() + size_t(v) * 4, 3, p);
@@ -566,6 +601,8 @@ private:
     std::vector<float> slopeX_, slopeY_;
     float amplitude_ = 1;
     bool masked_ = false;
+    bool bump_ = false; // a wave texture: lit, below
+    float lightX_ = 0, lightY_ = 0, phongFrom_ = 0, phong_ = 0;
     uint32_t step_ = 0;
     float pending_ = 0;
 };

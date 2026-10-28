@@ -106,7 +106,7 @@
 //                                                     its frames drawn in software and saved as PPM files
 //   reluva-tool ue-run <game folder> <map | -all> [seconds]  run a level's scripts: start-up events,
 //                                                  then ticks; report errors and natives missing
-//   reluva-tool ue-extract <game folder> <package> <export>  write a texture as .tga, a sound or music
+//   reluva-tool ue-extract <game folder> <package> <export>  write a texture as .tga (one that plays a second in), a sound or music
 //                                                  as the file it holds
 
 #include "common/audio/decode.h"
@@ -5158,6 +5158,12 @@ int cmdUeExtract(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", err.message.c_str());
             return 1;
         }
+        // One that plays (fire, water...): as it is a second in.
+        if (isAnimatedTextureClass(cls))
+            if (auto anim = openAnimatedTexture(set, *pkg, index)) {
+                anim->advance(1);
+                img = anim->image();
+            }
         // An uncompressed 32-bit TGA, rows top to bottom.
         std::vector<uint8_t> tga(18, 0);
         tga[2] = 2;
