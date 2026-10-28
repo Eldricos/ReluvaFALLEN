@@ -274,6 +274,14 @@ The movement: 187,000 moves, 6,837 landings, 8,341 touches.
   again at one spot.
 - 367 walks to a goal given up: SR3_Leech mostly.
 
+`ue-run`'s "drawn as nothing" and "lights at brightness 0" are the
+game's own: over all maps, the actors with no DrawType are trigger
+lights (489), exploding walls and breaking glass waiting to break,
+decals (drawn as decals), the HUD's portrait actors, triggers and sound
+actors; the dark lights are TriggerLights that start off (1,300) and
+plain Lights placed with brightness 0 (226: TrainingRoom's, the
+Promenade's and Ops' 30 each).
+
 What's left before play, by what `ue-run` reports:
 
 - **Natives not written**: none that a map calls in its first seconds.
