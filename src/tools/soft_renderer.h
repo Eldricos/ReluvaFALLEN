@@ -6,8 +6,9 @@
 // A software gfx::Renderer3D for reluva-tool: draws a page's frames into
 // memory so they can be saved and looked at without a GPU (on a machine
 // with none, or in a test). It does what a level's drawing needs to be
-// recognisable: triangles clipped at the near plane, textured (nearest
-// texel, wrapping or clamped) and coloured as the draw call says (its
+// recognisable: triangles clipped at the near plane, textured (bilinear,
+// as the GPU draws them, or nearest where the texture asks; wrapping or
+// clamped) and coloured as the draw call says (its
 // constant, the vertices' colours, or its lighting), depth tested,
 // alpha tested and blended, with the overlay on top. Not done: deforms,
 // texture coordinate rows and turbulence, fog, dynamic lights, stencil,
@@ -69,7 +70,7 @@ private:
     std::vector<gfx::DynamicLight> lights_;
     struct Texture {
         int w = 0, h = 0;
-        bool clamp = false;
+        bool clamp = false, nearest = false;
         std::vector<uint8_t> rgba;
     };
     struct Mesh {

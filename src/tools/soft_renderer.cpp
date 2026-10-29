@@ -60,6 +60,7 @@ Error SoftRenderer3D::createTexture(int width, int height, const uint8_t* rgba, 
     t.w = width;
     t.h = height;
     t.clamp = params.clamp;
+    t.nearest = params.nearest;
     t.rgba.assign(rgba, rgba + size_t(width) * size_t(height) * 4);
     out = nextId_++;
     textures_[out] = std::move(t);
@@ -320,17 +321,26 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                     }
                     if (tex && !call.dynamicLights) {
                         float u = attr(&ClipVertex::u), v = attr(&ClipVertex::v);
-                        int tx = int(std::floor(u * float(tex->w))), ty = int(std::floor(v * float(tex->h)));
-                        if (tex->clamp) {
-                            tx = std::clamp(tx, 0, tex->w - 1);
-                            ty = std::clamp(ty, 0, tex->h - 1);
-                        } else {
-                            tx = ((tx % tex->w) + tex->w) % tex->w;
-                            ty = ((ty % tex->h) + tex->h) % tex->h;
+                        auto wrap = [&](int c, int n) { return tex->clamp ? std::clamp(c, 0, n - 1) : ((c % n) + n) % n; };
+                        auto at = [&](int x, int y) {
+                            return &tex->rgba[(size_t(wrap(y, tex->h)) * size_t(tex->w) + size_t(wrap(x, tex->w))) * 4];
+                        };
+                        float texel[4];
+                        if (tex->nearest) {
+                            const uint8_t* t = at(int(std::floor(u * float(tex->w))), int(std::floor(v * float(tex->h))));
+                            for (int k = 0; k < 4; ++k)
+                                texel[k] = float(t[k]);
+                        } else { // between the four nearest texels' centres
+                            const float fx = u * float(tex->w) - 0.5f, fy = v * float(tex->h) - 0.5f;
+                            const int x0 = int(std::floor(fx)), y0 = int(std::floor(fy));
+                            const float ax = fx - float(x0), ay = fy - float(y0);
+                            const uint8_t *a = at(x0, y0), *b = at(x0 + 1, y0), *c = at(x0, y0 + 1), *d = at(x0 + 1, y0 + 1);
+                            for (int k = 0; k < 4; ++k)
+                                texel[k] = (float(a[k]) * (1 - ax) + float(b[k]) * ax) * (1 - ay) +
+                                           (float(c[k]) * (1 - ax) + float(d[k]) * ax) * ay;
                         }
-                        const uint8_t* texel = &tex->rgba[(size_t(ty) * size_t(tex->w) + size_t(tx)) * 4];
                         for (int k = 0; k < 4; ++k)
-                            src[k] *= float(texel[k]) / 255.0f;
+                            src[k] *= texel[k] / 255.0f;
                     }
                     float alpha = src[3];
                     if (call.dynamicLightsTextured)
