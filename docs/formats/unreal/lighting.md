@@ -220,6 +220,14 @@ against the same views here, matched shot for shot in cut scenes:
   the same in both, is lighter too). So the falloff stays linear (1 -
   (d/r)^2 brightened some dark areas to it and others past it) and the
   light at most 1 (2 burnt out faces and changed little else).
+- The HUD's panels are paler in the recording, (93,86,180) against
+  (63,51,150): not translucency (their insides are black in both) but
+  the display curve, undone on ours (87,74,169).
+- Not found: the credits' starfield. The sky there is unlit
+  `ds9skybox.stars.starbg1a`, 40 bright stars to 256x256 texels; the
+  recording shows about 6 to 1000 pixels, ten times what the texture
+  can give, as bright 3-pixel blobs. Something else draws them (or
+  another texture); not identified.
 - Not found: what lights the station in the credits (CM_SpaceStation).
   Its surfaces have lightmaps but the level's lights reach few of their
   samples, and in the original it's evenly bright.
