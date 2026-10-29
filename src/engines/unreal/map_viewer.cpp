@@ -1109,6 +1109,7 @@ void MapViewer::update(uint64_t nowMs) {
     if (animate_)
         animTime_ += dt;
     if (play_) {
+        coronaDt_ = dt;
         drawLiveActors(forward, right);
     } else {
         for (const MeshDraw& d : meshActors_) {
@@ -1302,6 +1303,8 @@ void MapViewer::drawSprites(const std::vector<SpriteDraw>& sprites, const gfx::V
                 call.model[12 + k] = d.at[k];
             }
             call.state.depthBias = d.oriented;
+            if (d.onTop)
+                call.state.depthTest = false;
             call.texture = textured_ ? d.texture : 0;
             call.color = {d.color[0], d.color[1], d.color[2], 1};
             call.state.cull = gfx::Cull::None;
@@ -1944,7 +1947,49 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
         if (play_->mayBeSeen(a, zonesSeen_))
             drawLiveActor(a, sprites);
     addDecals(sprites);
+    addCoronas(sprites, forward, coronaDt_);
     drawSprites(sprites, forward, right);
+}
+
+// A corona is the light's texture glowing where the light is, added over
+// everything, the same size on the screen however far it is: its texture
+// times its DrawScale, times 8 on a 960-wide frame (the credits station's
+// flares, DrawScale 0.025 and 0.05 of a 128 texture, were about 15 and 22
+// pixels across in a recording of the original, their glow's visible part
+// about 60% of the quad). Shown while the level's walls aren't between it
+// and the camera, fading in and out over a fifth of a second (Reluva's
+// reading: the original's code isn't known).
+void MapViewer::addCoronas(std::vector<SpriteDraw>& sprites, const gfx::Vec3& forward, float dt) {
+    play_->coronas(coronaScratch_);
+    const Vec3f eye{pos_[0], -pos_[1], pos_[2]};
+    const float tanHalf = std::tan(std::clamp(fov_, 1.0f, 170.0f) * kPi / 360);
+    std::map<VmObject*, float> fades;
+    for (const LevelPlay::Corona& c : coronaScratch_) {
+        const gfx::Vec3 at = toWorld(c.location);
+        const float depth = (at[0] - pos_[0]) * forward[0] + (at[1] - pos_[1]) * forward[1] + (at[2] - pos_[2]) * forward[2];
+        const bool zoneSeen = c.zone < 0 || c.zone >= 64 || ((zonesSeen_ >> c.zone) & 1);
+        const bool visible = depth > 8 && zoneSeen && !play_->wallBetween(eye, c.location);
+        auto old = coronaFade_.find(c.actor);
+        float fade = old == coronaFade_.end() ? (visible ? 1.0f : 0.0f) : old->second;
+        fade = std::clamp(fade + (visible ? 5.0f : -5.0f) * dt, 0.0f, 1.0f);
+        fades[c.actor] = fade;
+        if (fade <= 0 || depth <= 8)
+            continue;
+        const auto [texture, size] = textureOf(c.texture);
+        if (!texture)
+            continue;
+        const float pixels = float(size[0]) * c.drawScale * 8 * float(kFrameW) / 960;
+        const float world = pixels * depth * 2 * tanHalf / float(kFrameW);
+        SpriteDraw d;
+        d.texture = texture;
+        d.at = at;
+        d.width = d.height = world;
+        d.style = kStyleTranslucent;
+        d.color = {fade, fade, fade};
+        d.onTop = true;
+        sprites.push_back(d);
+    }
+    coronaFade_ = std::move(fades);
 }
 
 // One of the level's actors, as it looks now: a mesh drawn, a sprite kept

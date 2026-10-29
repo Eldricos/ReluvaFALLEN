@@ -224,6 +224,22 @@ against the same views here, matched shot for shot in cut scenes:
   Its surfaces have lightmaps but the level's lights reach few of their
   samples, and in the original it's evenly bright.
 
+## Coronas
+
+A light with `bCorona` (382 of The Fallen's, in 33 maps, and some
+projectiles) draws a corona: its `Skin` (else its `Texture`, the lens
+flares of `ds9genFX.LensFlares`) as a glow where it is, added over
+everything, the same size on the screen however far away: the texture's
+width times `DrawScale` times 8 on a 960-wide frame. In a recording of
+the original the credits station's flares (`coronaora02` at 0.025,
+`coronaora01` at 0.05, both 128 wide) were about 15 and 22 pixels across,
+the glow's visible part about 60% of its quad. The light's own
+brightness doesn't matter: those have `LightBrightness` 0 and glow in
+their texture's orange. Shown only while the level's walls aren't between
+the camera and the light (a light inside its lamp's fixture counts as
+seen) and its zone is seen, fading in and out over a fifth of a second.
+Reluva's reading: the original's code isn't known (`MapViewer::addCoronas`).
+
 ## Drawing
 
 Lightmaps are packed into 1024x1024 pages, each with a one-texel border

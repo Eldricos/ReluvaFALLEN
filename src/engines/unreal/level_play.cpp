@@ -19,7 +19,7 @@ LevelPlay::LevelPlay(const PackageSet& packages, const Package& map)
                                      "bHidden",  "Mesh",     "Skin",     "Texture",   "MultiSkins",
                                      "AnimSequence", "AnimFrame", "AnimRate", "bAnimLoop", "Style", "ScaleGlow",
                                      "LastRenderTime", "bUnlit", "bMultiMeshRenderInitial", "Region",
-                                     "AmbientSound", "SoundRadius", "SoundVolume", "SoundPitch"};
+                                     "AmbientSound", "SoundRadius", "SoundVolume", "SoundPitch", "bCorona"};
     for (size_t k = 0; k < FieldCount; ++k)
         names_[k] = vm_->name(names[k]);
 }
@@ -388,6 +388,38 @@ bool LevelPlay::mayBeSeen(VmObject* a, uint64_t zones) {
 
 bool LevelPlay::wallBetween(const Vec3f& from, const Vec3f& to) {
     return level_->worldBetween({from[0], from[1], from[2]}, {to[0], to[1], to[2]}, 24);
+}
+
+void LevelPlay::coronas(std::vector<Corona>& out) {
+    out.clear();
+    for (VmObject* a : level_->actors()) {
+        if (a->deleted || !a->cls)
+            continue;
+        const std::array<int, FieldCount>& slot = slotsOf(a->cls);
+        auto at = [&](Field f) -> const Value* {
+            const int k = slot[size_t(f)];
+            return k >= 0 && size_t(k) < a->values.size() ? &a->values[size_t(k)] : nullptr;
+        };
+        const Value* on = at(CoronaField);
+        if (!on || !on->asBool())
+            continue;
+        Corona c;
+        c.actor = a;
+        c.texture = refOf(at(Skin));
+        if (!c.texture)
+            c.texture = refOf(at(Texture));
+        if (!c.texture)
+            continue;
+        if (const Value* v = at(Location)) {
+            const auto l = Vm::vectorOf(*v);
+            c.location = {l[0], l[1], l[2]};
+        }
+        if (const Value* v = at(DrawScale))
+            c.drawScale = v->asFloat();
+        if (const Value* r = at(Region); r && regionZoneField_ >= 0 && size_t(regionZoneField_) < r->fields.size())
+            c.zone = r->fields[size_t(regionZoneField_)].asInt();
+        out.push_back(c);
+    }
 }
 
 bool LevelPlay::look(VmObject* a, Look& out) {

@@ -152,6 +152,17 @@ public:
     // bit for each of the level's zones seen) if its zone is known. Cheap,
     // to pass over the rest before look().
     bool mayBeSeen(VmObject* actor, uint64_t zones);
+    // The lights drawing a corona (bCorona): where, its texture (the
+    // actor's Skin, else its Texture), DrawScale, and its zone (-1 not
+    // known). Hidden or not: a light actor is hidden, its corona isn't.
+    struct Corona {
+        VmObject* actor = nullptr;
+        Vec3f location{};
+        ObjectRef texture;
+        float drawScale = 1;
+        int zone = -1;
+    };
+    void coronas(std::vector<Corona>& out);
     // Its copies (The Fallen's MultiMesh: particles, sparks, a beam's
     // sections), each drawn as it is, in its place, turned and scaled
     // (AxisScale, along its own axes), glowing and in its style; with its
@@ -202,7 +213,7 @@ private:
     // frame took as long as the scripts' ticks).
     enum Field { Location, PrePivot, Rotation, DrawScale, DrawType, Hidden, MeshField, Skin, Texture, MultiSkins,
                  AnimSequence, AnimFrame, AnimRate, AnimLoop, Style, ScaleGlow, LastRenderTime, Unlit,
-                 RenderInitial, Region, AmbientSoundField, SoundRadius, SoundVolume, SoundPitch, FieldCount };
+                 RenderInitial, Region, AmbientSoundField, SoundRadius, SoundVolume, SoundPitch, CoronaField, FieldCount };
     const std::array<int, FieldCount>& slotsOf(const VmClass* cls);
     int regionZoneField_ = -1; // ZoneNumber's place in PointRegion
     std::unordered_map<const VmClass*, std::array<int, FieldCount>> slots_;

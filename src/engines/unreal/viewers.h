@@ -409,7 +409,14 @@ private:
         // the camera so it shows on the surface it's on.
         bool oriented = false;
         gfx::Vec3 right{}, up{};
+        bool onTop = false; // drawn over everything (a corona: hidden by walls by a trace instead)
     };
+    // Lights' coronas while playing (bCorona): added to `sprites`, each
+    // fading in and out as walls come between it and the camera.
+    void addCoronas(std::vector<SpriteDraw>& sprites, const gfx::Vec3& forward, float dt);
+    std::map<VmObject*, float> coronaFade_;
+    std::vector<LevelPlay::Corona> coronaScratch_;
+    float coronaDt_ = 0;
     void drawCopies(VmObject* actor, const LevelPlay::Look& look, const std::vector<LevelPlay::Copy>& copies,
                     std::vector<SpriteDraw>& sprites);
     void addDecals(std::vector<SpriteDraw>& sprites);
