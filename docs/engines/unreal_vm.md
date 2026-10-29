@@ -1573,7 +1573,9 @@ blended triangles, enough to see a frame), driven by steps:
 facing yaw degrees, falling), `where` (the player's place, velocity,
 state, physics and animation), `actor <name>` (a live actor's place,
 state, collision and look), `lines` (the dialogue lines said so far),
-`console <command>` (as the player types it: `set
+`view` (the game camera's place, turn and field of view, and whether
+it's in solid), `prop <actor> <property>` (a live property as text, a
+struct's fields listed), `console <command>` (as the player types it: `set
 DS9_FederationPhaserRifleAmmo AmmoAmount 20`),
 `drag <dx> <dy>`, `click <x> <y>`, `shot <file.ppm>`. Checked that way:
 - **M01_KiraL2:** Kira runs down the stone corridor from behind, the

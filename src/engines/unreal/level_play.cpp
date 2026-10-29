@@ -390,6 +390,33 @@ bool LevelPlay::wallBetween(const Vec3f& from, const Vec3f& to) {
     return level_->worldBetween({from[0], from[1], from[2]}, {to[0], to[1], to[2]}, 24);
 }
 
+// The zone's own if it sets one, else the level's (LevelInfo's: M03's
+// tunnels have ZoneInfos of their own, the fog only on LevelInfo).
+float LevelPlay::distanceFog(const Vec3f& at, std::array<float, 3>& color) {
+    Vm& vm = *vm_;
+    const Value region = level_->regionAt({at[0], at[1], at[2]});
+    VmObject* zone = nullptr;
+    if (region.st)
+        if (const VmProperty* f = region.st->findProperty(vm.name("Zone")); f && size_t(f->slot) < region.fields.size())
+            zone = region.fields[size_t(f->slot)].asObject();
+    auto fogOf = [&](VmObject* z) {
+        const Value* d = z ? z->find(vm, "DistanceFogging") : nullptr;
+        return d ? d->asFloat() : 0.0f;
+    };
+    if (fogOf(zone) <= 0)
+        zone = level_->levelInfo();
+    const float distance = fogOf(zone);
+    if (distance <= 0)
+        return 0;
+    color = {0, 0, 0};
+    if (const Value* c = zone->find(vm, "DistanceFogColor"); c && c->st)
+        for (size_t k = 0; k < 3; ++k)
+            if (const VmProperty* f = c->st->findProperty(vm.name(k == 0 ? "R" : k == 1 ? "G" : "B"));
+                f && size_t(f->slot) < c->fields.size())
+                color[k] = float(c->fields[size_t(f->slot)].asInt()) / 255;
+    return distance;
+}
+
 void LevelPlay::coronas(std::vector<Corona>& out) {
     out.clear();
     for (VmObject* a : level_->actors()) {

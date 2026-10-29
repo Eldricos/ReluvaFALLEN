@@ -101,8 +101,16 @@ struct MeshLight {
 // the Maps page's; `style` the actor's (actors.h's kStyle...: translucent,
 // modulated and masked apply to the whole mesh, as its polygons' own
 // flags do to them).
+// Distance fog over what's drawn: its colour, full at `distance` (0 none).
+struct MeshFog {
+    std::array<float, 3> color{};
+    float distance = 0;
+};
 void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& placement, const MeshPose& pose,
               const std::vector<gfx::TextureId>& textures, const MeshLight& light, float exposure,
-              uint8_t style = 1);
+              uint8_t style = 1, const MeshFog* fog = nullptr);
+// The fog pass over a draw already made (opaque or masked): its colour
+// blended over by distance, where that draw left its depth.
+void drawFogOver(gfx::Renderer3D& renderer, const gfx::DrawCall& drawn, const MeshFog& fog);
 
 } // namespace reluva::unreal

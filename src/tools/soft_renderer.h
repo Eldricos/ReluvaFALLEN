@@ -11,7 +11,7 @@
 // clamped) and coloured as the draw call says (its
 // constant, the vertices' colours, or its lighting), depth tested,
 // alpha tested and blended, with the overlay on top. Not done: deforms,
-// texture coordinate rows and turbulence, fog, dynamic lights, stencil,
+// texture coordinate rows and turbulence, dynamic lights, stencil,
 // mirroring, environment and vector texture coordinates.
 
 #include "common/gfx3d.h"

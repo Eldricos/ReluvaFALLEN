@@ -111,6 +111,8 @@ public:
     // of the last `slack` units (movers aren't counted); not if `end` is
     // in solid space.
     bool worldBetween(const std::array<float, 3>& start, const std::array<float, 3>& end, float slack = 0);
+    // Whether a point is in the level's solid space.
+    bool inSolid(const std::array<float, 3>& point);
     VmObject* trace(VmObject* self, const std::array<float, 3>& start, const std::array<float, 3>& end,
                     const std::array<float, 3>& extent, bool actors, std::array<float, 3>& hitLocation,
                     std::array<float, 3>& hitNormal);

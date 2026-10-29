@@ -152,6 +152,9 @@ public:
     // bit for each of the level's zones seen) if its zone is known. Cheap,
     // to pass over the rest before look().
     bool mayBeSeen(VmObject* actor, uint64_t zones);
+    // The Fallen's distance fog where `at` is: its zone's DistanceFogging
+    // (units to full fog; 0 none) and DistanceFogColor (0-1).
+    float distanceFog(const Vec3f& at, std::array<float, 3>& color);
     // The lights drawing a corona (bCorona): where, its texture (the
     // actor's Skin, else its Texture), DrawScale, and its zone (-1 not
     // known). Hidden or not: a light actor is hidden, its corona isn't.

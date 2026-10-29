@@ -49,7 +49,7 @@ gfx::Vec3 toWorld(const Vec3f& v) { return {v[0], -v[1], v[2]}; }
 
 // The surface flags that change how a polygon is drawn, for grouping.
 constexpr uint32_t kDrawFlags = polyflag::Masked | polyflag::Translucent | polyflag::Modulated |
-                                polyflag::FakeBackdrop | polyflag::Unlit;
+                                polyflag::FakeBackdrop | polyflag::Unlit | polyflag::TwoSided;
 
 bool blended(uint32_t flags) { return flags & (polyflag::Translucent | polyflag::Modulated); }
 
@@ -739,6 +739,40 @@ std::string MapViewer::describeActor(const std::string& name) {
     return "no such actor";
 }
 
+std::string MapViewer::describeView() {
+    if (!play_)
+        return "not playing";
+    char buf[200];
+    auto deg = [](int32_t r) { return double(int16_t(r & 0xffff)) * 360 / 65536; };
+    std::snprintf(buf, sizeof buf, "at %.1f %.1f %.1f, pitch %.1f yaw %.1f roll %.1f, fov %.1f", double(view_.location[0]),
+                  double(view_.location[1]), double(view_.location[2]), deg(view_.rotation.pitch), deg(view_.rotation.yaw),
+                  deg(view_.rotation.roll), double(view_.fov));
+    std::string out = buf;
+    const std::array<float, 3> at{view_.location[0], view_.location[1], view_.location[2]};
+    if (play_->level().inSolid(at))
+        out += ", in solid";
+    return out;
+}
+
+std::string MapViewer::actorProperty(const std::string& name, const std::string& property) {
+    if (!play_)
+        return "not playing";
+    Vm& vm = play_->vm();
+    for (VmObject* a : play_->level().actors())
+        if (!a->deleted && fs::toLower(vm.nameText(a->name)) == fs::toLower(name)) {
+            const Value* v = a->find(vm, property);
+            if (!v)
+                return "no such property";
+            if (v->type != VType::Struct || v->fields.empty())
+                return vm.toString(*v);
+            std::string out = "(";
+            for (const Value& f : v->fields)
+                out += (out.size() > 1 ? ", " : "") + vm.toString(f);
+            return out + ")";
+        }
+    return "no such actor";
+}
+
 std::vector<std::string> MapViewer::linesSaid() {
     std::vector<std::string> out;
     if (!play_)
@@ -1051,6 +1085,12 @@ void MapViewer::update(uint64_t nowMs) {
     updateLightmaps(dt);
     updateAnimatedTextures(dt);
     gatherDynamicLights(pos_);
+    // The Fallen's distance fog: the camera's zone's (DistanceFogging, the
+    // distance at which all is its DistanceFogColor), growing evenly from
+    // the camera. Reluva's reading.
+    fog_ = {};
+    if (play_)
+        fog_.distance = play_->distanceFog(Vec3f{pos_[0], -pos_[1], pos_[2]}, fog_.color);
 
     // The renderer raises colours to 1 / its gamma.
     renderer_->setGamma(1 / displayGamma_);
@@ -1524,7 +1564,13 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
         call.model = model;
         call.firstIndex = b.firstIndex;
         call.indexCount = b.indexCount;
-        call.state.cull = gfx::Cull::None;
+        // One-sided, as UE1's surfaces are (their back, the way our
+        // winding goes, is the renderer's front), unless flagged two-sided:
+        // a camera in solid sees through the wall it's in. M03_SiskoL1A's
+        // opening rides down inside the rock beside the lift shaft, looking
+        // in at the far wall's lamp and braces; drawn two-sided, all it saw
+        // was the back of the near wall.
+        call.state.cull = (b.polyFlags & polyflag::TwoSided) ? gfx::Cull::None : gfx::Cull::Front;
         call.texture = textured_ ? b.texture : 0;
         // With a lightmap the second pass lights it; else the vertex colours
         // (shading by facing, or a mover's light).
@@ -1578,6 +1624,9 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
             dyn.state.depthWrite = false;
             renderer_->draw(dyn);
         }
+        // The zone's distance fog over it, last.
+        if (fog_.distance > 0 && !over && !blended(b.polyFlags))
+            drawFogOver(*renderer_, call, fog_);
     }
 }
 
@@ -2061,7 +2110,7 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
         const MeshLight light = meshLightAt(look.location);
         if ((look.layers.empty() && look.adjust.empty() && look.faces.empty()) || !mesh.bones ||
             !drawLayered(look, at, placement, skins, light))
-            drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, pose, skins, light, kExposure, look.style);
+            drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, pose, skins, light, kExposure, look.style, &fog_);
     } else if ((look.drawType == kDrawSprite || look.drawType == kDrawVerticalSprite ||
                 look.drawType == kDrawSpriteAnimOnce) && look.texture) {
         const auto [texture, size] = textureOf(look.texture);
@@ -2117,7 +2166,7 @@ void MapViewer::drawCopies(VmObject* a, const LevelPlay::Look& look, const std::
                 light.ambient[k] *= c.scaleGlow;
                 light.directed[k] *= c.scaleGlow;
             }
-            drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, pose, skins, light, kExposure, c.style);
+            drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, pose, skins, light, kExposure, c.style, &fog_);
         }
     } else if (look.drawType == kDrawSprite || look.drawType == kDrawVerticalSprite ||
                look.drawType == kDrawSpriteAnimOnce) {
@@ -2248,7 +2297,7 @@ bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4
     if (err)
         return false;
     posedMeshes_.push_back(gpu);
-    drawMesh(*renderer_, gpu, placement, MeshPose{}, skins, light, kExposure, look.style);
+    drawMesh(*renderer_, gpu, placement, MeshPose{}, skins, light, kExposure, look.style, &fog_);
     return true;
 }
 

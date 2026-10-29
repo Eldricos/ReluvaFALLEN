@@ -310,6 +310,10 @@ public:
     // A live actor of that name: where it is, its state, physics and
     // collision, whether it's hidden ("no such actor" if there's none).
     std::string describeActor(const std::string& name);
+    // The game's camera now: where, its pitch, yaw and roll (degrees) and field of view.
+    std::string describeView();
+    // A live actor's property as text ("no such actor/property" else).
+    std::string actorProperty(const std::string& name, const std::string& property);
     // The dialogue lines said so far, a key and its text each.
     std::vector<std::string> linesSaid();
 
@@ -415,6 +419,7 @@ private:
     // fading in and out as walls come between it and the camera.
     void addCoronas(std::vector<SpriteDraw>& sprites, const gfx::Vec3& forward, float dt);
     std::map<VmObject*, float> coronaFade_;
+    MeshFog fog_; // this frame's distance fog (none: distance 0)
     std::vector<LevelPlay::Corona> coronaScratch_;
     float coronaDt_ = 0;
     void drawCopies(VmObject* actor, const LevelPlay::Look& look, const std::vector<LevelPlay::Copy>& copies,

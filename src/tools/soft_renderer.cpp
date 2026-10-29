@@ -342,6 +342,11 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                         for (int k = 0; k < 4; ++k)
                             src[k] *= texel[k] / 255.0f;
                     }
+                    if (call.fogDistance > 0) { // alpha by distance from the camera, for a fog pass
+                        const float dx = attr(&ClipVertex::wx) - eye_[0], dy = attr(&ClipVertex::wy) - eye_[1],
+                                    dz = attr(&ClipVertex::wz) - eye_[2];
+                        src[3] = std::clamp(std::sqrt(dx * dx + dy * dy + dz * dz) / call.fogDistance, 0.0f, 1.0f);
+                    }
                     float alpha = src[3];
                     if (call.dynamicLightsTextured)
                         src[3] = 1; // its alpha only tested

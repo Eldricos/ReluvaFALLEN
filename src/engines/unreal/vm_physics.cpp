@@ -773,6 +773,8 @@ void ScriptLevel::swapSurfaceTexture(int surf, VmObject* texture, bool wholeWorl
     ++surfaceSwaps_.serial;
 }
 
+bool ScriptLevel::inSolid(const Vec& p) { return collision_ && collision_->solid(Vec3f{p[0], p[1], p[2]}); }
+
 bool ScriptLevel::worldBetween(const Vec& start, const Vec& end, float slack) {
     // An end inside solid (an ambient sound placed in a wall or ceiling)
     // sounds from the wall's face: nothing between.

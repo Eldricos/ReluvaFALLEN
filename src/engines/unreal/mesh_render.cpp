@@ -257,7 +257,8 @@ MeshPose poseAtFraction(const Mesh& mesh, const MeshAnimSeq* anim, float fractio
 }
 
 void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& placement, const MeshPose& pose,
-              const std::vector<gfx::TextureId>& textures, const MeshLight& light, float exposure, uint8_t style) {
+              const std::vector<gfx::TextureId>& textures, const MeshLight& light, float exposure, uint8_t style,
+              const MeshFog* fog) {
     for (const GpuMesh::Batch& batch : mesh.batches) {
         GpuMesh::Batch b = batch;
         if (style == kStyleTranslucent)
@@ -302,7 +303,25 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
             call.color = {1, 1, 1, 1};
         }
         renderer.draw(call);
+        if (fog && fog->distance > 0 && !(b.polyFlags & (polyflag::Translucent | polyflag::Modulated)))
+            drawFogOver(renderer, call, *fog);
     }
+}
+
+void drawFogOver(gfx::Renderer3D& renderer, const gfx::DrawCall& drawn, const MeshFog& fog) {
+    gfx::DrawCall f = drawn;
+    f.texture = 0;
+    f.texGen = gfx::TexGen::Uv;
+    f.rgbSource = f.alphaSource = gfx::ColorSource::Constant;
+    f.color = {fog.color[0], fog.color[1], fog.color[2], 1};
+    f.fogDistance = fog.distance;
+    f.dynamicLights = f.dynamicLightsTextured = false;
+    f.state.src = gfx::Blend::SrcAlpha;
+    f.state.dst = gfx::Blend::OneMinusSrcAlpha;
+    f.state.depthEqual = true;
+    f.state.depthWrite = false;
+    f.state.alphaTest = gfx::AlphaTest::None;
+    renderer.draw(f);
 }
 
 } // namespace reluva::unreal

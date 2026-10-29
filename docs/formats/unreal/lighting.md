@@ -240,7 +240,27 @@ the camera and the light (a light inside its lamp's fixture counts as
 seen) and its zone is seen, fading in and out over a fifth of a second.
 Reluva's reading: the original's code isn't known (`MapViewer::addCoronas`).
 
+## Distance fog
+
+The Fallen's ZoneInfo adds `DistanceFogging` and `DistanceFogColor` (the
+FarClipping group, with `bForceClearScreen`). Eighteen maps set them,
+mostly on their LevelInfo: Jerrado (3500 units, a near-black red-brown
+17,4,0), Hass'Terral (5000, a dark blue), mission 11 (3500, 24,12,4).
+Reluva's reading: the fog grows evenly from the camera, everything its
+colour at `DistanceFogging`, from the camera's zone's settings, else the
+level's (M03's tunnels have ZoneInfos of their own without them; the
+fog is on LevelInfo). A pass over the level's opaque and masked surfaces
+and the meshes blends the colour over by distance (`drawFogOver`). How
+far it starts in the original isn't measured: the recording's views of
+those maps didn't match ours closely enough.
+
 ## Drawing
+
+The level's surfaces are one-sided, as UE1's are, unless flagged
+`TwoSided` (0x100): a camera inside solid sees through the wall it's in.
+M03_SiskoL1A's opening rides down inside the rock beside the lift shaft
+and, in the original, looks in at the far wall's lamp and braces; drawn
+two-sided, all it saw was the back of the near wall.
 
 Lightmaps are packed into 1024x1024 pages, each with a one-texel border
 copying its edges so filtering doesn't bleed. They hold the light halved,
