@@ -684,7 +684,9 @@ private:
     };
     int pickDialogLine(const std::string& type, const std::string& speaker, const std::string& listener,
                        bool orUnaddressed, bool anyPlace, bool needsFirst, const std::string* actorTag = nullptr);
-    int runOnFrom(int index); // the line this one runs on from, -1 if none
+    int runOnFrom(int index); // the line this one runs on from, -1 if none (found once)
+    int findRunOn(int index);
+    std::vector<int> runOnCache_; // -2: not found yet
     bool runsOn(int index);
     std::string playerSpeaker();
     bool ofThisMission(const DialogLine& l);

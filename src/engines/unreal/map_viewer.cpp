@@ -713,7 +713,15 @@ std::string MapViewer::describeActor(const std::string& name) {
                       int(num("DrawType")), int(num("Style")), double(num("DrawScale")), double(num("ScaleGlow")),
                       object("Mesh").c_str(), object("Skin").c_str(), object("Texture").c_str(),
                       play_->level().multiMeshes(a).size());
-        return buf;
+        std::string out = buf;
+        if (num("LightType") != 0 || num("LightBrightness") != 0) {
+            char light[160];
+            std::snprintf(light, sizeof light, "; light type %d, brightness %d, hue %d, saturation %d, radius %d, effect %d",
+                          int(num("LightType")), int(num("LightBrightness")), int(num("LightHue")),
+                          int(num("LightSaturation")), int(num("LightRadius")), int(num("LightEffect")));
+            out += light;
+        }
+        return out;
     }
     return "no such actor";
 }

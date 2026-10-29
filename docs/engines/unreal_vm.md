@@ -599,6 +599,14 @@ the natives.
   tag of its own (or the same). Kira's log on the Promenade asks for
   `START_K11A3` (010), which runs on to "I haven't been able to sleep…"
   (011); M01's opening, 005 to 006 and 007.
+  A cut scene's (CIN) lines are a conversation, so they run on across
+  speakers: to the next line numbered in the table (past gaps, 009 to
+  010) up to the next one with a tag that starts a part of the scene. A
+  tag naming the line's own speaker (Zoto's lines tagged `ZTO`) doesn't.
+  Checked against a recording of the original: the opening's lab
+  (Title) said only Terell's first line of each part and ran on 20
+  seconds early; now its thirteen lines, from "Increase the magneton
+  pulse" to the scream, in step with the original's to within a second.
 - **The CAMERA column's flags**: `V:1` a voice-over (a log), `H:1` heard
   over the communicator. They become `Level.CurrentLineFlags` 16 and 32
   (Pawn's head tracking then doesn't turn to the talker), and an H line's

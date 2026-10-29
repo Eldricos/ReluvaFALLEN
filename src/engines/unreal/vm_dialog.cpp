@@ -376,8 +376,41 @@ int ScriptLevel::startDialog(VmObject* self, const std::string& type, NameId fil
 // Kira's log on the Promenade, START_K11A3 (010) then "I haven't been able
 // to sleep..." (011); a Vorta's "...Prisoners A-2..." (000) then "Dispatch
 // guards..." (001). A line with no NEXTLINE goes on to one so.
+//
+// A cut scene's (CIN) lines are a conversation: they run on from the line
+// before them in the table (the next number there, whoever says it, past
+// gaps and from 009 to 010) up to the next line with a tag that starts a
+// part of it (START_G00A2). A tag naming the line's own speaker (Zoto's
+// lines are tagged ZTO, the actor who says them) doesn't. The opening's
+// lab, START_G00A: Terell's order, Zoto's "No, Terell! We can't contain
+// the Orb's verteron emissions!", Terell's "We're out of time, Zoto..."
+// (only the first was said, the scene running on without the rest).
 int ScriptLevel::runOnFrom(int index) {
+    if (runOnCache_.size() != dialogLines_.size())
+        runOnCache_.assign(dialogLines_.size(), -2);
+    int& known = runOnCache_[size_t(index)];
+    if (known == -2)
+        known = findRunOn(index);
+    return known;
+}
+
+int ScriptLevel::findRunOn(int index) {
     const DialogLine& l = dialogLines_[size_t(index)];
+    if (same(l.type, "CIN")) {
+        const bool speakersTag = !l.tag.empty() && l.record.size() >= 3 && same(l.tag, l.record.substr(0, 3));
+        if (!l.tag.empty() && !speakersTag)
+            return -1;
+        int before = -1;
+        for (size_t i = 0; i < dialogLines_.size(); ++i) {
+            const DialogLine& o = dialogLines_[i];
+            if (int(i) == index || !same(o.table, l.table) || !same(o.mission, l.mission) || !same(o.type, l.type) ||
+                o.lineId.size() != l.lineId.size() || !(o.lineId < l.lineId))
+                continue;
+            if (before < 0 || dialogLines_[size_t(before)].lineId < o.lineId)
+                before = int(i);
+        }
+        return before;
+    }
     if (l.lineId.size() != 3 || !std::isdigit(uint8_t(l.lineId[2])) || l.lineId[2] == '0')
         return -1;
     std::string before = l.lineId;
