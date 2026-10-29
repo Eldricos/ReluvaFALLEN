@@ -96,6 +96,9 @@ float lightDistance(const LightSource& light, const Vec3f& point);
 // the light, 1 at the edge): 1 down to 0.
 float lightFalloff(float fraction);
 
+// Whether a light lights without its shadow bits (a large cylinder light).
+bool unshadowed(const LightSource& light);
+
 // World units per step of an actor's LightRadius.
 constexpr float kRadiusUnit = 25;
 

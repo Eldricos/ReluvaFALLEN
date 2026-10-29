@@ -71,7 +71,9 @@ For each sample, its position on the surface's plane, then:
   the light (none for `LightEffect` 13, non-incidence).
 - **Cylinder** (`LightEffect` 17, 4,301 of The Fallen's lights, the most
   used effect): the distance is across only, so the light reaches its
-  radius at any height, as UE1's cylinder lights do.
+  radius at any height, as UE1's cylinder lights do. A large one (radius
+  1000 and more, the sky lights of the outdoor maps) ignores its shadow
+  bits (below, compared with the recording).
 - **Cone** (`LightEffect` 8 static spot, 12 spotlight): the light's
   `Rotation` gives its direction, `LightCone` (0-255) its half-angle as
   0-90 degrees, fading to the edge.
@@ -233,16 +235,22 @@ against the same views here, matched shot for shot in cut scenes:
   about 1.07 x^0.83 of the light: a higher Brightness setting. Not a
   rendering difference; Reluva could follow the game's Brightness
   setting once its curve at other values is known.
-- **Not found: Hass'terral's snowfield (M10_SiskoL1A) is far too dark,**
-  about 13 times beyond the display difference. It's lit by 24 cylinder
-  lights (radius 6400, brightness 32, pale blue) high above; the ground's
-  lightmap (201x156 samples, 64 units each) is computed and lit in
-  places, but its shadow bits leave the player's start and much round it
-  in shadow (8.5% of light and sample pairs set), and the original is
-  evenly bright there, cliffs included. No falloff, no incidence, and
-  ignoring the shadow bits for cylinder lights each helped only a little.
-  Something about these lights (or the bits' layout for such big
-  lightmaps) is still to be found.
+- Hass'terral's snowfield (M10_SiskoL1A) was far too dark, about 13
+  times beyond the display difference. It's lit by 24 cylinder lights
+  (radius 6400, brightness 32, pale blue) high above. The ground's
+  lightmap (201x156 samples, 64 units each) has their shadow bits set for
+  only 8.5% of light and sample pairs: the editor traced them from where
+  the lights are (the bits agree 94% with a clear line to the light, so
+  they're read right), leaving most of the field in cliffs' and
+  buildings' shadow. In the recording the whole field is evenly lit, no
+  shadow of a cliff anywhere in its six minutes. So large cylinder lights
+  (radius 1000 and more: the outdoor maps' sky lights; indoor cylinder
+  lights are 50 to 625) light without their shadow bits
+  (`unshadowed()`). The ground now comes within 15% of the recording
+  (through its display curve). Fitted: the original's code isn't known.
+  Still darker than the recording: the cliffs beside the path, which
+  these lights don't reach (dropping the incidence for them overshot the
+  ground by 70% and barely lit the cliffs).
 - Not found: the credits' starfield. The sky there is unlit
   `ds9skybox.stars.starbg1a`, 40 bright stars to 256x256 texels; the
   recording shows about 6 to 1000 pixels, ten times what the texture

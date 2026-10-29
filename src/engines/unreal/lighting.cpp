@@ -170,6 +170,18 @@ float lightLevel(const LightSource& l, float time) { return lightLevel(l, l.type
 // some dark areas towards it and others past it.
 float lightFalloff(float f) { return 1 - std::clamp(f, 0.0f, 1.0f); }
 
+// A large cylinder light (the outdoor maps' sky light, radius 1000 and
+// more) lights without its shadows. Hass'terral's snowfield (M10_SiskoL1A)
+// is lit by 24 of them, radius 6400, high above; the editor baked their
+// shadow bits as traced from where they are (94% agreeing with a clear
+// line to them), leaving most of the ground in the cliffs' and buildings'
+// shadow, but in a recording of the original the whole field is evenly
+// lit, no shadow of a cliff anywhere. Ignoring the bits for them matches
+// its brightness. The indoor cylinder lights (radius 50 to 625) keep their
+// shadows. Reluva's reading: the rule is fitted, the original's code
+// isn't known.
+bool unshadowed(const LightSource& l) { return l.cylinder && l.radius >= 1000; }
+
 float lightDistance(const LightSource& l, const Vec3f& p) {
     const float dx = l.position[0] - p[0], dy = l.position[1] - p[1], dz = l.cylinder ? 0 : l.position[2] - p[2];
     return std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -547,9 +559,9 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
                              m.lightActors >= 0 && li < model.lights.size() && model.lights[li]; ++li, ++k) {
                             const size_t bit = size_t(m.dataOffset) + size_t(k) * size_t(rowBytes) * size_t(m.vClamp) +
                                                size_t(j) * size_t(rowBytes) + size_t(i / 8);
-                            if (!((model.lightBits[bit] >> (i & 7)) & 1))
-                                continue;
                             const LightSource& src = lights.sources[li];
+                            if (!((model.lightBits[bit] >> (i & 7)) & 1) && !unshadowed(src))
+                                continue;
                             if (src.radius <= 0)
                                 continue;
                             const Vec3f d = sub(src.position, p);
