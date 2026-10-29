@@ -54,13 +54,21 @@ bool readLight(const PackageSet& packages, const Package& package, int32_t ref, 
     // brightness 64 and radius 64. Lights the level lists are lights, so
     // a missing LightType counts as steady.
     l.type = changed && changed->lightType >= 0 ? uint8_t(changed->lightType) : props.byte("LightType", kLightSteady);
-    const uint8_t brightness = changed && changed->lightBrightness >= 0 ? uint8_t(changed->lightBrightness)
-                                                                       : props.byte("LightBrightness", 64);
+    const uint8_t placed = props.byte("LightBrightness", 64);
+    uint8_t brightness = changed && changed->lightBrightness >= 0 ? uint8_t(changed->lightBrightness) : placed;
     // Scripts may turn it on later (a TriggerLight waiting for its
-    // trigger, one a trigger names by its Tag): kept, at nothing for now.
+    // trigger, one a trigger names by its Tag): kept at the brightness it
+    // was placed with, starting at nothing. One its scripts put out at the
+    // start (a CTV_TriggerLight not initially on) was left out, and never
+    // lit anything when they turned it on (M03_SiskoL1A's BaseLightON
+    // lights, once the alarm's red ones go out).
     const std::string cls = obj.package->className(obj.exportIndex + 1);
     const std::string tag = props.nameValue("Tag");
     l.scripted = (!cls.empty() && cls != "Light") || (!tag.empty() && tag != "None" && tag != cls);
+    if (l.scripted && brightness == 0 && placed > 0) {
+        brightness = placed;
+        l.startsOff = true;
+    }
     if (brightness == 0 || (l.type == kLightNone && !l.scripted))
         return true;
     l.color = lightColor(props.byte("LightHue"), props.byte("LightSaturation", 255), brightness);
@@ -140,10 +148,27 @@ Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness) {
     const float b = float(brightness) / kBrightnessUnit;
     for (float& v : c)
         v = (v * (1 - white) + white) * b;
+    // As strong whatever its colour: the channels scaled to sum as white's
+    // would, so a pure red light puts all its brightness into red (three
+    // times what mixing it with white left it). Checked against a
+    // recording of the original: the shortfall grew with how saturated a
+    // light was (a pale blue lab about right, a yellow-lit strip 1.5 times
+    // too dark, the red emergency lights of M03_SiskoL1A 2.7 times).
+    const float sum = c[0] + c[1] + c[2];
+    if (sum > 0)
+        for (float& v : c)
+            v *= 3 * b / sum;
     return c;
 }
 
 float lightLevel(const LightSource& l, float time) { return lightLevel(l, l.type, time); }
+
+// Linear. Checked against a recording of the original (the opening's lab,
+// Kira's monastery courtyard): bright areas came within 10-20%, and how
+// far the dark ones fell short followed only how dark they were (the
+// recording's brightness setting, not the falloff); 1 - f^2 brightened
+// some dark areas towards it and others past it.
+float lightFalloff(float f) { return 1 - std::clamp(f, 0.0f, 1.0f); }
 
 float lightDistance(const LightSource& l, const Vec3f& p) {
     const float dx = l.position[0] - p[0], dy = l.position[1] - p[1], dz = l.cylinder ? 0 : l.position[2] - p[2];
@@ -478,7 +503,7 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
     // reach redrawn with them as they do (drawn at time 0 here).
     std::vector<float> startLevels;
     for (const LightSource& l : lights.animated)
-        startLevels.push_back(lightLevel(l, l.type, 0, false));
+        startLevels.push_back(l.startsOff ? 0.0f : lightLevel(l, l.type, 0, false));
     std::vector<PatternNow> startNow;
     for (const LightSource& l : lights.animated)
         startNow.push_back(patternNow(l, 0));
@@ -531,7 +556,7 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
                             const float dist = lightDistance(src, p), straight = length(d);
                             if (dist >= src.radius || straight <= 0)
                                 continue;
-                            float amount = 1 - dist / src.radius;
+                            float amount = lightFalloff(dist / src.radius);
                             if (src.incidence) {
                                 const float facing = dot(n, d) / straight;
                                 if (facing <= 0)

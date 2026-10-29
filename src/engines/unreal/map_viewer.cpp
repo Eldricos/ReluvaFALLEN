@@ -87,7 +87,7 @@ Vec3f lightAt(const LevelLights& lights, const Vec3f& p, const Vec3f& n) {
         const float dist = lightDistance(l, p);
         if (dist >= l.radius || straight <= 0)
             continue;
-        float amount = 1 - dist / l.radius;
+        float amount = lightFalloff(dist / l.radius);
         if (l.incidence)
             amount *= std::max(0.0f, (n[0] * d[0] + n[1] * d[1] + n[2] * d[2]) / straight);
         for (size_t k = 0; k < 3; ++k)
@@ -240,10 +240,23 @@ void MapViewer::load(int index) {
     lightLevels_.clear();
     mapLevels_.clear();
     for (const LightSource& l : changingLights_) {
-        lightLevels_.push_back(lightLevel(l, 0));
-        mapLevels_.push_back(lightLevel(l, l.type, 0, false));
+        lightLevels_.push_back(l.startsOff ? 0.0f : lightLevel(l, 0));
+        mapLevels_.push_back(l.startsOff ? 0.0f : lightLevel(l, l.type, 0, false));
     }
     animatedLightmaps_ = std::move(atlas.animated);
+    if (std::getenv("LIGHTDBG")) {
+        std::map<int, std::array<float, 3>> stat; // index -> texels lit, max, sum
+        for (const AnimatedLightmap& m : animatedLightmaps_)
+            for (const AnimatedLightmap::Light& l : m.lights)
+                for (const Vec3f& c : l.share) {
+                    const float v = std::max({c[0], c[1], c[2]});
+                    if (v <= 0) continue;
+                    auto& st = stat[l.index];
+                    st[0] += 1; st[1] = std::max(st[1], v); st[2] += v;
+                }
+        for (const auto& [i, st] : stat)
+            std::fprintf(stderr, "ANIM %d %s texels %.0f max %.2f mean %.3f level %.2f\n", i, pkg->path(changingLights_[size_t(i)].ref).c_str(), st[0], st[1], st[2] / std::max(1.0f, st[0]), lightLevels_[size_t(i)]);
+    }
     staleLightmaps_.assign(animatedLightmaps_.size(), false);
     lightTime_ = 0;
 
@@ -516,7 +529,7 @@ void MapViewer::load(int index) {
                 const float dist = lightDistance(l, a.location);
                 if (dist < l.radius)
                     for (size_t k = 0; k < 3; ++k)
-                        light[k] += l.color[k] * (1 - dist / l.radius);
+                        light[k] += l.color[k] * lightFalloff(dist / l.radius);
             }
             for (float& c : light)
                 c = std::min(c, kMaxLight);
@@ -1324,6 +1337,8 @@ void MapViewer::updateAnimatedTextures(float dt) {
 // LightType and LightBrightness: a TriggerLight fading, a light turned
 // off, or destroyed).
 float MapViewer::liveLightLevel(const LightSource& l, bool whole) {
+    if (!play_ && l.startsOff)
+        return 0; // as the level starts: its scripts haven't turned it on
     if (!play_ || !l.scripted || !l.ref)
         return lightLevel(l, l.type, lightTime_, whole);
     VmObject* a = play_->actorAt(l.ref);
@@ -1722,6 +1737,10 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
     Vec3f total{}, toward{};
     // The level's lights as bright as they are now (pulsing, flickering,
     // turned off by scripts), then the lights that move and change.
+    // While playing, only lights that see it: the level's walls (its BSP)
+    // between a light and the actor keep its light off it, as they keep it
+    // off the walls behind them (Sisko lit white in M03_SiskoL1A's red room
+    // by the yellow lamps of the rooms round it).
     auto add = [&](const LightSource& l, float level) {
         if (level <= 0)
             return;
@@ -1730,7 +1749,9 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
         const float dist = lightDistance(l, at);
         if (dist >= l.radius || straight <= 0)
             return;
-        const float amount = (1 - dist / l.radius) * level;
+        if (play_ && play_->wallBetween(at, l.position))
+            return;
+        const float amount = lightFalloff(dist / l.radius) * level;
         for (size_t k = 0; k < 3; ++k) {
             total[k] += l.color[k] * amount;
             toward[k] += dv[k] / straight * amount;

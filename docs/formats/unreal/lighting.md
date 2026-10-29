@@ -58,8 +58,14 @@ For each sample, its position on the surface's plane, then:
 - **Colour** (`lightColor()`): `LightHue` round the colour wheel (0 red,
   43 yellow, 85 green, 128 cyan, 171 blue, 213 magenta), mixed with white
   by `LightSaturation` (255 white, 0 the pure hue), times
-  `LightBrightness / 128`. Defaults as `Engine.Light`'s: brightness 64,
-  hue 0, saturation 255.
+  `LightBrightness / 128`, then scaled so its channels sum to three
+  times that (as white's do): a light is as strong whatever its colour,
+  a pure red one putting all of it into red (3 at brightness 128).
+  Defaults as `Engine.Light`'s: brightness 64, hue 0, saturation 255.
+  Before, mixing with white took most of a saturated light away; against
+  a recording of the original the shortfall grew with saturation (a pale
+  blue lab about right, a yellow-lit strip 1.5 times too dark, the red
+  emergency lights of M03_SiskoL1A 2.7 times).
 - **Radius**: `25 * (LightRadius + 1)` world units; default radius 64.
 - **Facing**: the cosine between the surface's normal and the direction to
   the light (none for `LightEffect` 13, non-incidence).
@@ -129,7 +135,10 @@ same effect's curve over time: torch waver 0.85-1 and fire waver 0.7-1
 
 Lights the scripts may change (any class but plain `Light`, like
 `TriggerLight`, or one with a Tag a trigger can name) are kept apart
-the same way, starting as they are (one that starts off, at nothing),
+the same way, starting as they are (one that starts off, at nothing:
+kept at the brightness it was placed with, so it lights once its scripts
+turn it on; one put out at the start, a `CTV_TriggerLight` not initially
+on, was dropped and never lit),
 and while the game runs follow their live actor: its `LightType` and
 `LightBrightness` against the brightness it was placed with (a
 TriggerLight fading, a light switched off or destroyed). With them and
@@ -150,7 +159,9 @@ about 89000 texels (291,000 with the scripted lights and effects).
 **What moves** is lit as the lights are now: meshes and movers by the
 level's lights at their current brightness (a pulsing light pulses on
 them), from where they are each frame (a door sliding into the dark goes
-dark), and by the dynamic lights.
+dark), and by the dynamic lights. While the game plays, a light only
+reaches a character if the level's walls aren't between them (the yellow
+lamps of the rooms round M03_SiskoL1A's red room lit Sisko white).
 
 **Dynamic lights**: while playing, the actors with a light that aren't
 `bStatic` and aren't the level's own lights (a spark burst's flash, an
@@ -194,6 +205,24 @@ that shot was `Brightness=0.500000` (`[WinDrv.WindowsClient]` in its
 that setting gives. How other settings change it isn't known yet: a
 screenshot of the same place at another Brightness (say 1.0) would show
 it, and then the curve can follow the player's setting.
+
+## Compared with a recording of the original (October 2026)
+
+A full play-through recorded from the original (5 h 40 m, 960x720)
+against the same views here, matched shot for shot in cut scenes:
+
+- The red emergency lights of M03_SiskoL1A flood the room red, Sisko
+  too; here they were a dim red and Sisko white: the colour (above), the
+  lights that start off, and lights through walls on characters.
+- Bright areas (the opening's lab, Kira's monastery) come within 10-20%;
+  dark ones fall short by more the darker they are, as a brighter
+  display setting would (the recording's player had one: its HUD, drawn
+  the same in both, is lighter too). So the falloff stays linear (1 -
+  (d/r)^2 brightened some dark areas to it and others past it) and the
+  light at most 1 (2 burnt out faces and changed little else).
+- Not found: what lights the station in the credits (CM_SpaceStation).
+  Its surfaces have lightmaps but the level's lights reach few of their
+  samples, and in the original it's evenly bright.
 
 ## Drawing
 

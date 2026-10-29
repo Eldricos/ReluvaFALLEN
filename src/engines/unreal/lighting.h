@@ -59,6 +59,7 @@ struct LightSource {
     int32_t ref = 0;
     uint8_t brightness = 64;
     bool scripted = false;
+    bool startsOff = false; // its scripts put it out at the start (lit only once they turn it on)
     int animated = -1; // its index in LevelLights::animated, if its brightness changes
 };
 
@@ -90,6 +91,10 @@ float lightPattern(const LightSource& light, const PatternNow& now, const Patter
 // How far a point is from a light, as its light falls off: straight, or
 // across for a cylinder.
 float lightDistance(const LightSource& light, const Vec3f& point);
+
+// How much of a light reaches `fraction` of the way to its radius (0 at
+// the light, 1 at the edge): 1 down to 0.
+float lightFalloff(float fraction);
 
 // World units per step of an actor's LightRadius.
 constexpr float kRadiusUnit = 25;

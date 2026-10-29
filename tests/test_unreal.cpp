@@ -466,7 +466,12 @@ static void testModel() {
     }
     CHECK(m.hasLighting() && m.zones.size() == 1 && m.lightMaps.size() == 1 && m.lights.size() == 2 &&
           m.trailingBytes == 0);
-    CHECK((lightColor(0, 0, 128) == Vec3f{1, 0, 0}) && (lightColor(128, 0, 64) == Vec3f{0, 0.5f, 0.5f}));
+    // A saturated colour as strong as white: its channels sum to three
+    // times its brightness.
+    auto near = [](const Vec3f& a, const Vec3f& b) {
+        return std::fabs(a[0] - b[0]) < 1e-5f && std::fabs(a[1] - b[1]) < 1e-5f && std::fabs(a[2] - b[2]) < 1e-5f;
+    };
+    CHECK(near(lightColor(0, 0, 128), Vec3f{3, 0, 0}) && near(lightColor(128, 0, 64), Vec3f{0, 0.75f, 0.75f}));
     CHECK((lightColor(42, 255, 128) == Vec3f{1, 1, 1})); // saturation 255: white
     PackageSet set;
     const LevelLights lights = gatherLights(set, p, m);
