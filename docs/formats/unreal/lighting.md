@@ -240,6 +240,20 @@ the camera and the light (a light inside its lamp's fixture counts as
 seen) and its zone is seen, fading in and out over a fifth of a second.
 Reluva's reading: the original's code isn't known (`MapViewer::addCoronas`).
 
+## Translucent lit surfaces
+
+A translucent surface the lights reach (not `Unlit`: The Fallen's title
+logos, flagged translucent and special-lit, each lit by its own
+`TriggerLight` that a dispatcher turns on and off) is drawn in one pass,
+so it can't take its lightmap texel by texel: it's tinted by its light,
+the average over its polygons' corners and middles of its lightmaps
+(following its changing lights) and the dynamic lights, times two, at
+most its texture's colour (fitted to the recording; the plain average
+was 2.5 times too dark). Drawn at full brightness before, the logos all
+showed at once, the Collective logo still there over The Fallen's; now
+each fades in and out with its light, the gaps between them as in the
+original.
+
 ## Distance fog
 
 The Fallen's ZoneInfo adds `DistanceFogging` and `DistanceFogColor` (the

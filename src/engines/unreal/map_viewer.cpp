@@ -136,6 +136,7 @@ void MapViewer::unload() {
         renderer_->destroyTexture(t);
     textures_.clear();
     batches_.clear();
+    tints_.clear();
     surfRanges_.clear();
     swappedBatches_.clear();
     swappedSerial_ = -1;
@@ -338,6 +339,43 @@ void MapViewer::load(int index) {
                 indices.push_back(base);
                 indices.push_back(base + uint32_t(k) - 1);
                 indices.push_back(base + uint32_t(k));
+            }
+        }
+        // A translucent surface the lights reach: its tint's samples.
+        if ((flags & polyflag::Translucent) && !(flags & polyflag::Unlit) && hasLightmaps_) {
+            std::vector<TintSample> samples;
+            for (const Polygon* p : group) {
+                const LightmapPlacement& pl = atlas.surfs[size_t(p->surf)];
+                if (pl.page < 0 || size_t(pl.page) >= atlas.pages.size() || p->points.empty())
+                    continue;
+                std::vector<Vec3f> at = p->points;
+                Vec3f mid{};
+                for (const Vec3f& q : p->points)
+                    for (size_t k = 0; k < 3; ++k)
+                        mid[k] += q[k] / float(p->points.size());
+                at.push_back(mid);
+                const image::Image& img = atlas.pages[size_t(pl.page)];
+                for (const Vec3f& q : at) {
+                    const auto uv = atlas.uv(p->surf, q);
+                    const int x = std::clamp(int(uv[0] * float(atlas.pageSize)), 0, img.w - 1);
+                    const int y = std::clamp(int(uv[1] * float(atlas.pageSize)), 0, img.h - 1);
+                    TintSample t;
+                    t.at = q;
+                    for (size_t a = 0; a < animatedLightmaps_.size() && t.anim < 0; ++a) {
+                        const AnimatedLightmap& m = animatedLightmaps_[a];
+                        if (m.page == pl.page && x >= m.x && x < m.x + m.w && y >= m.y && y < m.y + m.h) {
+                            t.anim = int(a);
+                            t.texel = size_t(y - m.y) * size_t(m.w) + size_t(x - m.x);
+                        }
+                    }
+                    const uint8_t* px = img.pixel(x, y);
+                    t.light = {float(px[0]) / 255 * 2, float(px[1]) / 255 * 2, float(px[2]) / 255 * 2};
+                    samples.push_back(t);
+                }
+            }
+            if (!samples.empty()) {
+                batch.tint = int(tints_.size());
+                tints_.push_back(std::move(samples));
             }
         }
         batch.indexCount = uint32_t(indices.size()) - batch.firstIndex;
@@ -1550,6 +1588,38 @@ void MapViewer::drawSurfaceSwaps() {
     }
 }
 
+Vec3f MapViewer::tintOf(int tint) const {
+    const std::vector<TintSample>& samples = tints_[size_t(tint)];
+    Vec3f sum{};
+    for (const TintSample& t : samples) {
+        Vec3f light = t.light;
+        if (t.anim >= 0) {
+            const AnimatedLightmap& m = animatedLightmaps_[size_t(t.anim)];
+            light = m.base[t.texel];
+            for (const AnimatedLightmap::Light& l : m.lights) {
+                const float level = size_t(l.index) < mapLevels_.size() ? mapLevels_[size_t(l.index)] : 1;
+                for (size_t k = 0; k < 3; ++k)
+                    light[k] += l.share[t.texel][k] * level;
+            }
+        }
+        for (const LightSource& l : dynamic_) {
+            const float dist = lightDistance(l, t.at);
+            if (dist < l.radius)
+                for (size_t k = 0; k < 3; ++k)
+                    light[k] += l.color[k] * lightFalloff(dist / l.radius);
+        }
+        for (size_t k = 0; k < 3; ++k)
+            sum[k] += std::min(light[k], kMaxLight);
+    }
+    // Twice the average, at most the texture's own colour: fitted to a
+    // recording of the original's logos (lit by a TriggerLight that only
+    // reaches 60% before its dispatcher puts it out, they show at about
+    // their texture's colour; the plain average was 2.5 times too dark).
+    for (float& v : sum)
+        v = std::min(kMaxLight, 2 * v / float(std::max<size_t>(samples.size(), 1)));
+    return sum;
+}
+
 void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh, const gfx::Mat4& model,
                             bool levelLit, bool over, const MeshLight* moverLight) {
     auto lit = [&](const Batch& b) {
@@ -1583,6 +1653,10 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
         }
         if (!(b.polyFlags & polyflag::Modulated)) // those multiply what's there, so stay as they are
             call.color = {kExposure, kExposure, kExposure, 1};
+        if (b.tint >= 0 && lightmaps_) {
+            const Vec3f t = tintOf(b.tint);
+            call.color = {kExposure * t[0] * lightScale_, kExposure * t[1] * lightScale_, kExposure * t[2] * lightScale_, 1};
+        }
         if (b.polyFlags & polyflag::Masked)
             call.state.alphaTest = gfx::AlphaTest::Ge128;
         if (over) // drawn over what's there already

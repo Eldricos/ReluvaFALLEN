@@ -330,7 +330,21 @@ private:
         uint32_t polyFlags = 0;
         ObjectRef textureRef{}; // the level's: the texture it's drawn with, for the scripts' swaps
         uint64_t zones = ~uint64_t(0); // the zones it's seen from (zones.h): drawn when one of them is seen
+        int tint = -1; // a translucent lit batch's: its entry in tints_
     };
+    // A translucent surface the level's lights light (The Fallen's logos,
+    // flagged translucent and special-lit): drawn in one pass, so its
+    // light is a tint, the average over points of it (each polygon's
+    // corners and middle) of its lightmaps' light and the dynamic lights'
+    // (a TriggerLight, not static, lights as those do), as they change.
+    struct TintSample {
+        int anim = -1;       // in animatedLightmaps_, or -1: a lightmap that doesn't change
+        size_t texel = 0;    // in it
+        Vec3f light{};       // the light there, if it doesn't change
+        Vec3f at{};          // where, for the lights that move and change (dynamic_)
+    };
+    std::vector<std::vector<TintSample>> tints_;
+    Vec3f tintOf(int tint) const;
     // Where each of the level's surfaces is in its mesh (a batch and a run
     // of its indices for each of its polygons), to draw one with another
     // texture (SetSurfaceTexture).
