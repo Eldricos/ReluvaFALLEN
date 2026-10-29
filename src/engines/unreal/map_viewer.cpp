@@ -1640,7 +1640,12 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
         // opening rides down inside the rock beside the lift shaft, looking
         // in at the far wall's lamp and braces; drawn two-sided, all it saw
         // was the back of the near wall.
-        call.state.cull = (b.polyFlags & polyflag::TwoSided) ? gfx::Cull::None : gfx::Cull::Front;
+        // A mover's polygons (its brush's) wind the other way round: from
+        // inside M04_WorfL1a's turbolift, culled as the level's, all that
+        // showed was its brush's untextured outer faces from behind.
+        call.state.cull = (b.polyFlags & polyflag::TwoSided) ? gfx::Cull::None
+                          : moverLight                              ? gfx::Cull::Back
+                                                                    : gfx::Cull::Front;
         call.texture = textured_ ? b.texture : 0;
         // With a lightmap the second pass lights it; else the vertex colours
         // (shading by facing, or a mover's light).
@@ -1887,9 +1892,14 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
         add(l, levelOf(l));
     for (const LightSource& l : dynamic_)
         add(l, 1);
+    // At most the texture's own colour where the light falls full on it,
+    // as the lightmaps are: ambient and directed together under kMaxLight.
+    // Each capped alone, they reached twice it, washing characters' faces
+    // under bright lights out to pale (the opening's Terrell, against a
+    // recording of the original).
     for (size_t k = 0; k < 3; ++k) {
         light.ambient[k] = std::min(kMaxLight, 0.15f + 0.5f * total[k]);
-        light.directed[k] = std::min(kMaxLight, 0.7f * total[k]);
+        light.directed[k] = std::min(0.7f * total[k], std::max(0.0f, kMaxLight - light.ambient[k]));
     }
     const float len = std::sqrt(toward[0] * toward[0] + toward[1] * toward[1] + toward[2] * toward[2]);
     light.direction = len > 0 ? toWorld(Vec3f{toward[0] / len, toward[1] / len, toward[2] / len}) : gfx::Vec3{0, 0, 1};

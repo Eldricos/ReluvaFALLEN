@@ -156,7 +156,10 @@ lightmaps' rectangles (`Renderer3D::updateTextures()`), all in one copy
 each frame. On The Fallen a map has up to 49 such lights over at most
 about 89000 texels (291,000 with the scripted lights and effects).
 
-**What moves** is lit as the lights are now: meshes and movers by the
+**What moves** is lit as the lights are now (some all round, the rest
+from their average direction, the two together at most the texture's
+own colour, as the lightmaps are; capped each alone they reached twice
+it, and faces under bright lights were pale against the recording): meshes and movers by the
 level's lights at their current brightness (a pulsing light pulses on
 them), from where they are each frame (a door sliding into the dark goes
 dark), and by the dynamic lights. While the game plays, a light only
@@ -283,6 +286,12 @@ The level's surfaces are one-sided, as UE1's are, unless flagged
 M03_SiskoL1A's opening rides down inside the rock beside the lift shaft
 and, in the original, looks in at the far wall's lamp and braces; drawn
 two-sided, all it saw was the back of the near wall.
+
+A mover's polygons (its brush's, drawn in their own coordinates) wind
+the other way round to the level's, so they're culled the other way:
+from inside M04_WorfL1a's turbolift (CTV_ElevatorMover2, whose brush has
+144 untextured outer faces), culled as the level's, all that showed was
+those faces from behind, white lit green.
 
 Lightmaps are packed into 1024x1024 pages, each with a one-texel border
 copying its edges so filtering doesn't bleed. They hold the light halved,
