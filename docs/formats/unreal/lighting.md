@@ -226,7 +226,7 @@ against the same views here, matched shot for shot in cut scenes:
 
 ## Coronas
 
-A light with `bCorona` (382 of The Fallen's, in 33 maps, and some
+A light with `bCorona` (in 33 of The Fallen's maps, and some
 projectiles) draws a corona: its `Skin` (else its `Texture`, the lens
 flares of `ds9genFX.LensFlares`) as a glow where it is, added over
 everything, the same size on the screen however far away: the texture's
