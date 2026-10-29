@@ -226,6 +226,23 @@ against the same views here, matched shot for shot in cut scenes:
 - The HUD's panels are paler in the recording, (93,86,180) against
   (63,51,150): not translucency (their insides are black in both) but
   the display curve, undone on ours (87,74,169).
+- The recording's display is brighter all through, most in the dark
+  tones (Ops, the lab, Kira's courtyard, the mine: its 25th, 50th, 75th
+  and 95th percentiles above ours alike, dark tones 3 to 9 times). Undo
+  our curve (0.88 x^1.3, fitted at Brightness 0.5) and the recording is
+  about 1.07 x^0.83 of the light: a higher Brightness setting. Not a
+  rendering difference; Reluva could follow the game's Brightness
+  setting once its curve at other values is known.
+- **Not found: Hass'terral's snowfield (M10_SiskoL1A) is far too dark,**
+  about 13 times beyond the display difference. It's lit by 24 cylinder
+  lights (radius 6400, brightness 32, pale blue) high above; the ground's
+  lightmap (201x156 samples, 64 units each) is computed and lit in
+  places, but its shadow bits leave the player's start and much round it
+  in shadow (8.5% of light and sample pairs set), and the original is
+  evenly bright there, cliffs included. No falloff, no incidence, and
+  ignoring the shadow bits for cylinder lights each helped only a little.
+  Something about these lights (or the bits' layout for such big
+  lightmaps) is still to be found.
 - Not found: the credits' starfield. The sky there is unlit
   `ds9skybox.stars.starbg1a`, 40 bright stars to 256x256 texels; the
   recording shows about 6 to 1000 pixels, ten times what the texture
