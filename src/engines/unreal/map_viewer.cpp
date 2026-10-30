@@ -1864,6 +1864,7 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
     // between a light and the actor keep its light off it, as they keep it
     // off the walls behind them (Sisko lit white in M03_SiskoL1A's red room
     // by the yellow lamps of the rooms round it).
+    float sum = 0;
     auto add = [&](const LightSource& l, float level) {
         if (level <= 0)
             return;
@@ -1875,6 +1876,7 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
         if (play_ && play_->wallBetween(at, l.position))
             return;
         const float amount = lightFalloff(dist / l.radius) * level;
+        sum += amount;
         for (size_t k = 0; k < 3; ++k) {
             total[k] += l.color[k] * amount;
             toward[k] += dv[k] / straight * amount;
@@ -1888,12 +1890,19 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
     // as the lightmaps are: ambient and directed together under kMaxLight.
     // Each capped alone, they reached twice it, washing characters' faces
     // under bright lights out to pale (the opening's Terrell, against a
-    // recording of the original).
-    for (size_t k = 0; k < 3; ++k) {
-        light.ambient[k] = std::min(kMaxLight, 0.15f + 0.5f * total[k]);
-        light.directed[k] = std::min(0.7f * total[k], std::max(0.0f, kMaxLight - light.ambient[k]));
-    }
+    // recording of the original). UE1 lights a mesh's vertices by which way
+    // they face each light; with one direction to give, light from all
+    // round becomes ambient and light from one side stays directed (how
+    // far apart they are: 1 less the length of their summed directions over
+    // their sum). Half of it all ambient lit CM10_KiraL1A's guards, under
+    // two lamps over the door, as brightly in front as on top, where the
+    // recording has them dark against it.
     const float len = std::sqrt(toward[0] * toward[0] + toward[1] * toward[1] + toward[2] * toward[2]);
+    const float spread = sum > 0 ? std::clamp(1 - len / sum, 0.0f, 1.0f) : 1.0f;
+    for (size_t k = 0; k < 3; ++k) {
+        light.ambient[k] = std::min(kMaxLight, 0.15f + 0.5f * spread * total[k]);
+        light.directed[k] = std::min((1 - 0.3f * spread) * total[k], std::max(0.0f, kMaxLight - light.ambient[k]));
+    }
     light.direction = len > 0 ? toWorld(Vec3f{toward[0] / len, toward[1] / len, toward[2] / len}) : gfx::Vec3{0, 0, 1};
     return light;
 }

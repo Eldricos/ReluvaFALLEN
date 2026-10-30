@@ -219,6 +219,14 @@ against the same views here, matched shot for shot in cut scenes:
 - The red emergency lights of M03_SiskoL1A flood the room red, Sisko
   too; here they were a dim red and Sisko white: the colour (above), the
   lights that start off, and lights through walls on characters.
+- Characters (meshes) take one ambient and one directed light: the
+  lights round them summed, the ambient share from how far apart their
+  directions are. CM10_KiraL1A's two guards stand under two lamps over a
+  door; with half of all light ambient they were lit as brightly in
+  front as on top (their 75th percentile 0.085 against the recording's
+  0.032, through its display curve); with light from one side kept
+  directed, 0.027. Characters lit from all round (Kira in M05_KiraL1,
+  Worf on the Defiant) barely change.
 - Bright areas (the opening's lab, Kira's monastery) come within 10-20%;
   dark ones fall short by more the darker they are, as a brighter
   display setting would (the recording's player had one: its HUD, drawn
