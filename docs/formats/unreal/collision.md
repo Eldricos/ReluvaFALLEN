@@ -79,3 +79,7 @@ without one is a box). An actor that does start in solid (spawned into a wall, o
 by a script) may move if the move ends in open space. Otherwise it is
 first nudged to the nearest open spot (up first, then sideways, in 2-unit
 steps up to 32), as spawning does. If no open spot is near, it stays put.
+Spawning first tries straight up as far as the actor's own height: some
+player starts sit closer to the floor than the player's half height
+(M06_SiskoL1B's and M06_WorfL1B's, 16 units over it against 50), and
+with only the 32-unit search the player was left at the world's origin.

@@ -258,8 +258,18 @@ bool ScriptLevel::place(VmObject* a, const Vec& point) {
         updateRegion(a);
         return true;
     }
-    // Nudged: up first (most such starts are a little into the floor),
-    // then sideways, then both.
+    // Raised first, as far as its own height (most such starts are into
+    // the floor: M06_SiskoL1B's is 16 units over it, the player's half
+    // height 50; left where it was, the player began at the world's
+    // origin, in water); then nudged sideways, and both.
+    for (float d = 2; d <= 2 * e[2]; d += 2) {
+        const Vec at = add(point, Vec{0, 0, d});
+        if (clear(at, e, a)) {
+            vm_.setVector(*loc, at[0], at[1], at[2]);
+            updateRegion(a);
+            return true;
+        }
+    }
     for (int step = 1; step <= 16; ++step) {
         const float d = float(step) * 2;
         const Vec tries[] = {{0, 0, d}, {d, 0, 0}, {-d, 0, 0}, {0, d, 0}, {0, -d, 0}, {d, d, d}, {-d, -d, d},
