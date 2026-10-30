@@ -245,19 +245,6 @@ void MapViewer::load(int index) {
         mapLevels_.push_back(l.startsOff ? 0.0f : lightLevel(l, l.type, 0, false));
     }
     animatedLightmaps_ = std::move(atlas.animated);
-    if (std::getenv("LIGHTDBG")) {
-        std::map<int, std::array<float, 3>> stat; // index -> texels lit, max, sum
-        for (const AnimatedLightmap& m : animatedLightmaps_)
-            for (const AnimatedLightmap::Light& l : m.lights)
-                for (const Vec3f& c : l.share) {
-                    const float v = std::max({c[0], c[1], c[2]});
-                    if (v <= 0) continue;
-                    auto& st = stat[l.index];
-                    st[0] += 1; st[1] = std::max(st[1], v); st[2] += v;
-                }
-        for (const auto& [i, st] : stat)
-            std::fprintf(stderr, "ANIM %d %s texels %.0f max %.2f mean %.3f level %.2f\n", i, pkg->path(changingLights_[size_t(i)].ref).c_str(), st[0], st[1], st[2] / std::max(1.0f, st[0]), lightLevels_[size_t(i)]);
-    }
     staleLightmaps_.assign(animatedLightmaps_.size(), false);
     lightTime_ = 0;
 
