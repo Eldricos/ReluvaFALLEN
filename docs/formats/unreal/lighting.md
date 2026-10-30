@@ -251,14 +251,25 @@ against the same views here, matched shot for shot in cut scenes:
   Still darker than the recording: the cliffs beside the path, which
   these lights don't reach (dropping the incidence for them overshot the
   ground by 70% and barely lit the cliffs).
-- Not found: the credits' starfield. The sky there is unlit
-  `ds9skybox.stars.starbg1a`, 40 bright stars to 256x256 texels; the
-  recording shows about 6 to 1000 pixels, ten times what the texture
-  can give, as bright 3-pixel blobs. Something else draws them (or
-  another texture); not identified.
-- Not found: what lights the station in the credits (CM_SpaceStation).
-  Its surfaces have lightmaps but the level's lights reach few of their
-  samples, and in the original it's evenly bright.
+- The credits' starfield and nebulae (CM_SpaceStation) are the sky
+  zone's own: a sphere of unlit `ds9skybox.stars.starbg1a` (radius 1024,
+  2 units a texel) and two masked quads of `ds9Nebula1`/`ds9Nebula2`.
+  Their texels are dim (most stars 20 to 66, the nebulae about
+  (16,10,16)), so on ours they all but vanish; through the recording's
+  display curve (above) both show as in the recording, the stars with
+  about half its bright pixels (theirs larger, brighter blobs: a lower
+  resolution scaled up, where ours filters one-texel stars down).
+- Not found: what lights the credits station (CM_SpaceStation). Half
+  its hull surfaces have lightmaps whose list of lights is empty (or
+  none at all): the level's last lighting build reached none of their
+  samples, and lists are read right (the lightmaps point only into that
+  build's lists, the older ones left unreferenced). In the recording the
+  outward faces of its rings, behind the windows, are evenly bright
+  while the undersides and the hub, with empty lists alike, are dark;
+  neither "no lights means unlit" nor "an empty list means unlit"
+  matches (each lights faces the recording leaves dark). The same
+  station in CM_Worf_Endgame is lit by its lights and comes within
+  about 20% of the recording (bluer there).
 
 ## Coronas
 

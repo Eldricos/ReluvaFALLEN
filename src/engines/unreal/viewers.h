@@ -454,8 +454,10 @@ private:
     float animTime_ = 0;
     std::vector<gfx::TextureId> textures_;
     // Textures uploaded, each once: its id (0: unreadable) and size.
-    std::pair<gfx::TextureId, std::array<int, 2>> textureOf(const ObjectRef& texture, bool* unreadable = nullptr);
-    std::map<std::pair<const Package*, int>, std::pair<gfx::TextureId, std::array<int, 2>>> textureCache_;
+    // With `masked`, colour 0 see-through (drawn on a masked surface).
+    std::pair<gfx::TextureId, std::array<int, 2>> textureOf(const ObjectRef& texture, bool* unreadable = nullptr,
+                                                            bool masked = false);
+    std::map<std::tuple<const Package*, int, bool>, std::pair<gfx::TextureId, std::array<int, 2>>> textureCache_;
     LevelLights lights_; // the level's, for lighting what moves
     MeshLight meshLightAt(const Vec3f& location) const;
 

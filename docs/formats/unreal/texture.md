@@ -19,7 +19,10 @@ Properties (see [package.md](package.md)), then the mipmaps.
 Properties used: `Format` (Byte: 0 P8, 1 RGBA7, 2 RGB16, 3 DXT1, 4 RGB8,
 5 RGBA8; P8 when absent), `Palette` (Object), `USize`/`VSize` (Int),
 `bMasked` (Bool: colour 0 is see-through), `PolyFlags` (Int: how
-surfaces with it draw, see [model.md](model.md)).
+surfaces with it draw, see [model.md](model.md)). A surface flagged
+Masked sees through colour 0 whether or not its texture is marked so:
+CM_SpaceStation's windows are FLCs without `bMasked` on masked surfaces,
+lit hull showing between the windows in a recording of the original.
 
 Mipmaps: a compact count, then each, largest first:
 
@@ -82,7 +85,8 @@ for that divided by the rate (`Rate`, 0.014 to 1): the red blinker
 `FlcAnim.Redblink01` (rate 0.1) a third of a second a frame. That the
 rate divides is a guess from its saved `FrameTime` (0.058, more than
 1/30). Pixels go through the FLC's own palette chunks, starting from
-the texture's palette; masked textures see through colour 0.
+the texture's palette; masked textures, and any on a masked surface, see
+through colour 0.
 
 Playing is script's to ask for: `Mode` (0 stopped, 1 once, 2 looping),
 with `FrameNum` and `FrameTime` where it is. Reluva plays a FliTexture

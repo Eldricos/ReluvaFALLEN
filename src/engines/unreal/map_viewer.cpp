@@ -265,9 +265,9 @@ void MapViewer::load(int index) {
     // Each texture uploaded once; its size divides texture coordinates.
     int missing = 0;
     std::string firstMissing;
-    auto textureOf = [&](const ObjectRef& tex) {
+    auto textureOf = [&](const ObjectRef& tex, bool masked = false) {
         bool unreadable = false;
-        const auto t = this->textureOf(tex, &unreadable);
+        const auto t = this->textureOf(tex, &unreadable, masked);
         if (unreadable) {
             ++missing;
             if (firstMissing.empty())
@@ -275,14 +275,14 @@ void MapViewer::load(int index) {
         }
         return t;
     };
-    auto textureFor = [&](const Package& from, int32_t ref) -> std::pair<gfx::TextureId, std::array<int, 2>> {
+    auto textureFor = [&](const Package& from, int32_t ref, uint32_t flags) -> std::pair<gfx::TextureId, std::array<int, 2>> {
         const ObjectRef tex = ctx_.packages.resolve(from, ref);
         if (!tex && ref != 0) {
             ++missing;
             if (firstMissing.empty())
                 firstMissing = from.path(ref);
         }
-        return textureOf(tex);
+        return textureOf(tex, (flags & polyflag::Masked) != 0);
     };
     const gfx::Vec3 light = [] {
         const float l = std::sqrt(0.3f * 0.3f + 0.5f * 0.5f + 0.8f * 0.8f);
@@ -295,7 +295,7 @@ void MapViewer::load(int index) {
         batch.zones = zones;
         batch.lightmap = page >= 0 ? pages[size_t(page)] : 0;
         batch.firstIndex = uint32_t(indices.size());
-        const auto [textureId, size] = textureFor(*pkg, textureRef);
+        const auto [textureId, size] = textureFor(*pkg, textureRef, flags);
         batch.texture = textureId;
         batch.textureRef = ctx_.packages.resolve(*pkg, textureRef);
         for (const Polygon* p : group) {
@@ -392,7 +392,7 @@ void MapViewer::load(int index) {
             Batch batch;
             batch.polyFlags = key.second;
             batch.firstIndex = uint32_t(indices.size());
-            const auto [textureId, size] = textureFor(*pkg, key.first);
+            const auto [textureId, size] = textureFor(*pkg, key.first, key.second);
             batch.texture = textureId;
             for (const Poly* p : group) {
                 const auto base = uint32_t(vertices.size());
@@ -1547,7 +1547,7 @@ const std::vector<MapViewer::Batch>& MapViewer::levelBatches() {
         swappedBatches_ = batches_;
         for (Batch& b : swappedBatches_)
             if (auto it = swaps.world.find({b.textureRef.package, b.textureRef.exportIndex}); it != swaps.world.end())
-                b.texture = textureOf(it->second).first;
+                b.texture = textureOf(it->second, nullptr, (b.polyFlags & polyflag::Masked) != 0).first;
     }
     return swappedBatches_;
 }
@@ -1563,14 +1563,13 @@ void MapViewer::drawSurfaceSwaps() {
         auto it = surfRanges_.find(surf);
         if (it == surfRanges_.end())
             continue;
-        const gfx::TextureId texture = textureOf(tex).first;
         for (const SurfRange& r : it->second) {
             if (r.batch >= batches_.size())
                 continue;
             Batch b = batches_[r.batch];
             b.firstIndex = r.firstIndex;
             b.indexCount = r.indexCount;
-            b.texture = texture;
+            b.texture = textureOf(tex, nullptr, (b.polyFlags & polyflag::Masked) != 0).first;
             drawBatches({b}, mesh_, gfx::identity(), true, true);
         }
     }
@@ -1809,15 +1808,18 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
                        i == errorLine ? Color{255, 120, 120} : Color{230, 230, 230});
 }
 
-std::pair<gfx::TextureId, std::array<int, 2>> MapViewer::textureOf(const ObjectRef& tex, bool* unreadable) {
+std::pair<gfx::TextureId, std::array<int, 2>> MapViewer::textureOf(const ObjectRef& tex, bool* unreadable,
+                                                                  bool masked) {
     if (!tex)
         return {0, {64, 64}};
-    auto it = textureCache_.find({tex.package, tex.exportIndex});
+    auto it = textureCache_.find({tex.package, tex.exportIndex, masked});
     if (it == textureCache_.end()) {
         image::Image img;
         gfx::TextureId id = 0;
         TextureInfo ti;
-        if (decodeTexture(ctx_.packages, *tex.package, tex.exportIndex, img, &ti)) {
+        // A masked surface leaves colour 0 out whether or not its texture
+        // is marked masked (CM_SpaceStation's windows, an FLC over the hull).
+        if (decodeTexture(ctx_.packages, *tex.package, tex.exportIndex, img, &ti, masked)) {
             if (unreadable)
                 *unreadable = true;
         } else {
@@ -1826,6 +1828,8 @@ std::pair<gfx::TextureId, std::array<int, 2>> MapViewer::textureOf(const ObjectR
             std::unique_ptr<AnimatedTexture> anim;
             if (isAnimatedTextureClass(tex.package->className(tex.exportIndex + 1)))
                 anim = openAnimatedTexture(ctx_.packages, *tex.package, tex.exportIndex);
+            if (anim && masked && anim->frames() > 0)
+                anim->showFrame(1, true);
             if (anim && anim->image().w == img.w && anim->image().h == img.h)
                 img = anim->image();
             else
@@ -1842,7 +1846,7 @@ std::pair<gfx::TextureId, std::array<int, 2>> MapViewer::textureOf(const ObjectR
             }
         }
         it = textureCache_
-                 .emplace(std::make_pair(tex.package, tex.exportIndex),
+                 .emplace(std::make_tuple(tex.package, tex.exportIndex, masked),
                           std::make_pair(id, std::array<int, 2>{std::max(1, img.w), std::max(1, img.h)}))
                  .first;
     }
