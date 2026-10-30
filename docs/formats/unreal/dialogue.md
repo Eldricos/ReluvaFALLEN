@@ -35,7 +35,7 @@ of tabs space the rest out. Every other row is a line:
 | EVENT | what the line sets off: actors with this tag are triggered, or one of the HUD's beam-downs |
 | CONDITION | when it may be said: tests joined by `and` and `or`, maybe after `!` (`SpecialCondition( InTemple ) and ! CommunicationBlocked`, `DS9Phase( 2 )`); one in brackets is a note to the writers |
 | CAMERA | a cut scene camera (`CAM(R:19,15,35,5,-144,0 F:90)`: R a place and turn from the speaker, A in the world, F the field of view); `V:1` a voice-over (a log), `H:1` heard over the communicator |
-| SPEAKER ANIMATION, LISTENER ANIMATION | an animation each plays (`CnvFirm1`) |
+| SPEAKER ANIMATION, LISTENER ANIMATION | an animation each plays (`CnvFirm1`); a face here (`FEX_HAPPY`, as some of CIN_Dialogue's lines have, their face column empty) is taken as the face |
 | SPEAKER FACE, LISTENER FACE | a face (`FEX_DETERMINED`, the names of Pawn's `EFEX_Type`) |
 
 Lines numbered one after another (010, 011) with no NEXTLINE between

@@ -576,10 +576,16 @@ void ScriptLevel::beginLine(DialogThread& t, int index) {
                 vm_.callEvent(input, "DoEvent", {Value::nameValue(vm_.name(w))});
         }
     }
+    // A face in the animation's column (CIN_Dialogue's Obanak lines have
+    // FEX_HAPPY, FEX_DETERMINED there and no face) is a face: played as an
+    // animation the mesh hasn't got, it left him in his bind pose, arms out.
+    auto isFace = [](const std::string& s) { return s.size() > 4 && same(s.substr(0, 4), "FEX_"); };
     for (const auto& [who, anim] : {std::pair{t.speaker, l.speakerAnim}, std::pair{t.listener, l.listenerAnim}})
-        if (who && !anim.empty() && !who->deleted)
+        if (who && !anim.empty() && !isFace(anim) && !who->deleted)
             vm_.callEvent(who, "PlayDialogAnim", {Value::nameValue(vm_.name(anim)), Value::floatValue(1), Value::floatValue(0.2f)});
-    for (const auto& [who, face] : {std::pair{t.speaker, l.speakerFace}, std::pair{t.listener, l.listenerFace}}) {
+    for (const auto& [who, face] :
+         {std::pair{t.speaker, !l.speakerFace.empty() || !isFace(l.speakerAnim) ? l.speakerFace : l.speakerAnim},
+          std::pair{t.listener, !l.listenerFace.empty() || !isFace(l.listenerAnim) ? l.listenerFace : l.listenerAnim}}) {
         Value* v = who && !face.empty() ? prop(who, "FacialExpression") : nullptr;
         const VmProperty* p = v ? who->cls->findProperty(vm_.name("FacialExpression")) : nullptr;
         if (p && p->enumNames)
