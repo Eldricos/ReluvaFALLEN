@@ -288,7 +288,9 @@ against the same views here, matched shot for shot in cut scenes:
 
 A light with `bCorona` (in 33 of The Fallen's maps, and some
 projectiles) draws a corona: its `Skin` (else its `Texture`, the lens
-flares of `ds9genFX.LensFlares`) as a glow where it is, added over
+flares of `ds9genFX.LensFlares`, if it's drawn as a sprite: a mesh's
+`Texture` is its editor icon, and the red orb, a pickup with `bCorona`,
+glowed as the Inventory icon's crate on green) as a glow where it is, added over
 everything, the same size on the screen however far away: the texture's
 width times `DrawScale` times 8 on a 960-wide frame. In a recording of
 the original the credits station's flares (`coronaora02` at 0.025,

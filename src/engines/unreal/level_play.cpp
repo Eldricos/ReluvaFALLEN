@@ -432,8 +432,13 @@ void LevelPlay::coronas(std::vector<Corona>& out) {
             continue;
         Corona c;
         c.actor = a;
+        // Its skin, else its texture if it's drawn as a sprite (a light's
+        // lens flare). A mesh's texture is only its icon in the editor:
+        // CM10_SWK_L3's red orb glowed as the Inventory icon, a crate on
+        // green, where the recording shows only its halo.
         c.texture = refOf(at(Skin));
-        if (!c.texture)
+        const Value* drawType = at(DrawType);
+        if (!c.texture && (!drawType || drawType->asInt() == 1))
             c.texture = refOf(at(Texture));
         if (!c.texture)
             continue;
