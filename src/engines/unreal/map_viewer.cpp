@@ -1865,8 +1865,11 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
     // off the walls behind them (Sisko lit white in M03_SiskoL1A's red room
     // by the yellow lamps of the rooms round it).
     float sum = 0;
+    // A special lit light (bSpecialLit) lights none of them: CM11_LabRitual's
+    // eight blue halos high over the room washed Obanak blue, where the
+    // recording has his face lit by the altar's fire.
     auto add = [&](const LightSource& l, float level) {
-        if (level <= 0)
+        if (level <= 0 || l.specialLit)
             return;
         const Vec3f dv{l.position[0] - at[0], l.position[1] - at[1], l.position[2] - at[2]};
         const float straight = std::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);

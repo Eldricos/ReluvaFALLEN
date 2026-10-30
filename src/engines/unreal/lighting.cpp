@@ -79,6 +79,7 @@ bool readLight(const PackageSet& packages, const Package& package, int32_t ref, 
     const uint8_t effect = props.byte("LightEffect");
     l.effect = effect;
     l.cylinder = effect == kEffectCylinder;
+    l.specialLit = props.boolean("bSpecialLit");
     l.incidence = effect != kEffectNonIncidence;
     l.brightness = brightness;
     if (effect == kEffectSpotlight || effect == kEffectStaticSpot) {

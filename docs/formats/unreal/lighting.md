@@ -227,6 +227,11 @@ against the same views here, matched shot for shot in cut scenes:
   0.032, through its display curve); with light from one side kept
   directed, 0.027. Characters lit from all round (Kira in M05_KiraL1,
   Worf on the Defiant) barely change.
+- Lights with `bSpecialLit` don't light characters: CM11_LabRitual's
+  eight blue halos (radius 3225, high over the room) lit Obanak blue and
+  white, where the recording has his face orange from the altar's fire
+  (two pulsing orange lights beside it). On surfaces they light only
+  those flagged SpecialLit, which the editor's lists already reflect.
 - Bright areas (the opening's lab, Kira's monastery) come within 10-20%;
   dark ones fall short by more the darker they are, as a brighter
   display setting would (the recording's player had one: its HUD, drawn

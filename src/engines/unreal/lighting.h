@@ -52,6 +52,9 @@ struct LightSource {
     // lights (lightPattern), shock flashes it as a whole.
     uint8_t effect = 0;
     bool cylinder = false;
+    // bSpecialLit: lights only what's special lit (surfaces flagged so, in
+    // the editor's lists; actors with bSpecialLit), not other actors.
+    bool specialLit = false;
     // Its actor (an object reference in the level's package), its own
     // LightBrightness, and whether scripts may change it while the game
     // runs (a TriggerLight and the like, or one a trigger can name by its
