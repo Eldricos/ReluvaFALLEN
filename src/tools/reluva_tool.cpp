@@ -4747,13 +4747,15 @@ private:
 // up <key> (held across other steps), press <key>, watch <actor> (the
 // camera let loose in front of it), teleport <actor> <dx> <dy> <dz> <yaw>
 // (the player put by it, facing yaw degrees), where (the player's place,
-// state, physics and animation),
+// state, physics and animation), camera <x> <y> <z> <yaw> <pitch> (the fly
+// camera put there, not playing), places <class part> (the live actors of
+// such classes and where they are),
 // drag <dx> <dy>, click <x> <y> (the left button, there), shot <file.ppm>
 // (the next frame, saved).
 int cmdUePlay(int argc, char** argv) {
     if (argc < 4) {
         std::fprintf(stderr, "usage: reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | "
-                             "teleport <actor> <dx> <dy> <dz> <yaw> | where | view | lines | actor <name> | prop <actor> <property> | console <command> | down <key> | up <key> | press <key> | travel <url> | saves <dir> | watch <actor> | "
+                             "teleport <actor> <dx> <dy> <dz> <yaw> | camera <x> <y> <z> <yaw> <pitch> | places <class> | where | view | lines | actor <name> | prop <actor> <property> | console <command> | down <key> | up <key> | press <key> | travel <url> | saves <dir> | watch <actor> | "
                              "drag <dx> <dy> | click <x> <y> | shot <file.ppm>]...\n");
         return 2;
     }
@@ -4879,6 +4881,15 @@ int cmdUePlay(int argc, char** argv) {
             i += 4;
             std::printf("teleport %s: %s\n", who.c_str(), page.teleportPlayer(who, off, yaw) ? "there" : "no such actor");
             frame();
+        } else if (step == "camera" && i + 5 < argc) {
+            const reluva::unreal::Vec3f at{float(std::atof(argv[i + 1])), float(std::atof(argv[i + 2])),
+                                           float(std::atof(argv[i + 3]))};
+            page.placeCamera(at, float(std::atof(argv[i + 4])), float(std::atof(argv[i + 5])));
+            i += 5;
+            frame();
+        } else if (step == "places" && i + 1 < argc) {
+            for (const auto& [name, at] : page.actorPlaces(argv[++i]))
+                std::printf("  place %s %.1f %.1f %.1f\n", name.c_str(), double(at[0]), double(at[1]), double(at[2]));
         } else if (step == "console" && i + 1 < argc) {
             const std::string command = argv[++i];
             std::printf("console %s: %s\n", command.c_str(), page.consoleCommand(command).c_str());

@@ -297,7 +297,9 @@ A light with `bCorona` (in 33 of The Fallen's maps, and some
 projectiles) draws a corona: its `Skin` (else its `Texture`, the lens
 flares of `ds9genFX.LensFlares`, if it's drawn as a sprite: a mesh's
 `Texture` is its editor icon, and the red orb, a pickup with `bCorona`,
-glowed as the Inventory icon's crate on green) as a glow where it is, added over
+glowed as the Inventory icon's crate on green; nor one of the editor's own
+icons, Engine's `S_` textures: M05_KiraL1 has a ZoneInfo and a plain light
+with `bCorona` and no flare, which glowed as a bulb and a question mark) as a glow where it is, added over
 everything, the same size on the screen however far away: the texture's
 width times `DrawScale` times 8 on a 960-wide frame. In a recording of
 the original the credits station's flares (`coronaora02` at 0.025,

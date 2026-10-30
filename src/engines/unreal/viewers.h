@@ -303,6 +303,12 @@ public:
     // The player put by an actor (`offset` from it, facing `yaw` degrees),
     // falling; and where it is, its state and physics (ue-play's tests).
     bool teleportPlayer(const std::string& name, const Vec3f& offset, float yaw);
+    // The fly camera put at a place in Unreal's axes, facing yaw and pitch
+    // degrees (when not playing); and the live actors whose class has
+    // `classPart` in its name, with where they are (ue-play's tests: views
+    // to match against a recording).
+    void placeCamera(const Vec3f& at, float yaw, float pitch);
+    std::vector<std::pair<std::string, Vec3f>> actorPlaces(const std::string& classPart);
     std::string describePlayer();
     // A console command as the player types it (its ConsoleCommand), and
     // what it answers; ue-play's tests.

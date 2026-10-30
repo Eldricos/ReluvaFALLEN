@@ -686,6 +686,27 @@ bool MapViewer::watchActor(const std::string& name) {
     return false;
 }
 
+void MapViewer::placeCamera(const Vec3f& at, float yaw, float pitch) {
+    pos_ = toWorld(at);
+    yaw_ = -yaw * kPi / 180;
+    pitch_ = pitch * kPi / 180;
+}
+
+std::vector<std::pair<std::string, Vec3f>> MapViewer::actorPlaces(const std::string& classPart) {
+    std::vector<std::pair<std::string, Vec3f>> out;
+    if (!play_)
+        return out;
+    Vm& vm = play_->vm();
+    for (VmObject* a : play_->level().actors()) {
+        if (a->deleted || !a->cls || a->cls->name.find(classPart) == std::string::npos)
+            continue;
+        const Value* at = a->find(vm, "Location");
+        const auto l = at ? Vm::vectorOf(*at) : std::array<float, 3>{};
+        out.push_back({vm.nameText(a->name), Vec3f{l[0], l[1], l[2]}});
+    }
+    return out;
+}
+
 bool MapViewer::teleportPlayer(const std::string& name, const Vec3f& offset, float yaw) {
     if (!play_ || !play_->player())
         return false;
