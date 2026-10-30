@@ -153,12 +153,16 @@ void registerSplineNatives(Vm& vm) {
 
         // How far along the segment: each node first waits its pause,
         // then travels, its speed changing evenly from the node's to the
-        // next's (UnrealEd's average speed, saved, is their mean).
+        // next's (UnrealEd's average speed, saved, is their mean). The
+        // saved duration counts the pause too: CM10_SWK_L3's Sisko waits
+        // 8 seconds at a node whose duration is 10.1, its 178 units at
+        // speed 85 the other 2.1.
         float s = 0;
         if (b) {
             const float end = last ? maxTime : b->timeLine;
             const float span = std::max(0.0f, end - a.timeLine);
-            const float travel = a.duration > 0 ? std::min(a.duration, span) : std::max(0.0f, span - a.pause);
+            const float travel = a.duration > 0 ? std::clamp(a.duration - a.pause, 0.0f, span)
+                                                : std::max(0.0f, span - a.pause);
             const float wait = span - travel;
             const float tau = travel > 0 ? std::clamp((t - a.timeLine - wait) / travel, 0.0f, 1.0f) : 1.0f;
             const float v0 = a.speed, v1 = b->speed;

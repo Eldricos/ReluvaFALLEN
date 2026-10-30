@@ -1156,9 +1156,12 @@ These are chains of `CTVE_Spline` nodes; `CTVE_Director` is a camera's,
 - `AveSpeed`: the mean of this node's and the next's `Speed`.
 
 So Reluva's reading is:
-- **Timing.** Each node waits out any time the segment's `Duration`
-  leaves over, then travels it, its speed changing evenly from its own
-  `Speed` to the next's.
+- **Timing.** Each node waits its `Pause`, then travels the segment, its
+  speed changing evenly from its own `Speed` to the next's. `Duration`
+  counts both: the pause plus `Length` at `AveSpeed` (CM10_SWK_L3's
+  Sisko: 8 + 178/85 = 10.1), so the travel takes `Duration` less
+  `Pause`. Counted all as travel, Sisko barely stopped where his camera
+  looks over his shoulder, and had walked on before the shot.
 - **The path.** The segment is a cubic through the two nodes, leaving
   and arriving along their tangents (a straight line with
   `Interpolation` linear). It's followed by length, measured in 16 pieces.
