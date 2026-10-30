@@ -505,6 +505,14 @@ private:
     };
     std::map<std::pair<const Package*, int>, Poser> posers_;
     std::vector<GpuMesh> posedMeshes_;
+    // The character mesh drawLiveActor drew last, for its shadow.
+    struct LastMesh {
+        bool set = false;
+        GpuMesh gpu;
+        gfx::Mat4 placement{};
+        MeshPose pose;
+    } lastMesh_;
+    void drawShadow(VmObject* actor, const Vec3f& location);
     bool drawLayered(const LevelPlay::Look& look, int mesh, const gfx::Mat4& placement,
                      const std::vector<gfx::TextureId>& skins, const MeshLight& light);
     float playClock_ = 0, fov_ = 90;

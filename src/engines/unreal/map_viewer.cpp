@@ -40,6 +40,8 @@ constexpr float kEyeHeight = 27; // above a PlayerStart's location, roughly a pl
 // The frame's colours are multiplied by this before the display gamma; with
 // a gamma of 1.3 it matches the original's screenshots (lighting.md).
 constexpr float kExposure = 0.88f;
+// How much of the floor's light a character's shadow takes off.
+constexpr float kShadowDepth = 0.55f;
 
 enum Held { Forward, Back, Left, Right, Up, Down, Fast, TurnLeft, TurnRight, LookUp, LookDown, Fire, HeldCount };
 
@@ -2212,6 +2214,60 @@ void MapViewer::addCoronas(std::vector<SpriteDraw>& sprites, const gfx::Vec3& fo
     coronaFade_ = std::move(fades);
 }
 
+// The Fallen's characters cast shadows of their own shape (actors with
+// bProjectsShadows, from lights with bActorShadows: every Light by
+// default): its renderer says so (GetRendererFlags bit 2), and its blob
+// shadows (CTV_Shadow) step aside. Reluva's reading: the mesh flattened
+// onto the floor under it from the level light that lights it most (not
+// behind a wall, above its feet), darkening what's there once. Compared
+// with a recording of the original: Kira's shadow across M05_KiraL1's
+// bridge floor, and on the Promenade shrine's platform.
+void MapViewer::drawShadow(VmObject* a, const Vec3f& at) {
+    Vm& vm = play_->vm();
+    const Value* casts = a->find(vm, "bProjectsShadows");
+    if (!casts || !casts->asBool())
+        return;
+    const Value* hv = a->find(vm, "CollisionHeight");
+    const float height = hv ? std::max(1.0f, hv->asFloat()) : 40;
+    // The floor: straight down from it, within a body's height of its feet.
+    std::array<float, 3> hit{}, normal{};
+    const std::array<float, 3> from{at[0], at[1], at[2]}, to{at[0], at[1], at[2] - 3 * height};
+    if (!play_->level().trace(nullptr, from, to, {0, 0, 0}, false, hit, normal) || normal[2] < 0.7f)
+        return;
+    // The light: the level's that lights it most.
+    const LightSource* best = nullptr;
+    float bestAmount = 0, total = 0;
+    const Vec3f chest{at[0], at[1], at[2] + height * 0.5f};
+    for (const LightSource& l : lights_.unique) {
+        if (l.specialLit || l.position[2] < hit[2] + height * 0.5f)
+            continue;
+        const float dist = lightDistance(l, chest);
+        if (dist >= l.radius)
+            continue;
+        const float amount = lightFalloff(dist / l.radius) * levelOf(l) * (l.color[0] + l.color[1] + l.color[2]) / 3;
+        if (amount <= 0 || play_->wallBetween(chest, l.position))
+            continue;
+        total += amount;
+        if (amount > bestAmount) {
+            bestAmount = amount;
+            best = &l;
+        }
+    }
+    if (!best || total <= 0)
+        return;
+    // As dark wherever it falls: a little under half of what's there, as
+    // Kira's on M05_KiraL1's floor in the recording, whatever that light's
+    // share of the light there.
+    const float shade = 1 - kShadowDepth;
+    const gfx::Vec3 n = toWorld(Vec3f{normal[0], normal[1], normal[2]});
+    const gfx::Vec3 p = toWorld(Vec3f{hit[0] + normal[0] * 0.5f, hit[1] + normal[1] * 0.5f, hit[2] + normal[2] * 0.5f});
+    const float d = n[0] * p[0] + n[1] * p[1] + n[2] * p[2];
+    const gfx::Mat4 flatten = planarShadow(toWorld(best->position), n, d);
+    renderer_->setStencilMode(gfx::Renderer3D::StencilMode::Once);
+    drawMeshShadow(*renderer_, lastMesh_.gpu, gfx::multiply(flatten, lastMesh_.placement), lastMesh_.pose, shade);
+    renderer_->setStencilMode(gfx::Renderer3D::StencilMode::None);
+}
+
 // One of the level's actors, as it looks now: a mesh drawn, a sprite kept
 // for drawSprites. Hidden ones only if `evenHidden` (the HUD draws some).
 void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, const ScriptLevel::HudActor* hud) {
@@ -2279,9 +2335,16 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
         play_->drawn(a);
         const gfx::Mat4 placement = meshPlacement(look.location, look.rotation, look.drawScale, look.prePivot);
         const MeshLight light = meshLightAt(look.location);
+        lastMesh_ = {};
         if ((look.layers.empty() && look.adjust.empty() && look.faces.empty()) || !mesh.bones ||
             !drawLayered(look, at, placement, skins, light))
+        {
+            lastMesh_ = {};
             drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, pose, skins, light, kExposure, look.style, &fog_);
+            lastMesh_ = {true, gpuMeshes_[size_t(at)], placement, pose};
+        }
+        if (!hud && lastMesh_.set && look.style == 1)
+            drawShadow(a, look.location);
     } else if ((look.drawType == kDrawSprite || look.drawType == kDrawVerticalSprite ||
                 look.drawType == kDrawSpriteAnimOnce) && look.texture) {
         const auto [texture, size] = textureOf(look.texture);
@@ -2469,6 +2532,7 @@ bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4
         return false;
     posedMeshes_.push_back(gpu);
     drawMesh(*renderer_, gpu, placement, MeshPose{}, skins, light, kExposure, look.style, &fog_);
+    lastMesh_ = {true, gpu, placement, MeshPose{}};
     return true;
 }
 

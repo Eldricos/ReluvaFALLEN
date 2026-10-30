@@ -982,10 +982,10 @@ void registerEngineNatives(Vm& vm) {
         if (c.vm.level && c.vm.level->paused())
             c.vm.level->tickActor(c.self, c.f(0));
     });
-    // GetRendererFlags(): what the renderer does itself. Bit 2 hides The
-    // Fallen's blob shadows (CTV_Shadow) where it draws shadows of its
-    // own; Reluva's renderers draw none, so no flags.
-    reg("Actor.GetRendererFlags", [](NativeCall& c) { c.result = Value::intValue(0); });
+    // GetRendererFlags(): what the renderer does itself. Bit 2: it draws
+    // characters' own shadows (the Maps page does, MapViewer::drawShadow),
+    // so The Fallen's blob shadows (CTV_Shadow) hide.
+    reg("Actor.GetRendererFlags", [](NativeCall& c) { c.result = Value::intValue(2); });
     // UpdateMultiSkins(): its MultiSkins changed. The page reads them each
     // frame, so there's nothing to bring up to date.
     reg("Actor.UpdateMultiSkins", [](NativeCall&) {});

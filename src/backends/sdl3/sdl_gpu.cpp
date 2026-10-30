@@ -600,8 +600,11 @@ SDL_GPUGraphicsPipeline* SdlGpuRenderer::pipeline(const gfx::DrawState& state) {
         // Mark: 1 wherever drawn; Inside: drawn only where it's 1.
         SDL_GPUStencilOpState op{};
         op.fail_op = op.depth_fail_op = SDL_GPU_STENCILOP_KEEP;
-        op.pass_op = stencilMode_ == StencilMode::Mark ? SDL_GPU_STENCILOP_REPLACE : SDL_GPU_STENCILOP_KEEP;
-        op.compare_op = stencilMode_ == StencilMode::Mark ? SDL_GPU_COMPAREOP_ALWAYS : SDL_GPU_COMPAREOP_EQUAL;
+        const bool marks = stencilMode_ == StencilMode::Mark || stencilMode_ == StencilMode::Once;
+        op.pass_op = marks ? SDL_GPU_STENCILOP_REPLACE : SDL_GPU_STENCILOP_KEEP;
+        op.compare_op = stencilMode_ == StencilMode::Mark   ? SDL_GPU_COMPAREOP_ALWAYS
+                        : stencilMode_ == StencilMode::Once ? SDL_GPU_COMPAREOP_NOT_EQUAL
+                                                            : SDL_GPU_COMPAREOP_EQUAL;
         info.depth_stencil_state.enable_stencil_test = true;
         info.depth_stencil_state.front_stencil_state = info.depth_stencil_state.back_stencil_state = op;
         info.depth_stencil_state.compare_mask = info.depth_stencil_state.write_mask = 0xff;

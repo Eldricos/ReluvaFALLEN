@@ -112,5 +112,15 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
 // The fog pass over a draw already made (opaque or masked): its colour
 // blended over by distance, where that draw left its depth.
 void drawFogOver(gfx::Renderer3D& renderer, const gfx::DrawCall& drawn, const MeshFog& fog);
+// A mesh's shadow: drawn through `placement` (its placement, then flattened
+// onto the floor) as a colour multiplying what's there (`shade` of it
+// left), not written to depth. Overlaps darken once with the renderer's
+// StencilMode::Once.
+void drawMeshShadow(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& placement, const MeshPose& pose,
+                    float shade);
+// Flattens points onto a plane (n.p = d, in the renderer's axes) along the
+// lines from a point light at `light`: what's then drawn there is the
+// shadow it casts.
+gfx::Mat4 planarShadow(const gfx::Vec3& light, const gfx::Vec3& n, float d);
 
 } // namespace reluva::unreal

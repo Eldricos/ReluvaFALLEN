@@ -48,6 +48,7 @@ SoftRenderer3D::SoftRenderer3D(int width, int height) : w_(width), h_(height) {
     color_.create(w_, h_, PixelFormat::RGBA32);
     frame_.create(w_, h_, PixelFormat::RGBA32);
     depth_.assign(size_t(w_) * size_t(h_), 1.0f);
+    stencil_.assign(size_t(w_) * size_t(h_), 0);
     vw_ = w_;
     vh_ = h_;
 }
@@ -132,6 +133,8 @@ void SoftRenderer3D::beginFrame(const gfx::Mat4& viewProj, const gfx::Vec3& eye,
         }
     }
     std::fill(depth_.begin(), depth_.end(), 1.0f);
+    std::fill(stencil_.begin(), stencil_.end(), uint8_t(0));
+    stencilMode_ = StencilMode::None;
 }
 
 void SoftRenderer3D::setView(const gfx::Mat4& viewProj, const gfx::Vec3& eye) {
@@ -297,6 +300,9 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                     float& d = depth_[size_t(y) * size_t(w_) + size_t(x)];
                     if (call.state.depthTest && (call.state.depthEqual ? std::fabs(z - d) > 1e-5f : z > d))
                         continue;
+                    uint8_t& mark = stencil_[size_t(y) * size_t(w_) + size_t(x)];
+                    if ((stencilMode_ == StencilMode::Inside && !mark) || (stencilMode_ == StencilMode::Once && mark))
+                        continue;
                     const float iw = b0 * v0->invW + b1 * v1->invW + b2 * v2->invW;
                     auto attr = [&](float ClipVertex::*f) {
                         return (b0 * (v0->c.*f) * v0->invW + b1 * (v1->c.*f) * v1->invW + b2 * (v2->c.*f) * v2->invW) / iw;
@@ -365,6 +371,8 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                     }
                     if (call.state.depthWrite)
                         d = z;
+                    if (stencilMode_ == StencilMode::Mark || stencilMode_ == StencilMode::Once)
+                        mark = 1;
                 }
             }
         }

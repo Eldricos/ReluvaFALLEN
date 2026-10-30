@@ -50,8 +50,8 @@ public:
     void setViewport(int x, int y, int w, int h) override;
     void setDepthRange(float maxDepth) override { depthRange_ = maxDepth; }
     void clearDepth() override;
-    bool hasStencil() const override { return false; }
-    void setStencilMode(StencilMode) override {}
+    bool hasStencil() const override { return true; }
+    void setStencilMode(StencilMode mode) override { stencilMode_ = mode; }
     void setMirrored(bool) override {}
     void setGamma(float gamma) override { gamma_ = gamma; }
     void endFrame(const Surface* overlay) override;
@@ -82,6 +82,8 @@ private:
     int w_, h_;
     Surface color_, frame_;
     std::vector<float> depth_;
+    std::vector<uint8_t> stencil_; // marks, cleared each frame
+    StencilMode stencilMode_ = StencilMode::None;
     std::map<gfx::TextureId, Texture> textures_;
     std::map<gfx::MeshId, Mesh> meshes_;
     uint32_t nextId_ = 1;

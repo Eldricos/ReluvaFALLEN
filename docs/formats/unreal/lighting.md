@@ -291,6 +291,23 @@ against the same views here, matched shot for shot in cut scenes:
   station in CM_Worf_Endgame is lit by its lights and comes within
   about 20% of the recording (bluer there).
 
+## Characters' shadows
+
+The Fallen's characters cast shadows of their own shape: actors with
+`bProjectsShadows` (pawns, weapons and pickups by default) from lights
+with `bActorShadows` (every `Light` by default), when the renderer says it
+draws them (`GetRendererFlags` bit 2; the game's blob shadows,
+`CTV_Shadow`, then hide). How the original chose the light and how dark
+the shadow is isn't known. Reluva's reading: the mesh, as it's posed,
+flattened onto the floor straight under the actor (within three times its
+collision height, a floor no steeper than about 45 degrees) along the
+lines from the level light that lights it most (not special lit, above
+half its height, no wall between), multiplying what's there by 0.45 once
+(the renderer's StencilMode::Once keeps overlaps from darkening twice).
+Against a recording of the original: Kira's and O'Brien's shadows on
+M05_KiraL1's bridge floor fall the same way, about as dark; the
+original's are shorter.
+
 ## Coronas
 
 A light with `bCorona` (in 33 of The Fallen's maps, and some

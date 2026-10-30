@@ -308,6 +308,41 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
     }
 }
 
+void drawMeshShadow(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& placement, const MeshPose& pose,
+                    float shade) {
+    for (const GpuMesh::Batch& b : mesh.batches) {
+        if (b.polyFlags & (polyflag::Translucent | polyflag::Modulated))
+            continue;
+        gfx::DrawCall call;
+        call.mesh = mesh.mesh;
+        call.firstIndex = b.firstIndex;
+        call.indexCount = b.indexCount;
+        call.model = placement;
+        call.vertexOffset = pose.next * mesh.frameVertices;
+        call.oldVertexOffset = pose.frame * mesh.frameVertices;
+        call.backLerp = pose.next == pose.frame ? 0 : 1 - pose.lerp;
+        call.texture = 0;
+        call.rgbSource = call.alphaSource = gfx::ColorSource::Constant;
+        call.color = {shade, shade, shade, 1};
+        call.state.cull = gfx::Cull::None;
+        call.state.src = gfx::Blend::Zero;
+        call.state.dst = gfx::Blend::SrcColor;
+        call.state.depthWrite = false;
+        renderer.draw(call);
+    }
+}
+
+gfx::Mat4 planarShadow(const gfx::Vec3& light, const gfx::Vec3& n, float d) {
+    // M = (P.L) I - L P^T, with the plane P = (n, -d) and L = (light, 1).
+    const std::array<float, 4> P{n[0], n[1], n[2], -d}, L{light[0], light[1], light[2], 1};
+    const float dot = P[0] * L[0] + P[1] * L[1] + P[2] * L[2] + P[3] * L[3];
+    gfx::Mat4 m{};
+    for (size_t col = 0; col < 4; ++col)
+        for (size_t row = 0; row < 4; ++row)
+            m[col * 4 + row] = (row == col ? dot : 0) - L[row] * P[col];
+    return m;
+}
+
 void drawFogOver(gfx::Renderer3D& renderer, const gfx::DrawCall& drawn, const MeshFog& fog) {
     gfx::DrawCall f = drawn;
     f.texture = 0;
