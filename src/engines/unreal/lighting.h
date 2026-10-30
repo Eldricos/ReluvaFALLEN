@@ -28,6 +28,9 @@ namespace reluva::unreal {
 // white, 0 the pure hue) give, times brightness / kBrightnessUnit.
 constexpr float kBrightnessUnit = 128;
 Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness);
+// The colour without that scaling: the hue mixed with white by the
+// saturation, times the brightness (the lights actors carry).
+Vec3f mixedLightColor(uint8_t hue, uint8_t saturation, uint8_t brightness);
 
 // Engine.Actor's ELightType: how a light's brightness changes over time.
 // The rest (the two texture palette ones) are drawn steady.

@@ -227,6 +227,13 @@ against the same views here, matched shot for shot in cut scenes:
   0.032, through its display curve); with light from one side kept
   directed, 0.027. Characters lit from all round (Kira in M05_KiraL1,
   Worf on the Defiant) barely change.
+- The lights actors carry (not the level's: a pickup, a flare) take their
+  colour without the scaling for saturated colours above. CM10_SWK_L3's
+  red orb (pure red, brightness 255, radius 275) with it lit the floor
+  round its pedestal at 0.127 red against the recording's 0.025 (through
+  its display curve) and the pedestal a saturated red; without, 0.045
+  and pink, as the recording. Facing (incidence) isn't it: the
+  recording lights the pedestal's and the cap's sides, which face away.
 - Lights with `bSpecialLit` don't light characters: CM11_LabRitual's
   eight blue halos (radius 3225, high over the room) lit Obanak blue and
   white, where the recording has his face orange from the altar's fire

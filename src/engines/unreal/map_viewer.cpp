@@ -1719,7 +1719,11 @@ void MapViewer::gatherDynamicLights(const gfx::Vec3& eye) {
         const float level = lightLevel(l, lightTime_);
         if (level <= 0)
             continue;
-        const Vec3f c = lightColor(a.hue, a.saturation, a.brightness);
+        // Without the level's lights' scaling for saturated colours: CM10_SWK_L3's
+        // red orb (pure red, brightness 255) with it lit the floor round its
+        // pedestal five times as red as the recording and the pedestal a
+        // saturated red, where the recording has it pink.
+        const Vec3f c = mixedLightColor(a.hue, a.saturation, a.brightness);
         l.color = {c[0] * level, c[1] * level, c[2] * level};
         dynamic_.push_back(l);
     }

@@ -130,7 +130,7 @@ std::vector<int> surfaceZones(const Model& model) {
 
 } // namespace
 
-Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness) {
+Vec3f mixedLightColor(uint8_t hue, uint8_t saturation, uint8_t brightness) {
     // The hue round six sectors (red, yellow, green, cyan, blue, magenta),
     // then mixed with white by the saturation.
     const float h = float(hue) / 256.0f * 6.0f;
@@ -149,6 +149,12 @@ Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness) {
     const float b = float(brightness) / kBrightnessUnit;
     for (float& v : c)
         v = (v * (1 - white) + white) * b;
+    return c;
+}
+
+Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness) {
+    Vec3f c = mixedLightColor(hue, saturation, brightness);
+    const float b = float(brightness) / kBrightnessUnit;
     // As strong whatever its colour: the channels scaled to sum as white's
     // would, so a pure red light puts all its brightness into red (three
     // times what mixing it with white left it). Checked against a
