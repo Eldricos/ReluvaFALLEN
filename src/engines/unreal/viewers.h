@@ -432,6 +432,7 @@ private:
     // Lights' coronas while playing (bCorona): added to `sprites`, each
     // fading in and out as walls come between it and the camera.
     void addCoronas(std::vector<SpriteDraw>& sprites, const gfx::Vec3& forward, float dt);
+    void drawScreenFlash(const gfx::Vec3& forward, const gfx::Vec3& right);
     std::map<VmObject*, float> coronaFade_;
     MeshFog fog_; // this frame's distance fog (none: distance 0)
     std::vector<LevelPlay::Corona> coronaScratch_;

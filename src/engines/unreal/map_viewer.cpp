@@ -1189,6 +1189,7 @@ void MapViewer::update(uint64_t nowMs) {
     if (play_) {
         coronaDt_ = dt;
         drawLiveActors(forward, right);
+        drawScreenFlash(forward, right);
     } else {
         for (const MeshDraw& d : meshActors_) {
             const Mesh& mesh = meshes_[d.mesh];
@@ -2082,6 +2083,64 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
     addDecals(sprites);
     addCoronas(sprites, forward, coronaDt_);
     drawSprites(sprites, forward, right);
+}
+
+// The player's screen flash, over the scene (not the HUD): every pixel
+// times its FlashScale, plus its FlashFog, as UE1's renderer does. The
+// scripts work both out each tick (PlayerPawn.ViewFlash): the head's zone's
+// ViewFlash and ViewFog (a water zone's blue-green: The Fallen's
+// CTV_H20Zone, ViewFog 0.13 0.20 0.17), and the flashes of being hurt or
+// picking things up (ClientFlash). Drawn as one quad before the camera,
+// its colour the fog, its alpha the scale.
+void MapViewer::drawScreenFlash(const gfx::Vec3& forward, const gfx::Vec3& right) {
+    VmObject* p = play_ ? play_->player() : nullptr;
+    if (!p || !spriteQuad_)
+        return;
+    Vm& vm = play_->vm();
+    const Value* scaleV = p->find(vm, "FlashScale");
+    const Value* fogV = p->find(vm, "FlashFog");
+    if (!scaleV || !fogV)
+        return;
+    const auto scale = Vm::vectorOf(*scaleV);
+    const auto fog = Vm::vectorOf(*fogV);
+    const float s = std::clamp(scale[0], 0.0f, 4.0f);
+    const float f[3] = {std::clamp(fog[0], 0.0f, 1.0f), std::clamp(fog[1], 0.0f, 1.0f), std::clamp(fog[2], 0.0f, 1.0f)};
+    if (std::fabs(s - 1) < 0.01f && f[0] + f[1] + f[2] < 0.01f)
+        return;
+    const gfx::Vec3 up{right[1] * forward[2] - right[2] * forward[1], right[2] * forward[0] - right[0] * forward[2],
+                       right[0] * forward[1] - right[1] * forward[0]};
+    const float d = 16, size = 2 * d * std::tan(std::clamp(fov_, 1.0f, 170.0f) * kPi / 360) * 1.5f;
+    gfx::DrawCall call;
+    call.mesh = spriteQuad_;
+    call.indexCount = 6;
+    call.model = gfx::identity();
+    for (size_t k = 0; k < 3; ++k) {
+        call.model[k] = right[k] * size;
+        call.model[4 + k] = up[k] * size;
+        call.model[8 + k] = -forward[k];
+        call.model[12 + k] = pos_[k] + forward[k] * d;
+    }
+    call.texture = 0;
+    call.rgbSource = call.alphaSource = gfx::ColorSource::Constant;
+    if (s <= 1) { // dst x scale + fog
+        call.color = {f[0], f[1], f[2], s};
+        call.state.src = gfx::Blend::One;
+        call.state.dst = gfx::Blend::SrcAlpha;
+    } else { // brighter than it is: dst x 1 + dst x (scale - 1), then the fog
+        call.color = {s - 1, s - 1, s - 1, 1};
+        call.state.src = gfx::Blend::DstColor;
+        call.state.dst = gfx::Blend::One;
+    }
+    call.state.depthTest = false;
+    call.state.depthWrite = false;
+    call.state.cull = gfx::Cull::None;
+    renderer_->draw(call);
+    if (s > 1 && f[0] + f[1] + f[2] >= 0.01f) {
+        call.color = {f[0], f[1], f[2], 1};
+        call.state.src = gfx::Blend::One;
+        call.state.dst = gfx::Blend::One;
+        renderer_->draw(call);
+    }
 }
 
 // A corona is the light's texture glowing where the light is, added over

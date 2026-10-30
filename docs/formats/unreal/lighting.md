@@ -290,6 +290,15 @@ showed at once, the Collective logo still there over The Fallen's; now
 each fades in and out with its light, the gaps between them as in the
 original.
 
+## The screen flash
+
+The player's `FlashScale` and `FlashFog`, which `PlayerPawn.ViewFlash`
+works out each tick from the head's zone (`ViewFlash`, `ViewFog`) and
+the flashes of being hurt or picking things up, tint the scene: every
+pixel times the scale, plus the fog, under the HUD. Not applied before:
+underwater (The Fallen's `CTV_H20Zone`, ViewFog 0.13 0.20 0.17) the view
+was the land's colours where the recording is blue-green throughout.
+
 ## Distance fog
 
 The Fallen's ZoneInfo adds `DistanceFogging` and `DistanceFogColor` (the
