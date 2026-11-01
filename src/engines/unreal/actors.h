@@ -108,6 +108,9 @@ std::vector<MeshActor> findMeshActors(const PackageSet& packages, const Package&
 
 // Engine.Actor's ERenderStyle: how an actor's sprite or mesh blends.
 constexpr uint8_t kStyleNormal = 1, kStyleMasked = 2, kStyleTranslucent = 3, kStyleModulated = 4;
+// The Fallen's two more: alpha-blended by the actor's glow, and multiplying
+// what's behind (Direct3D's ZERO, SRCCOLOR).
+constexpr uint8_t kStyleBlended = 5, kStyleSubtractive = 6;
 
 // An actor drawn as a sprite (DrawType DT_Sprite, DT_VerticalSprite or
 // DT_SpriteAnimOnce): its texture facing the camera, DrawScale world

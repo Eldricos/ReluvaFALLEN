@@ -469,6 +469,8 @@ private:
     // per vertex as the original lights actors; without, a mover's.
     MeshLight meshLightAt(const Vec3f& location, const LevelPlay::Look* actor = nullptr) const;
     void actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLight& light) const;
+    void drawActorMesh(const GpuMesh& gpu, const gfx::Mat4& placement, const MeshPose& pose,
+                       const std::vector<gfx::TextureId>& skins, const MeshLight& light, const LevelPlay::Look& look);
 
     // Playing (Enter): the level live, drawn as its scripts have it.
     // From the start the portal tags, or from a saved game.

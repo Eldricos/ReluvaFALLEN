@@ -136,3 +136,35 @@ counts the classes whose defaults were found and weren't. An actor's properties 
 its own over its class's defaults over each parent's
 (`ClassDefaults::actorProperties()`), each property's object references
 read in the package it came from.
+
+## Styles and MultiTexture
+
+An actor's `Style` (`ERenderStyle`): The Fallen adds two to UE1's four,
+drawn as the original's Direct3D renderer blends them:
+
+| Style | Drawn |
+|---|---|
+| 1 Normal | opaque |
+| 2 Masked | colour 0 left out |
+| 3 Translucent | added (`ONE`, `INVSRCCOLOR`) |
+| 4 Modulated | times what's behind, doubled (`DESTCOLOR`, `SRCCOLOR`) |
+| 5 Blended | alpha-blended, its glow as the alpha (`SRCALPHA`, `INVSRCALPHA`) |
+| 6 Subtractive | times what's behind (`ZERO`, `SRCCOLOR`) |
+
+`bMultiTextureOn` (transporter beams on the characters they carry,
+shields, the cloak, disintegration, a few machines) draws a mesh twice, as
+the original's `DrawMesh` does (Render.dll, read for what it does):
+
+1. Its own skins in `MultiTextureOneStyle` with
+   `MultiTextureOneScaleGlow`.
+2. Over them, `MultiTextureTwo` (else its skins again) in
+   `MultiTextureTwoStyle` with `MultiTextureTwoScaleGlow`; environment
+   mapped if `bMultiTextureEnvMap`; pushed out along its normals by
+   `MultiTextureTwoFatness` / 16 - 8 world units (128: not at all).
+
+In each pass the glow is the alpha of a blended pass; with
+`bMultiTextureOneUnlit` / `bMultiTextureTwoUnlit` the pass is that glow
+times `ColorFilter`, not lit; otherwise a glow under 1 keeps that much of
+its light (at least 0.01). A transporter beaming someone in sets the first
+pass blended from 0 and the second its sparkle texture, translucent and
+unlit, crossfading the two (`CTV_TransporterBeamIn`).

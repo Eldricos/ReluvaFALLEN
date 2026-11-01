@@ -1942,6 +1942,45 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at, const LevelPlay::Look* actor) 
     return light;
 }
 
+// An actor's mesh in its style; a MultiTexture one (bMultiTextureOn) twice,
+// as the original's DrawMesh does: its own skins in MultiTextureOneStyle
+// with MultiTextureOneScaleGlow, then over them MultiTextureTwo (else its
+// skins again) in MultiTextureTwoStyle with MultiTextureTwoScaleGlow,
+// environment mapped if bMultiTextureEnvMap, pushed out along its normals
+// by MultiTextureTwoFatness / 16 - 8 world units. A blended pass's glow is
+// its alpha; an unlit one's (bMultiTexture...Unlit) its colour, times
+// ColorFilter; a lit one keeps that much of its light.
+void MapViewer::drawActorMesh(const GpuMesh& gpu, const gfx::Mat4& placement, const MeshPose& pose,
+                              const std::vector<gfx::TextureId>& skins, const MeshLight& light,
+                              const LevelPlay::Look& look) {
+    const LevelPlay::Look::MultiTexture& m = look.multi;
+    if (!m.on) {
+        drawMesh(*renderer_, gpu, placement, pose, skins, light, kExposure, look.style, &fog_);
+        return;
+    }
+    const gfx::Vec3 filter{m.colorFilter[0], m.colorFilter[1], m.colorFilter[2]};
+    MeshPass one;
+    one.glow = m.oneGlow;
+    one.unlit = m.oneUnlit;
+    one.unlitColor = filter;
+    drawMesh(*renderer_, gpu, placement, pose, skins, light, kExposure, m.oneStyle, &fog_, &one);
+    MeshPass two;
+    two.glow = m.twoGlow;
+    two.unlit = m.twoUnlit;
+    two.unlitColor = filter;
+    two.texture = m.two && textured_ ? textureOf(m.two).first : 0;
+    two.envMap = m.envMap;
+    // World units to the mesh's own (its placement's scale).
+    float scale = 0;
+    for (int c = 0; c < 3; ++c)
+        scale += std::sqrt(placement[size_t(c * 4)] * placement[size_t(c * 4)] +
+                           placement[size_t(c * 4 + 1)] * placement[size_t(c * 4 + 1)] +
+                           placement[size_t(c * 4 + 2)] * placement[size_t(c * 4 + 2)]) / 3;
+    if (scale > 0)
+        two.fatness = (float(m.twoFatness) / 16 - 8) / scale;
+    drawMesh(*renderer_, gpu, placement, pose, skins, light, kExposure, m.twoStyle, &fog_, &two);
+}
+
 // An actor's light as the original's renderer works it out (Render.dll's
 // actor lighting, read for what it does): the lights reaching it, most
 // important first ((1 - distance / radius) x brightness), down to an
@@ -2511,7 +2550,7 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
             !drawLayered(look, at, placement, skins, light))
         {
             lastMesh_ = {};
-            drawMesh(*renderer_, gpuMeshes_[size_t(at)], placement, pose, skins, light, kExposure, look.style, &fog_);
+            drawActorMesh(gpuMeshes_[size_t(at)], placement, pose, skins, light, look);
             lastMesh_ = {true, gpuMeshes_[size_t(at)], placement, pose};
         }
         if (!hud && lastMesh_.set && look.style == 1)
@@ -2702,7 +2741,7 @@ bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4
     if (err)
         return false;
     posedMeshes_.push_back(gpu);
-    drawMesh(*renderer_, gpu, placement, MeshPose{}, skins, light, kExposure, look.style, &fog_);
+    drawActorMesh(gpu, placement, MeshPose{}, skins, light, look);
     lastMesh_ = {true, gpu, placement, MeshPose{}};
     return true;
 }

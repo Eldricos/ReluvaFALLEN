@@ -128,6 +128,16 @@ public:
         uint8_t style = 1;
         float scaleGlow = 1;
         uint8_t ambientGlow = 0; // AmbientGlow: added to the zone's ambient light on it (255: pulsing)
+        // The Fallen's MultiTexture: drawn twice, its own skins in one style
+        // and glow, then MultiTextureTwo over them in another (bMultiTextureOn).
+        struct MultiTexture {
+            bool on = false, envMap = false;
+            ObjectRef two;
+            uint8_t oneStyle = 1, twoStyle = 1, twoFatness = 128;
+            float oneGlow = 1, twoGlow = 1;
+            bool oneUnlit = false, twoUnlit = false;
+            std::array<float, 3> colorFilter{1, 1, 1};
+        } multi;
         float specular = 1;      // Specular: its highlights' strength
         bool unlit = false;            // bUnlit: as bright as its ScaleGlow, not the light where it is
         bool renderInitial = false;    // bMultiMeshRenderInitial: drawn itself as well as its copies
@@ -219,7 +229,7 @@ private:
     enum Field { Location, PrePivot, Rotation, DrawScale, DrawType, Hidden, MeshField, Skin, Texture, MultiSkins,
                  AnimSequence, AnimFrame, AnimRate, AnimLoop, Style, ScaleGlow, LastRenderTime, Unlit,
                  RenderInitial, Region, AmbientSoundField, SoundRadius, SoundVolume, SoundPitch, CoronaField, AmbientGlow,
-                 SpecularField, FieldCount };
+                 SpecularField, MultiTextureOn, FieldCount };
     const std::array<int, FieldCount>& slotsOf(const VmClass* cls);
     int regionZoneField_ = -1; // ZoneNumber's place in PointRegion
     std::unordered_map<const VmClass*, std::array<int, FieldCount>> slots_;

@@ -258,7 +258,7 @@ MeshPose poseAtFraction(const Mesh& mesh, const MeshAnimSeq* anim, float fractio
 
 void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& placement, const MeshPose& pose,
               const std::vector<gfx::TextureId>& textures, const MeshLight& light, float exposure, uint8_t style,
-              const MeshFog* fog) {
+              const MeshFog* fog, const MeshPass* pass) {
     for (const GpuMesh::Batch& batch : mesh.batches) {
         GpuMesh::Batch b = batch;
         if (style == kStyleTranslucent)
@@ -296,9 +296,37 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
                 call.specular = light.specular;
             }
         }
+        if (pass) {
+            if (pass->texture)
+                call.texture = pass->texture;
+            if (pass->envMap)
+                call.texGen = gfx::TexGen::Environment;
+            if (pass->fatness != 0) {
+                call.deforms[0].type = gfx::Deform::Type::Wave;
+                call.deforms[0].wave.base = pass->fatness;
+            }
+            if (pass->unlit) {
+                const float g = std::clamp(pass->glow, 0.0f, 1.0f) * exposure;
+                call.rgbSource = gfx::ColorSource::Constant;
+                call.vertexLightCount = 0;
+                call.color = {g * pass->unlitColor[0], g * pass->unlitColor[1], g * pass->unlitColor[2], 1};
+            } else if (style != kStyleBlended && pass->glow < 1) {
+                for (size_t k = 0; k < 3; ++k)
+                    call.color[k] *= std::max(pass->glow, 0.01f);
+            }
+        }
         if (b.polyFlags & polyflag::Masked)
             call.state.alphaTest = gfx::AlphaTest::Ge128;
-        if (b.polyFlags & polyflag::Translucent) {
+        if (style == kStyleBlended) {
+            call.state.src = gfx::Blend::SrcAlpha;
+            call.state.dst = gfx::Blend::OneMinusSrcAlpha;
+            call.state.depthWrite = false;
+            call.color[3] = std::clamp(pass ? pass->glow : 1.0f, 0.0f, 1.0f);
+        } else if (style == kStyleSubtractive) {
+            call.state.src = gfx::Blend::Zero;
+            call.state.dst = gfx::Blend::SrcColor;
+            call.state.depthWrite = false;
+        } else if (b.polyFlags & polyflag::Translucent) {
             call.state.src = gfx::Blend::One;
             call.state.dst = gfx::Blend::OneMinusSrcColor;
             call.state.depthWrite = false;
@@ -310,7 +338,8 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
             call.color = {1, 1, 1, 1};
         }
         renderer.draw(call);
-        if (fog && fog->distance > 0 && !(b.polyFlags & (polyflag::Translucent | polyflag::Modulated)))
+        if (fog && fog->distance > 0 && !(b.polyFlags & (polyflag::Translucent | polyflag::Modulated)) &&
+            style != kStyleBlended && style != kStyleSubtractive)
             drawFogOver(renderer, call, *fog);
     }
 }

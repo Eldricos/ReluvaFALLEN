@@ -182,6 +182,21 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                     n[k] += (verts[j].normal[k] - n[k]) * call.backLerp;
                 }
         }
+        // The waves along the normal and the moves (the GPU's deforms; not
+        // the bulge).
+        for (const gfx::Deform& d : call.deforms) {
+            if (d.type == gfx::Deform::Type::Wave) {
+                gfx::Wave w = d.wave;
+                w.phase += (p[0] + p[1] + p[2]) * d.spread;
+                const float by = gfx::evaluate(w, call.time);
+                for (int k = 0; k < 3; ++k)
+                    p[k] += n[k] * by;
+            } else if (d.type == gfx::Deform::Type::Move) {
+                const float by = gfx::evaluate(d.wave, call.time);
+                for (int k = 0; k < 3; ++k)
+                    p[k] += d.vector[size_t(k)] * by;
+            }
+        }
         out.x = mvp[0] * p[0] + mvp[4] * p[1] + mvp[8] * p[2] + mvp[12];
         out.y = mvp[1] * p[0] + mvp[5] * p[1] + mvp[9] * p[2] + mvp[13];
         out.z = mvp[2] * p[0] + mvp[6] * p[1] + mvp[10] * p[2] + mvp[14];

@@ -111,9 +111,22 @@ struct MeshFog {
     std::array<float, 3> color{};
     float distance = 0;
 };
+// One of the passes of a MultiTexture actor (Look::MultiTexture): its
+// glow (the alpha of a blended pass; else, below 1, how much of its light
+// it keeps, at least 0.01), unlit (the glow times its ColorFilter instead
+// of its light), a texture in place of every skin, environment mapped,
+// pushed out along its normals (the mesh's own units).
+struct MeshPass {
+    float glow = 1;
+    bool unlit = false;
+    gfx::Vec3 unlitColor{1, 1, 1};
+    gfx::TextureId texture = 0;
+    bool envMap = false;
+    float fatness = 0;
+};
 void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& placement, const MeshPose& pose,
               const std::vector<gfx::TextureId>& textures, const MeshLight& light, float exposure,
-              uint8_t style = 1, const MeshFog* fog = nullptr);
+              uint8_t style = 1, const MeshFog* fog = nullptr, const MeshPass* pass = nullptr);
 // The fog pass over a draw already made (opaque or masked): its colour
 // blended over by distance, where that draw left its depth.
 void drawFogOver(gfx::Renderer3D& renderer, const gfx::DrawCall& drawn, const MeshFog& fog);

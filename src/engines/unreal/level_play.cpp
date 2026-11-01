@@ -20,7 +20,7 @@ LevelPlay::LevelPlay(const PackageSet& packages, const Package& map)
                                      "AnimSequence", "AnimFrame", "AnimRate", "bAnimLoop", "Style", "ScaleGlow",
                                      "LastRenderTime", "bUnlit", "bMultiMeshRenderInitial", "Region",
                                      "AmbientSound", "SoundRadius", "SoundVolume", "SoundPitch", "bCorona",
-                                     "AmbientGlow", "Specular"};
+                                     "AmbientGlow", "Specular", "bMultiTextureOn"};
     for (size_t k = 0; k < FieldCount; ++k)
         names_[k] = vm_->name(names[k]);
 }
@@ -512,6 +512,36 @@ bool LevelPlay::look(VmObject* a, Look& out) {
         out.unlit = v->asBool();
     if (const Value* v = at(AmbientGlow))
         out.ambientGlow = uint8_t(v->asInt());
+    out.multi = {};
+    if (const Value* on = at(MultiTextureOn); on && on->asBool()) {
+        Look::MultiTexture& m = out.multi;
+        m.on = true;
+        auto flag = [&](const char* n) {
+            const Value* v = a->find(vm, n);
+            return v && v->asBool();
+        };
+        auto number = [&](const char* n, float fallback) {
+            const Value* v = a->find(vm, n);
+            return v ? v->asFloat() : fallback;
+        };
+        auto byte = [&](const char* n, uint8_t fallback) {
+            const Value* v = a->find(vm, n);
+            return v ? uint8_t(v->asInt()) : fallback;
+        };
+        m.envMap = flag("bMultiTextureEnvMap");
+        m.two = refOf(a->find(vm, "MultiTextureTwo"));
+        m.oneStyle = byte("MultiTextureOneStyle", 1);
+        m.twoStyle = byte("MultiTextureTwoStyle", 1);
+        m.twoFatness = byte("MultiTextureTwoFatness", 128);
+        m.oneGlow = number("MultiTextureOneScaleGlow", 1);
+        m.twoGlow = number("MultiTextureTwoScaleGlow", 1);
+        m.oneUnlit = flag("bMultiTextureOneUnlit");
+        m.twoUnlit = flag("bMultiTextureTwoUnlit");
+        if (const Value* c = a->find(vm, "ColorFilter")) {
+            const auto f = Vm::vectorOf(*c);
+            m.colorFilter = {f[0], f[1], f[2]};
+        }
+    }
     if (const Value* v = at(SpecularField))
         out.specular = v->asFloat();
     if (const Value* v = at(RenderInitial))
