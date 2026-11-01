@@ -435,6 +435,26 @@ the original's reaches further, maybe from another light it kept. On the
 Promenade shrine's platform, the light it chooses is now one beyond a
 wall that the earlier reading left out.
 
+## Mirrors
+
+A surface flagged Mirrored (poly flag 0x8000000) is a mirror: Sisko's
+desk top in Ops (translucent and unlit), glass panels in M01_KiraL1A, 6
+plain mirrors and 12 modulated glass panes in M01_SiskoL1B. As the
+original's `OccludeBsp` does, each mirror seen from its front shows the
+scene reflected in its plane (the original up to three reflections deep;
+a translucent mirror only in high detail mode, `bHighDetailMode`, which is
+usual). Reluva:
+
+- marks where the mirror is in the stencil, then draws the level's
+  surfaces seen through the plane (the view reflected in it, culling
+  turned round), only there, with the projection's near plane moved onto
+  the mirror's plane so nothing behind it shows;
+- then draws the view as usual, a translucent or modulated mirror's own
+  texture over the reflection, an opaque one only as depth (it shows
+  just what it reflects);
+- one reflection deep, at most four mirrors a frame, and the level's
+  surfaces only in the reflection (not its actors or movers).
+
 ## Coronas
 
 A light with `bCorona` (in 33 of The Fallen's maps, and some

@@ -49,6 +49,8 @@ public:
     void setViewport(int x, int y, int w, int h) override;
     void setDepthRange(float maxDepth) override;
     void clearDepth() override;
+    void clearDepthAndStencil() override;
+    bool clearStencil_ = false; // clearDepth clears the marks too
     bool hasStencil() const override { return hasStencil_; }
     void setStencilMode(StencilMode mode) override;
     void setMirrored(bool mirrored) override { mirrored_ = mirrored; }

@@ -151,6 +151,11 @@ void SoftRenderer3D::setViewport(int x, int y, int w, int h) {
 
 void SoftRenderer3D::clearDepth() { std::fill(depth_.begin(), depth_.end(), 1.0f); }
 
+void SoftRenderer3D::clearDepthAndStencil() {
+    clearDepth();
+    std::fill(stencil_.begin(), stencil_.end(), uint8_t(0));
+}
+
 void SoftRenderer3D::draw(const gfx::DrawCall& call) {
     if (!drawing)
         return;

@@ -337,7 +337,11 @@ private:
         ObjectRef textureRef{}; // the level's: the texture it's drawn with, for the scripts' swaps
         uint64_t zones = ~uint64_t(0); // the zones it's seen from (zones.h): drawn when one of them is seen
         int tint = -1; // a translucent lit batch's: its entry in tints_
+        gfx::Vec3 mirrorNormal{}; // a mirror's plane: normal . x = mirrorD (the renderer's axes)
+        float mirrorD = 0;
     };
+    void drawMirrors(const gfx::Mat4& proj, const gfx::Mat4& view, const gfx::Mat4& viewProj);
+    bool mirrorPass_ = false, mirrorsDrawn_ = false;
     // A translucent surface the level's lights light (The Fallen's logos,
     // flagged translucent and special-lit): drawn in one pass, so its
     // light is a tint, the average over points of it (each polygon's

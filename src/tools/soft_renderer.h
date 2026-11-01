@@ -50,6 +50,7 @@ public:
     void setViewport(int x, int y, int w, int h) override;
     void setDepthRange(float maxDepth) override { depthRange_ = maxDepth; }
     void clearDepth() override;
+    void clearDepthAndStencil() override;
     bool hasStencil() const override { return true; }
     void setStencilMode(StencilMode mode) override { stencilMode_ = mode; }
     void setMirrored(bool) override {}

@@ -244,6 +244,8 @@ public:
     // hidden by them (a second scene over the first, as the original
     // clears depth for each view).
     virtual void clearDepth() = 0;
+    // The depth and the stencil's marks both cleared (after a mirror's pass).
+    virtual void clearDepthAndStencil() = 0;
     // A per-pixel mark (stencil) for drawing one view inside part of
     // another, as a mirror: Mark marks where the draws that follow land
     // (whatever their depth); Inside draws only where marked; Once draws

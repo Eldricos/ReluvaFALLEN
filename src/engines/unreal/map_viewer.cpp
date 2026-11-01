@@ -50,7 +50,7 @@ gfx::Vec3 toWorld(const Vec3f& v) { return {v[0], -v[1], v[2]}; }
 
 // The surface flags that change how a polygon is drawn, for grouping.
 constexpr uint32_t kDrawFlags = polyflag::Masked | polyflag::Translucent | polyflag::Modulated |
-                                polyflag::FakeBackdrop | polyflag::Unlit | polyflag::TwoSided;
+                                polyflag::FakeBackdrop | polyflag::Unlit | polyflag::TwoSided | polyflag::Mirrored;
 
 bool blended(uint32_t flags) { return flags & (polyflag::Translucent | polyflag::Modulated); }
 
@@ -259,7 +259,9 @@ void MapViewer::load(int index) {
     for (const Polygon& p : polys) {
         const BspSurf& s = model.surfs[size_t(p.surf)];
         const uint32_t flags = s.polyFlags & kDrawFlags;
-        const int page = blended(flags) || (flags & polyflag::FakeBackdrop) ? -1 : atlas.surfs[size_t(p.surf)].page;
+        int page = blended(flags) || (flags & polyflag::FakeBackdrop) ? -1 : atlas.surfs[size_t(p.surf)].page;
+        if (flags & polyflag::Mirrored) // a mirror: a batch of its own, for its plane
+            page = -2 - p.surf;
         groups[{blended(flags), s.texture, flags, page, zones_.portalCount() ? p.zones : ~uint64_t(0)}].push_back(&p);
     }
 
@@ -297,6 +299,11 @@ void MapViewer::load(int index) {
         batch.polyFlags = flags;
         batch.zones = zones;
         batch.lightmap = page >= 0 ? pages[size_t(page)] : 0;
+        if ((flags & polyflag::Mirrored) && !group.empty() && !group[0]->points.empty()) {
+            batch.mirrorNormal = toWorld(group[0]->normal);
+            const gfx::Vec3 on = toWorld(group[0]->points[0]);
+            batch.mirrorD = batch.mirrorNormal[0] * on[0] + batch.mirrorNormal[1] * on[1] + batch.mirrorNormal[2] * on[2];
+        }
         batch.firstIndex = uint32_t(indices.size());
         const auto [textureId, size] = textureFor(*pkg, textureRef, flags);
         batch.texture = textureId;
@@ -1173,6 +1180,7 @@ void MapViewer::update(uint64_t nowMs) {
         renderer_->beginFrame(viewProj, pos_, {20, 24, 40});
     }
     seeZonesFrom(pos_, viewProj);
+    drawMirrors(proj, gfx::lookAlong(pos_, forward, {0, 0, 1}), viewProj);
     // Backdrop surfaces: with the sky, only their depth, hiding what's
     // behind them; without it, a plain colour.
     for (const Batch& b : batches_) {
@@ -1652,11 +1660,22 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
     for (const Batch& b : batches) {
         if ((b.polyFlags & polyflag::FakeBackdrop) || !(b.zones & zonesSeen_))
             continue;
+        if ((b.polyFlags & polyflag::Mirrored) && mirrorPass_)
+            continue;
         gfx::DrawCall call;
         call.mesh = mesh;
         call.model = model;
         call.firstIndex = b.firstIndex;
         call.indexCount = b.indexCount;
+        if ((b.polyFlags & polyflag::Mirrored) && !blended(b.polyFlags) && mirrorsDrawn_) {
+            // An opaque mirror shows only what it reflects: its depth, to
+            // hide what's behind it.
+            call.state.src = gfx::Blend::Zero;
+            call.state.dst = gfx::Blend::One;
+            call.state.cull = gfx::Cull::None;
+            renderer_->draw(call);
+            continue;
+        }
         // One-sided, as UE1's surfaces are (their back, the way our
         // winding goes, is the renderer's front), unless flagged two-sided:
         // a camera in solid sees through the wall it's in. M03_SiskoL1A's
@@ -1953,6 +1972,76 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at, const LevelPlay::Look* actor) 
     if (actor)
         actorLights(at, *actor, light);
     return light;
+}
+
+// Mirrors (surfaces flagged Mirrored: Sisko's desk in Ops, the glass
+// panes of M01_SiskoL1B): as the original's OccludeBsp does, each seen
+// shows the scene reflected in its plane, drawn where the mirror is (the
+// stencil's marks), nothing behind its plane (the projection's near plane
+// moved onto it); then the mirror's own texture over it if it's
+// translucent or modulated, else only its depth. Reluva draws the level's
+// surfaces and movers in the reflection, not its actors; one reflection
+// deep (the original goes three).
+void MapViewer::drawMirrors(const gfx::Mat4& proj, const gfx::Mat4& view, const gfx::Mat4& viewProj) {
+    mirrorsDrawn_ = false;
+    if (!renderer_->hasStencil())
+        return;
+    int drawn = 0;
+    for (const Batch& m : levelBatches()) {
+        if (!(m.polyFlags & polyflag::Mirrored) || !(m.zones & zonesSeen_) || drawn >= 4)
+            continue;
+        const gfx::Vec3 n = m.mirrorNormal;
+        const float side = n[0] * pos_[0] + n[1] * pos_[1] + n[2] * pos_[2] - m.mirrorD;
+        if (side <= 0) // seen from behind
+            continue;
+        ++drawn;
+        // Where the mirror is: marked.
+        gfx::DrawCall mark;
+        mark.mesh = mesh_;
+        mark.firstIndex = m.firstIndex;
+        mark.indexCount = m.indexCount;
+        mark.state.src = gfx::Blend::Zero;
+        mark.state.dst = gfx::Blend::One;
+        mark.state.depthWrite = false;
+        mark.state.cull = gfx::Cull::None;
+        renderer_->setStencilMode(gfx::Renderer3D::StencilMode::Mark);
+        renderer_->draw(mark);
+        // The world reflected in the plane: x - 2 (n.x - d) n.
+        gfx::Mat4 reflect = gfx::identity();
+        for (size_t c = 0; c < 3; ++c)
+            for (size_t r = 0; r < 3; ++r)
+                reflect[c * 4 + r] -= 2 * n[r] * n[c];
+        for (size_t r = 0; r < 3; ++r)
+            reflect[12 + r] = 2 * m.mirrorD * n[r];
+        const gfx::Mat4 mirrorView = gfx::multiply(view, reflect);
+        // Its near plane on the mirror's: in the camera's space the plane
+        // facing back, -n.x + d >= 0 kept (the reflection's side).
+        const gfx::Vec3 on{n[0] * m.mirrorD, n[1] * m.mirrorD, n[2] * m.mirrorD};
+        std::array<float, 4> c{};
+        for (size_t r = 0; r < 3; ++r)
+            c[r] = -(view[0 * 4 + r] * n[0] + view[1 * 4 + r] * n[1] + view[2 * 4 + r] * n[2]);
+        const gfx::Vec3 onView = gfx::transformPoint(view, on);
+        c[3] = -(c[0] * onView[0] + c[1] * onView[1] + c[2] * onView[2]);
+        gfx::Mat4 p = proj;
+        // Lengyel's oblique near plane, for depth 0-1.
+        auto sgn = [](float v) { return v > 0 ? 1.0f : v < 0 ? -1.0f : 0.0f; };
+        const std::array<float, 4> q{(sgn(c[0]) - p[8]) / p[0], (sgn(c[1]) - p[9]) / p[5], -1, (1 + p[10]) / p[14]};
+        const float cq = c[0] * q[0] + c[1] * q[1] + c[2] * q[2] + c[3] * q[3];
+        if (std::fabs(cq) > 1e-9f)
+            for (size_t k = 0; k < 4; ++k)
+                p[k * 4 + 2] = c[k] / cq;
+        renderer_->setView(gfx::multiply(p, mirrorView), gfx::transformPoint(reflect, pos_));
+        renderer_->setMirrored(true);
+        renderer_->setStencilMode(gfx::Renderer3D::StencilMode::Inside);
+        mirrorPass_ = true;
+        drawBatches(levelBatches(), mesh_, gfx::identity(), true);
+        mirrorPass_ = false;
+        renderer_->setMirrored(false);
+        renderer_->setStencilMode(gfx::Renderer3D::StencilMode::None);
+        renderer_->clearDepthAndStencil();
+        renderer_->setView(viewProj, pos_);
+        mirrorsDrawn_ = true;
+    }
 }
 
 // The mover's brushes have no lightmaps of their own (their models' are
