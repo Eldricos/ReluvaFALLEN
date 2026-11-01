@@ -25,6 +25,14 @@ where to look, but none of its code is copied or translated, and
 findings are confirmed against the game's data with `reluva-tool` before
 they go in. Never use Epic's licensee source code (leaked or otherwise).
 
+As ScummVM does, the original game's own binaries (`Engine.dll`,
+`Render.dll`, `Fire.dll`, `DS9.exe` and the rest) may be disassembled
+to find out what the engine does: which light a shadow is cast from, how
+a curve is shaped. What's learned is written up in these docs as
+behaviour, in our own words, and implemented as new code of Reluva's
+own: nothing from the binaries is copied, translated instruction by
+instruction, or kept in the repository.
+
 ## Where it stands
 
 | Part | State |
