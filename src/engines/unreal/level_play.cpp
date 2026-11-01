@@ -404,7 +404,9 @@ float LevelPlay::distanceFog(const Vec3f& at, std::array<float, 3>& color) {
         const Value* d = z ? z->find(vm, "DistanceFogging") : nullptr;
         return d ? d->asFloat() : 0.0f;
     };
-    if (fogOf(zone) <= 0)
+    // The camera's zone's own (its ZoneInfo's, or for a zone without one
+    // the LevelInfo's), as Render.dll's SetDistanceFogging reads it.
+    if (!zone)
         zone = level_->levelInfo();
     const float distance = fogOf(zone);
     if (distance <= 0)

@@ -461,13 +461,23 @@ The Fallen's ZoneInfo adds `DistanceFogging` and `DistanceFogColor` (the
 FarClipping group, with `bForceClearScreen`). Eighteen maps set them,
 mostly on their LevelInfo: Jerrado (3500 units, a near-black red-brown
 17,4,0), Hass'Terral (5000, a dark blue), mission 11 (3500, 24,12,4).
-Reluva's reading: the fog grows evenly from the camera, everything its
-colour at `DistanceFogging`, from the camera's zone's settings, else the
-level's (M03's tunnels have ZoneInfos of their own without them; the
-fog is on LevelInfo). A pass over the level's opaque and masked surfaces
-and the meshes blends the colour over by distance (`drawFogOver`). How
-far it starts in the original isn't measured: the recording's views of
-those maps didn't match ours closely enough.
+As the original does it (Render.dll's `SetDistanceClipping` and
+`SetDistanceFogging`, D3DDrv's `SetFogDistance`):
+
+- The camera's zone's own settings: its ZoneInfo's, or for a zone
+  without one the LevelInfo's. A ZoneInfo without them has no fog
+  (Reluva used to fall back to the LevelInfo's).
+- Fog grows linearly with depth in the view, from none at the camera to
+  all `DistanceFogColor` at `DistanceFogging` (Direct3D's linear table
+  fog, start 0, end that distance). A pass over the level's opaque and
+  masked surfaces and the meshes blends the colour over by depth
+  (`drawFogOver`).
+- Nothing beyond `DistanceFogging` is drawn: the far clipping plane is
+  put there, unless the camera is in a sky zone. The sky, drawn from the
+  sky zone, isn't fogged or clipped.
+
+How far it reaches in the recording isn't measured: its views of those
+maps didn't match ours closely enough.
 
 ## Drawing
 

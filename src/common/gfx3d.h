@@ -166,8 +166,8 @@ struct DrawCall {
     float vertexLightScale = 1, specular = 0;
     Vec3 shadowLight{};                   // for ColorSource::Shadow
     float shadowReach = 0, shadowStrength = 0, shadowMax = 0;
-    // > 0: the fragment's alpha is instead clamp(distance from the camera
-    // / fogDistance), for blending a fog colour over drawn geometry.
+    // > 0: the fragment's alpha is instead clamp(depth in the view /
+    // fogDistance), for blending a fog colour over drawn geometry.
     float fogDistance = 0;
     std::array<Deform, 2> deforms{};
     float time = 0;              // seconds, for the deforms

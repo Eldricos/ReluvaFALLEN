@@ -1119,7 +1119,7 @@ void MapViewer::update(uint64_t nowMs) {
 
     const float aspect = float(kFrameW) / float(kFrameH);
     const float fovY = 2 * std::atan(std::tan(std::clamp(fov_, 1.0f, 170.0f) * kPi / 360) / aspect);
-    const gfx::Mat4 viewProj =
+    gfx::Mat4 viewProj =
         gfx::multiply(gfx::perspective(fovY, aspect, 4, 65536), gfx::lookAlong(pos_, forward, {0, 0, 1}));
     // Movers between keyframes, at their own pace.
     for (MoverDraw& m : movers_)
@@ -1135,11 +1135,16 @@ void MapViewer::update(uint64_t nowMs) {
     updateAnimatedTextures(dt);
     gatherDynamicLights(pos_);
     // The Fallen's distance fog: the camera's zone's (DistanceFogging, the
-    // distance at which all is its DistanceFogColor), growing evenly from
-    // the camera. Reluva's reading.
+    // depth at which all is its DistanceFogColor), growing evenly from the
+    // camera (Direct3D's linear table fog from 0 to it); nothing beyond it
+    // is drawn (Render.dll's SetDistanceClipping puts the far plane there),
+    // but the sky.
     fog_ = {};
     if (play_)
         fog_.distance = play_->distanceFog(Vec3f{pos_[0], -pos_[1], pos_[2]}, fog_.color);
+    if (fog_.distance > 0)
+        viewProj = gfx::multiply(gfx::perspective(fovY, aspect, 4, std::max(fog_.distance, 8.0f)),
+                                 gfx::lookAlong(pos_, forward, {0, 0, 1}));
 
     // The renderer raises colours to 1 / its gamma.
     renderer_->setGamma(1 / displayGamma_);

@@ -155,9 +155,9 @@ void main() {
     h = vec3(uv, 1.0);
     outUv = vec2(dot(postRow0.xyz, h), dot(postRow1.xyz, h));
 
-    outColor = vec4(source(mode.y, inColor, normal, world).rgb, source(mode.z, inColor, normal, world).a) * color;
-    if (mode.w > 0.0)
-        outColor = vec4(color.rgb, clamp(distance(world, eye.xyz) / mode.w, 0.0, 1.0));
-    outWorld = world;
     gl_Position = viewProj * vec4(world, 1.0);
+    outColor = vec4(source(mode.y, inColor, normal, world).rgb, source(mode.z, inColor, normal, world).a) * color;
+    if (mode.w > 0.0) // fog: by depth in the view (Direct3D's table fog)
+        outColor = vec4(color.rgb, clamp(gl_Position.w / mode.w, 0.0, 1.0));
+    outWorld = world;
 }
