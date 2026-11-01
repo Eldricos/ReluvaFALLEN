@@ -41,7 +41,6 @@ constexpr float kEyeHeight = 27; // above a PlayerStart's location, roughly a pl
 // a gamma of 1.3 it matches the original's screenshots (lighting.md).
 constexpr float kExposure = 0.88f;
 // How much of the floor's light a character's shadow takes off.
-constexpr float kShadowDepth = 0.55f;
 
 enum Held { Forward, Back, Left, Right, Up, Down, Fast, TurnLeft, TurnRight, LookUp, LookDown, Fire, HeldCount };
 
@@ -150,6 +149,7 @@ void MapViewer::unload() {
     seeThroughTextures_.clear();
     hudFlis_.clear();
     lights_ = {};
+    shadows_.clear();
     stopPlay();
     posers_.clear();
 }
@@ -217,6 +217,7 @@ void MapViewer::load(int index) {
 
     // The lightmaps, lit from the level's lights, as textures.
     lights_ = gatherLights(ctx_.packages, *pkg, model, scripted);
+    shadows_.clear();
     staticLightRefs_.clear();
     for (const int32_t ref : model.lights)
         if (ref)
@@ -2019,6 +2020,7 @@ void MapViewer::startPlay(const std::string& portal, const std::filesystem::path
 }
 
 void MapViewer::stopPlay() {
+    shadows_.clear(); // keyed by the play's actors
     freeCam_ = false;
     if (renderer_)
         for (const GpuMesh& g : posedMeshes_)
@@ -2217,52 +2219,148 @@ void MapViewer::addCoronas(std::vector<SpriteDraw>& sprites, const gfx::Vec3& fo
 // The Fallen's characters cast shadows of their own shape (actors with
 // bProjectsShadows, from lights with bActorShadows: every Light by
 // default): its renderer says so (GetRendererFlags bit 2), and its blob
-// shadows (CTV_Shadow) step aside. Reluva's reading: the mesh flattened
-// onto the floor under it from the level light that lights it most (not
-// behind a wall, above its feet), darkening what's there once. Compared
-// with a recording of the original: Kira's shadow across M05_KiraL1's
-// bridge floor, and on the Promenade shrine's platform.
+// shadows (CTV_Shadow) step aside. As the original's renderer does it
+// (Render.dll's PrepareProjectedShadow and DrawProjectedShadow, read for
+// what they do; docs/engines/unreal/lighting.md): the mesh flattened from
+// one light onto the floor under it, darkest close to its feet, its
+// strength easing in and out as it moves between lights.
 void MapViewer::drawShadow(VmObject* a, const Vec3f& at) {
     Vm& vm = play_->vm();
     const Value* casts = a->find(vm, "bProjectsShadows");
     if (!casts || !casts->asBool())
         return;
-    const Value* hv = a->find(vm, "CollisionHeight");
-    const float height = hv ? std::max(1.0f, hv->asFloat()) : 40;
-    // The floor: straight down from it, within a body's height of its feet.
-    std::array<float, 3> hit{}, normal{};
-    const std::array<float, 3> from{at[0], at[1], at[2]}, to{at[0], at[1], at[2] - 3 * height};
-    if (!play_->level().trace(nullptr, from, to, {0, 0, 0}, false, hit, normal) || normal[2] < 0.7f)
-        return;
-    // The light: the level's that lights it most.
-    const LightSource* best = nullptr;
-    float bestAmount = 0, total = 0;
-    const Vec3f chest{at[0], at[1], at[2] + height * 0.5f};
-    for (const LightSource& l : lights_.unique) {
-        if (l.specialLit || l.position[2] < hit[2] + height * 0.5f)
-            continue;
-        const float dist = lightDistance(l, chest);
-        if (dist >= l.radius)
-            continue;
-        const float amount = lightFalloff(dist / l.radius) * levelOf(l) * (l.color[0] + l.color[1] + l.color[2]) / 3;
-        if (amount <= 0 || play_->wallBetween(chest, l.position))
-            continue;
-        total += amount;
-        if (amount > bestAmount) {
-            bestAmount = amount;
-            best = &l;
+    auto number = [&](VmObject* o, const char* name, float fallback) {
+        const Value* v = o->find(vm, name);
+        return v ? v->asFloat() : fallback;
+    };
+    auto flag = [&](VmObject* o, const char* name) {
+        const Value* v = o->find(vm, name);
+        return v && v->asBool();
+    };
+    // A weapon held casts from its holder's light, faded by its ScaleGlow.
+    VmObject* caster = a;
+    Vec3f from = at;
+    float glow = 1;
+    if (vm.isA(a, "Weapon") && flag(a, "bHeldItem")) {
+        const Value* owner = a->find(vm, "Owner");
+        if (owner && owner->asObject()) {
+            glow = number(a, "ScaleGlow", 1);
+            caster = owner->asObject();
+            if (const Value* loc = caster->find(vm, "Location")) {
+                const auto l = Vm::vectorOf(*loc);
+                from = {l[0], l[1], l[2]};
+            }
         }
     }
-    if (!best || total <= 0)
+    // One that fades with a blended overlay (a cloak) fades its shadow too.
+    if (flag(caster, "bMultiTextureOn")) {
+        const Value* style = caster->find(vm, "MultiTextureOneStyle");
+        if (style && style->asInt() == 5) // STY_Blended
+            glow = number(caster, "MultiTextureOneScaleGlow", 1);
+    }
+    const float height = std::max(1.0f, number(caster, "CollisionHeight", 40));
+    const float radius = std::max(1.0f, number(caster, "CollisionRadius", 20));
+    // The floor: within four times its half height straight down, not too
+    // steep, and facing the camera.
+    std::array<float, 3> hit{}, normal{};
+    const std::array<float, 3> top{from[0], from[1], from[2]}, down{from[0], from[1], from[2] - 4 * height};
+    if (!play_->level().trace(nullptr, top, down, {0, 0, 0}, false, hit, normal) || normal[2] < 0.7f)
         return;
-    // As dark wherever it falls: a little under half of what's there, as
-    // Kira's on M05_KiraL1's floor in the recording, whatever that light's
-    // share of the light there.
-    const float shade = 1 - kShadowDepth;
-    const gfx::Vec3 n = toWorld(Vec3f{normal[0], normal[1], normal[2]});
-    const gfx::Vec3 p = toWorld(Vec3f{hit[0] + normal[0] * 0.5f, hit[1] + normal[1] * 0.5f, hit[2] + normal[2] * 0.5f});
-    const float d = n[0] * p[0] + n[1] * p[1] + n[2] * p[2];
-    const gfx::Mat4 flatten = planarShadow(toWorld(best->position), n, d);
+    const Vec3f eye{pos_[0], -pos_[1], pos_[2]};
+    if ((hit[0] - eye[0]) * normal[0] + (hit[1] - eye[1]) * normal[1] + (hit[2] - eye[2]) * normal[2] > 0)
+        return;
+    // Fainter far off: 900 / its depth in the view, at most 3.5.
+    const gfx::Vec3 forward{std::cos(pitch_) * std::cos(yaw_), std::cos(pitch_) * std::sin(yaw_), std::sin(pitch_)};
+    const gfx::Vec3 hw = toWorld(Vec3f{hit[0], hit[1], hit[2]});
+    const float depth = (hw[0] - pos_[0]) * forward[0] + (hw[1] - pos_[1]) * forward[1] + (hw[2] - pos_[2]) * forward[2];
+    if (depth <= 0)
+        return;
+    const float nearness = std::min(900 / depth, 3.5f);
+    if (nearness < 0.05f)
+        return;
+    // The light: of those that cast actor shadows and reach the floor
+    // there (walls between or not), the one giving the most (brightness
+    // times 1 - distance / radius, less in a brighter zone), the one it had
+    // kept unless another gives 0.02 more.
+    const Vec3f floor{hit[0], hit[1], hit[2]};
+    const int zone = zones_.zoneAt(floor);
+    const float ambient = zone >= 0 && size_t(zone) < lights_.zoneAmbientBrightness.size()
+                              ? float(lights_.zoneAmbientBrightness[size_t(zone)]) / 255
+                              : 0;
+    ShadowState& state = shadows_[caster];
+    auto amountOf = [&](const LightSource& l) {
+        const float dx = l.position[0] - floor[0], dy = l.position[1] - floor[1], dz = l.position[2] - floor[2];
+        const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (!l.actorShadows || l.specialLit || dist >= l.radius)
+            return 0.0f;
+        return float(l.brightness) / 255 * levelOf(l) * (1 - dist / l.radius) / (1 + ambient);
+    };
+    int best = -1;
+    float bestAmount = 0.01f, keptAmount = 0;
+    for (size_t i = 0; i < lights_.unique.size(); ++i) {
+        const float amount = amountOf(lights_.unique[i]);
+        if (int(i) == state.light)
+            keptAmount = amount;
+        if (amount > bestAmount) {
+            bestAmount = amount;
+            best = int(i);
+        }
+    }
+    float amount = bestAmount;
+    if (state.light >= 0 && best != state.light && keptAmount > 0 && bestAmount - keptAmount < 0.02f) {
+        best = state.light;
+        amount = keptAmount;
+    }
+    // Its strength eases towards that (1.3 a second), and when the light
+    // changes it fades out before the new one fades in; after 3 s unseen,
+    // or to or from a light that moves, it jumps.
+    const float target = best >= 0 ? std::min(amount * nearness, 1.0f) : 0;
+    const float now = play_->time();
+    const float since = state.seen ? now - state.lastSeen : 1e9f;
+    const float step = std::clamp(since * 1.3f, 0.0f, 1.0f);
+    auto still = [&](int i) { return i < 0 || lights_.unique[size_t(i)].isStatic; };
+    if (state.seen && since <= 3 && still(state.light) && still(best)) {
+        if (best == state.light) {
+            state.strength = std::min(state.strength + step, target);
+        } else {
+            state.strength = std::max(state.strength - step, 0.0f);
+            if (state.strength < 0.05f)
+                state.light = best;
+        }
+    } else {
+        state.strength = target;
+        state.light = best;
+    }
+    state.seen = true;
+    state.lastSeen = now;
+    if (state.light < 0 || state.strength < 0.05f)
+        return;
+    // The light at least twice the caster's size above it, and at least
+    // half its distance across: a light low beside it casts no endless
+    // shadow.
+    const Vec3f n{normal[0], normal[1], normal[2]};
+    Vec3f light = lights_.unique[size_t(state.light)].position;
+    const Vec3f rel{light[0] - from[0], light[1] - from[1], light[2] - from[2]};
+    const float above = rel[0] * n[0] + rel[1] * n[1] + rel[2] * n[2];
+    const float across = std::sqrt(std::max(0.0f, rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2] - above * above));
+    const float least = std::max(2 * std::max(height, radius), across * 0.5f);
+    if (above < least)
+        for (size_t k = 0; k < 3; ++k)
+            light[k] += n[k] * (least - above);
+    const float lx = light[0] - from[0], ly = light[1] - from[1], lz = light[2] - from[2];
+    // Just off the floor (more far off), each vertex darkened by
+    // min(strength x 50, 35) over how far past the caster it falls along
+    // the light's ray, at most 0.8.
+    const float lift = 0.1f + 0.005f * std::max(depth, 0.0f);
+    const gfx::Vec3 nw = toWorld(n);
+    const gfx::Vec3 p = toWorld(Vec3f{hit[0] + n[0] * lift, hit[1] + n[1] * lift, hit[2] + n[2] * lift});
+    const float d = nw[0] * p[0] + nw[1] * p[1] + nw[2] * p[2];
+    ShadowShade shade;
+    shade.light = toWorld(light);
+    shade.reach = std::sqrt(lx * lx + ly * ly + lz * lz);
+    shade.strength = std::min(glow * state.strength * 50, 35.0f);
+    shade.most = 0.8f;
+    const gfx::Mat4 flatten = planarShadow(shade.light, nw, d);
     renderer_->setStencilMode(gfx::Renderer3D::StencilMode::Once);
     drawMeshShadow(*renderer_, lastMesh_.gpu, gfx::multiply(flatten, lastMesh_.placement), lastMesh_.pose, shade);
     renderer_->setStencilMode(gfx::Renderer3D::StencilMode::None);

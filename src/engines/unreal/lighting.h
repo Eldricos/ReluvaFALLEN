@@ -58,6 +58,9 @@ struct LightSource {
     // bSpecialLit: lights only what's special lit (surfaces flagged so, in
     // the editor's lists; actors with bSpecialLit), not other actors.
     bool specialLit = false;
+    // bActorShadows (every Light by default): characters' projected
+    // shadows may fall from it. bStatic: it stays where it is.
+    bool actorShadows = false, isStatic = false;
     // Its actor (an object reference in the level's package), its own
     // LightBrightness, and whether scripts may change it while the game
     // runs (a TriggerLight and the like, or one a trigger can name by its
@@ -118,6 +121,7 @@ constexpr float kMaxLight = 1;
 struct LevelLights {
     std::vector<LightSource> sources; // one per entry of Model::lights
     std::vector<Vec3f> zoneAmbient;   // one per zone
+    std::vector<uint8_t> zoneAmbientBrightness; // its AmbientBrightness, one per zone
     std::vector<LightSource> unique;  // each light once (sources repeats them)
     std::vector<LightSource> animated; // those of them whose brightness changes
     int unreadable = 0;               // light actors whose properties didn't read

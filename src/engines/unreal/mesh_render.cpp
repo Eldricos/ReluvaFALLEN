@@ -309,7 +309,7 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
 }
 
 void drawMeshShadow(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& placement, const MeshPose& pose,
-                    float shade) {
+                    const ShadowShade& shade) {
     for (const GpuMesh::Batch& b : mesh.batches) {
         if (b.polyFlags & (polyflag::Translucent | polyflag::Modulated))
             continue;
@@ -322,8 +322,12 @@ void drawMeshShadow(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::M
         call.oldVertexOffset = pose.frame * mesh.frameVertices;
         call.backLerp = pose.next == pose.frame ? 0 : 1 - pose.lerp;
         call.texture = 0;
-        call.rgbSource = call.alphaSource = gfx::ColorSource::Constant;
-        call.color = {shade, shade, shade, 1};
+        call.rgbSource = gfx::ColorSource::Shadow;
+        call.alphaSource = gfx::ColorSource::Constant;
+        call.shadowLight = shade.light;
+        call.shadowReach = shade.reach;
+        call.shadowStrength = shade.strength;
+        call.shadowMax = shade.most;
         call.state.cull = gfx::Cull::None;
         call.state.src = gfx::Blend::Zero;
         call.state.dst = gfx::Blend::SrcColor;

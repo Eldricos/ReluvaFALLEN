@@ -297,16 +297,52 @@ The Fallen's characters cast shadows of their own shape: actors with
 `bProjectsShadows` (pawns, weapons and pickups by default) from lights
 with `bActorShadows` (every `Light` by default), when the renderer says it
 draws them (`GetRendererFlags` bit 2; the game's blob shadows,
-`CTV_Shadow`, then hide). How the original chose the light and how dark
-the shadow is isn't known. Reluva's reading: the mesh, as it's posed,
-flattened onto the floor straight under the actor (within three times its
-collision height, a floor no steeper than about 45 degrees) along the
-lines from the level light that lights it most (not special lit, above
-half its height, no wall between), multiplying what's there by 0.45 once
-(the renderer's StencilMode::Once keeps overlaps from darkening twice).
-Against a recording of the original: Kira's and O'Brien's shadows on
-M05_KiraL1's bridge floor fall the same way, about as dark; the
-original's are shorter.
+`CTV_Shadow`, then hide). How the original does it, read from its
+renderer (Render.dll's `PrepareProjectedShadow`, `DrawProjectedShadow`
+and its light manager's choice of light), and redone in Reluva's own code:
+
+- **The floor.** A line straight down from the actor's `Location`, four
+  times its `CollisionHeight` long; no shadow unless it hits something
+  whose normal points up at least 0.7, on the side facing the camera.
+  A held `Weapon` (`bHeldItem`, with an `Owner`) casts with its holder's
+  light and place, faded by its own `ScaleGlow`. An actor whose
+  `MultiTextureOne` overlay is blended (`bMultiTextureOn`,
+  `MultiTextureOneStyle` `STY_Blended`) fades its shadow by
+  `MultiTextureOneScaleGlow` instead (a cloak fading in).
+- **Distance.** A factor of 900 / the floor point's depth in the view,
+  at most 3.5; under 0.05 there's none.
+- **The light.** Of the lights reaching the actor with `bActorShadows`
+  (special lit ones only for a special lit actor), the one giving most at
+  the floor point: `LightBrightness`/255 (times its `LightType`'s level
+  now) x (1 - distance / radius) / (1 + the zone's
+  `AmbientBrightness`/255). The light it had is kept unless the new one
+  gives 0.02 more. The original's list of lights reaching an actor tests
+  only their radius, not walls between.
+- **Strength** (`ShadowBrightness`, the light in `ShadowLightActor`).
+  Its target is that amount times the distance factor, at most 1. It
+  moves towards the target by 1.3 x the seconds since the actor was last
+  drawn (at most 1): up to it while the light stays the same; when the
+  light changes, down to nothing, and the new light takes over once it's
+  under 0.05. It jumps straight to the target if the actor wasn't drawn
+  for 3 seconds, or either light isn't `bStatic`. (A player pawn standing
+  still and not `Frozen` doesn't change it.) Under 0.05: no shadow.
+- **Drawing.** The light is moved up along the floor's normal so it's at
+  least max(2 x the larger of `CollisionHeight` and `CollisionRadius`,
+  half its distance across) above the actor, which keeps shadows from
+  low lights short. The mesh, as posed, is flattened from it onto the
+  floor plane, raised 0.1 + 0.005 x depth off it, and multiplies what's
+  there: each vertex by 1 - min(I / |its distance from the light - the
+  actor's distance from the light|, 0.8), where I = min(strength x 50,
+  35). The shadow is darkest (to 0.2) where it falls close to the actor
+  and fades along its length.
+
+Reluva leaves out the player-pawn rule. It draws overlaps once (the
+renderer's StencilMode::Once) and has the per-vertex darkness in the
+renderers (`gfx::ColorSource::Shadow`). Against a recording of the
+original: Kira's shadow on M05_KiraL1's bridge floor falls the same way;
+the original's reaches further, maybe from another light it kept. On the
+Promenade shrine's platform, the light it chooses is now one beyond a
+wall that the earlier reading left out.
 
 ## Coronas
 

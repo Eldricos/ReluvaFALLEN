@@ -189,6 +189,11 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
         out.wx = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
         out.wy = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
         out.wz = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14];
+        if (const float ww = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15]; ww != 0 && ww != 1) {
+            out.wx /= ww; // a projection (a planar shadow's)
+            out.wy /= ww;
+            out.wz /= ww;
+        }
         const float* uv = call.texGen == gfx::TexGen::Uv2 ? v.uv2 : v.uv;
         // Through the pre and post rows (the turbulence between them left out).
         auto rows = [](const std::array<float, 3>& r0, const std::array<float, 3>& r1, float& u, float& w) {
@@ -219,6 +224,12 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                                          : 0;
             for (int k = 0; k < 3; ++k)
                 c[size_t(k)] *= call.ambientLight[size_t(k)] + call.directedLight[size_t(k)] * facing;
+        } else if (call.rgbSource == gfx::ColorSource::Shadow) {
+            const float dx = out.wx - call.shadowLight[0], dy = out.wy - call.shadowLight[1], dz = out.wz - call.shadowLight[2];
+            const float off = std::abs(std::sqrt(dx * dx + dy * dy + dz * dz) - call.shadowReach);
+            const float dark = off > 0 ? std::min(call.shadowStrength / off, call.shadowMax) : call.shadowMax;
+            for (int k = 0; k < 3; ++k)
+                c[size_t(k)] *= 1 - dark;
         } else {
             for (int k = 0; k < 3; ++k)
                 c[size_t(k)] *= source(call.rgbSource, k);

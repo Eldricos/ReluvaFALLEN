@@ -693,6 +693,12 @@ void SdlGpuRenderer::draw(const gfx::DrawCall& call) {
     put(vu.ambient, call.ambientLight);
     put(vu.directed, call.directedLight);
     put(vu.lightDir, call.lightDirection);
+    if (call.rgbSource == gfx::ColorSource::Shadow) {
+        put(vu.ambient, call.shadowLight);
+        vu.ambient[3] = call.shadowReach;
+        vu.directed[0] = call.shadowStrength;
+        vu.directed[1] = call.shadowMax;
+    }
     put(vu.eye, eye_);
     vu.eye[3] = call.time;
     put(vu.preRow0, call.preRow0);

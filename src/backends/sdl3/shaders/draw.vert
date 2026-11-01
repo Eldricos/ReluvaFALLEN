@@ -37,10 +37,10 @@ layout(set = 1, binding = 0) uniform Draw {
     vec4 texVec1;  // xyz: for v
     vec4 color;
     vec4 mode;     // x: texGen (0 uv, 1 uv2, 2 environment, 3 vector), y: rgb source, z: alpha source
-                   // (0 constant, 1 vertex, 2 one minus vertex, 3 lighting), w: fog distance (0 off)
+                   // (0 constant, 1 vertex, 2 one minus vertex, 3 lighting, 4 shadow), w: fog distance (0 off)
     vec4 mode2;    // x: follow the camera, y: how far towards the old frame's positions
-    vec4 ambient;  // xyz: ambient light for the lighting colour source
-    vec4 directed; // xyz: directed light
+    vec4 ambient;  // xyz: ambient light for the lighting colour source; shadow: the light, w its reach
+    vec4 directed; // xyz: directed light; shadow: x strength, y most darkness
     vec4 lightDir; // xyz: towards the light, world space
     DeformData deforms[2];
 };
@@ -75,8 +75,13 @@ float wave(float func, float base, float amp, float phase, float freq, float t) 
     return base + amp * v;
 }
 
-vec4 source(float which, vec4 vertexColor, vec3 normal) {
+vec4 source(float which, vec4 vertexColor, vec3 normal, vec3 world) {
     int w = int(which + 0.5);
+    if (w == 4) {
+        float off = abs(distance(world, ambient.xyz) - ambient.w);
+        float dark = off > 0.0 ? min(directed.x / off, directed.y) : directed.y;
+        return vec4(vec3(1.0 - dark), 1.0);
+    }
     if (w == 3)
         return vec4(clamp(ambient.rgb + directed.rgb * max(dot(normal, lightDir.xyz), 0.0), 0.0, 1.0), 1.0);
     return w == 1 ? vertexColor : (w == 2 ? vec4(1.0) - vertexColor : vec4(1.0));
@@ -97,7 +102,8 @@ void main() {
             pos += deforms[i].c.xyz * wave(deforms[i].a.y, deforms[i].a.z, deforms[i].a.w, deforms[i].b.x, deforms[i].b.y, t);
         }
     }
-    vec3 world = mode2.x > 0.5 ? pos + eye.xyz : (model * vec4(pos, 1.0)).xyz;
+    vec4 placed = model * vec4(pos, 1.0);
+    vec3 world = mode2.x > 0.5 ? pos + eye.xyz : placed.xyz / placed.w; // w: 1 but for a projection (a planar shadow)
     vec3 normal = normalize(mat3(model) * baseNormal);
 
     vec2 uv;
@@ -123,7 +129,7 @@ void main() {
     h = vec3(uv, 1.0);
     outUv = vec2(dot(postRow0.xyz, h), dot(postRow1.xyz, h));
 
-    outColor = vec4(source(mode.y, inColor, normal).rgb, source(mode.z, inColor, normal).a) * color;
+    outColor = vec4(source(mode.y, inColor, normal, world).rgb, source(mode.z, inColor, normal, world).a) * color;
     if (mode.w > 0.0)
         outColor = vec4(color.rgb, clamp(distance(world, eye.xyz) / mode.w, 0.0, 1.0));
     outWorld = world;

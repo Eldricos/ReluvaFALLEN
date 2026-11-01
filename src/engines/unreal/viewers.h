@@ -513,6 +513,13 @@ private:
         MeshPose pose;
     } lastMesh_;
     void drawShadow(VmObject* actor, const Vec3f& location);
+    // Each caster's shadow: its light (in lights_.unique), how strong.
+    struct ShadowState {
+        int light = -1;
+        float strength = 0, lastSeen = 0;
+        bool seen = false;
+    };
+    std::map<VmObject*, ShadowState> shadows_;
     bool drawLayered(const LevelPlay::Look& look, int mesh, const gfx::Mat4& placement,
                      const std::vector<gfx::TextureId>& skins, const MeshLight& light);
     float playClock_ = 0, fov_ = 90;

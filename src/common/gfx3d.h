@@ -91,7 +91,11 @@ enum class TexGen : uint8_t { Uv, Uv2, Environment, Vector };
 // Where colour and alpha come from (times DrawCall::color). Lighting: the
 // draw call's ambient light, plus its directed light times how much the
 // normal faces the light's direction (alpha 1).
-enum class ColorSource : uint8_t { Constant, Vertex, OneMinusVertex, Lighting };
+// Shadow: 1 - min(shadowStrength / |distance(position, shadowLight) -
+// shadowReach|, shadowMax) at each vertex, its place in the world (after
+// the model matrix, divided by its w): a projected shadow, darkest where
+// it falls close to its caster.
+enum class ColorSource : uint8_t { Constant, Vertex, OneMinusVertex, Lighting, Shadow };
 
 // Moves vertices on the GPU each frame.
 struct Deform {
@@ -142,6 +146,8 @@ struct DrawCall {
     ColorSource rgbSource = ColorSource::Constant, alphaSource = ColorSource::Constant;
     Vec3 ambientLight{}, directedLight{}; // for ColorSource::Lighting, 1 = full
     Vec3 lightDirection{0, 0, 1};         // towards the light, in world space
+    Vec3 shadowLight{};                   // for ColorSource::Shadow
+    float shadowReach = 0, shadowStrength = 0, shadowMax = 0;
     // > 0: the fragment's alpha is instead clamp(distance from the camera
     // / fogDistance), for blending a fog colour over drawn geometry.
     float fogDistance = 0;

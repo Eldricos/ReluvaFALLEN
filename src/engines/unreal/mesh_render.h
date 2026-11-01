@@ -112,12 +112,18 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
 // The fog pass over a draw already made (opaque or masked): its colour
 // blended over by distance, where that draw left its depth.
 void drawFogOver(gfx::Renderer3D& renderer, const gfx::DrawCall& drawn, const MeshFog& fog);
+// How dark a shadow is at each point it falls (in the renderer's world):
+// 1 - min(strength / |distance from `light` - reach|, most) of what's there
+// is left (gfx::ColorSource::Shadow).
+struct ShadowShade {
+    gfx::Vec3 light{};
+    float reach = 0, strength = 0, most = 0;
+};
 // A mesh's shadow: drawn through `placement` (its placement, then flattened
-// onto the floor) as a colour multiplying what's there (`shade` of it
-// left), not written to depth. Overlaps darken once with the renderer's
-// StencilMode::Once.
+// onto the floor) as a colour multiplying what's there, not written to
+// depth. Overlaps darken once with the renderer's StencilMode::Once.
 void drawMeshShadow(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& placement, const MeshPose& pose,
-                    float shade);
+                    const ShadowShade& shade);
 // Flattens points onto a plane (n.p = d, in the renderer's axes) along the
 // lines from a point light at `light`: what's then drawn there is the
 // shadow it casts.
