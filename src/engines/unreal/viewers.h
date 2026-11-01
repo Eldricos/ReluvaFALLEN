@@ -373,7 +373,11 @@ private:
         std::vector<Batch> batches;
         int key = 0, target = 0; // moving from key to target
         float t = 0;             // 0-1 of the way
+        float reach = 0;         // how far its brush reaches from its pivot
     };
+    // A mover's light: the lights reaching its brush, worked out on its
+    // vertices as surfaces are lit (no lightmap of its own).
+    MeshLight moverLightAt(const Vec3f& at, float reach) const;
     gfx::Mat4 moverTransform(const MoverDraw& m) const;
     static gfx::Mat4 moverPlacement(const Mover& m, const Vec3f& location, const Rotator& rotation);
     // The lights that move and change while playing (lit actors not among

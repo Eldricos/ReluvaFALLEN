@@ -128,6 +128,13 @@ others), Reluva is now within 10-20% of it at every brightness (its 25th,
 50th, 75th and 95th percentiles 1.21, 1.11, 1.10 and 1.17 times the
 recording's), where before its dark tones were 3 to 9 times darker.
 
+What's left is about the same at every brightness, so a gain rather than
+a curve. Not it: the video's levels (its black is 0, its range decoded as
+it's flagged); Direct3D's blending (texture x lightmap, the lightmaps
+scaled by their brightest colour when uploaded, `CacheMaxColor`, which
+cancels out); its 16-bit textures (palette colours scaled by 1.05 before
+being cut to 5 bits, if anything brighter). Not found yet.
+
 ## Actors' lighting
 
 Meshes are lit at each vertex, as the original's renderer does:
@@ -152,8 +159,24 @@ Meshes are lit at each vertex, as the original's renderer does:
   0.25 + 0.2 sin 8t), plus 1.4 x `ScaleGlow` x the lights, at most 1.
   `bUnlit`: no lights, 0.7 x `ScaleGlow` all round.
 
-Reluva does this in the renderers (`gfx::DrawCall::vertexLights`). Movers
-are still lit as one directed light and ambient.
+Reluva does this in the renderers (`gfx::DrawCall::vertexLights`).
+
+## Movers' light
+
+A mover's brush has no lightmap of its own. Its model's surfaces point at
+none, and the lightmaps the model holds are stale (their origins lie on
+none of its surfaces, their light lists point past what's there); nor
+are there surfaces in the level's model for it. The original's renderer
+only sets up a lightmap for a surface that has one, and a surface without
+one is drawn as its texture, at full brightness; but in the recording
+movers are lit like the walls round them (CM10_KiraL1A's door behind the
+guards is dark, Sisko's door in Cm11B_SWK shows its panel lit), so its
+moving-brush tracker must light them, in a way not read yet. Reluva's
+reading: a mover's vertices are lit as the level's surfaces are, where
+it is now, by the lights reaching its brush (the six brightest there):
+colour x (1 - 3 f^2 + 2 f^3) x the facing (a cylinder light 1 - f^2
+across), with its zone's ambient light, at most 1, without shadows.
+Against those two frames it comes close.
 
 ## Lights whose brightness changes
 

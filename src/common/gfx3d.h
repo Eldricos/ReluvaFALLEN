@@ -124,6 +124,7 @@ struct VertexLight {
     Vec3 position{};
     float radius = 0;
     Vec3 color{}; // 1 = full
+    bool cylinder = false; // surfaceLighting: by its distance across, whatever the facing
 };
 constexpr int kMaxVertexLights = 6;
 
@@ -164,6 +165,10 @@ struct DrawCall {
     std::array<VertexLight, kMaxVertexLights> vertexLights{};
     int vertexLightCount = 0;
     float vertexLightScale = 1, specular = 0;
+    // The lights as UE1 lights surfaces instead (movers): min(1, ambient +
+    // the sum of colour x (1 - 3 f^2 + 2 f^3) x max(0, cos)), f = distance /
+    // radius; a cylinder light 1 - f^2 by its distance across.
+    bool surfaceLighting = false;
     Vec3 shadowLight{};                   // for ColorSource::Shadow
     float shadowReach = 0, shadowStrength = 0, shadowMax = 0;
     // > 0: the fragment's alpha is instead clamp(depth in the view /

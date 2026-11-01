@@ -699,11 +699,13 @@ void SdlGpuRenderer::draw(const gfx::DrawCall& call) {
     vu.vlParams[0] = float(call.rgbSource == gfx::ColorSource::Lighting ? call.vertexLightCount : 0);
     vu.vlParams[1] = call.vertexLightScale;
     vu.vlParams[2] = call.specular;
+    vu.vlParams[3] = call.surfaceLighting ? 1.0f : 0.0f;
     for (int i = 0; i < call.vertexLightCount && i < gfx::kMaxVertexLights; ++i) {
         const gfx::VertexLight& l = call.vertexLights[size_t(i)];
         put(vu.vlPos[i], l.position);
         vu.vlPos[i][3] = l.radius;
         put(vu.vlColor[i], l.color);
+        vu.vlColor[i][3] = l.cylinder ? 1.0f : 0.0f;
     }
     if (call.rgbSource == gfx::ColorSource::Shadow) {
         put(vu.ambient, call.shadowLight);

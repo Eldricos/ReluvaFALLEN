@@ -386,6 +386,13 @@ void MapViewer::load(int index) {
         MoverDraw d;
         d.key = d.target = m.keyNum;
         d.mover = std::move(m);
+        for (const Poly& p : d.mover.polys)
+            for (const Vec3f& v : p.vertices) {
+                const Vec3f q{(v[0] - d.mover.prePivot[0]) * d.mover.mainScale[0] * d.mover.postScale[0],
+                              (v[1] - d.mover.prePivot[1]) * d.mover.mainScale[1] * d.mover.postScale[1],
+                              (v[2] - d.mover.prePivot[2]) * d.mover.mainScale[2] * d.mover.postScale[2]};
+                d.reach = std::max(d.reach, std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]));
+            }
         const gfx::Mat4 place = moverTransform(d);
         std::map<std::pair<int32_t, uint32_t>, std::vector<const Poly*>> moverGroups;
         for (const Poly& p : d.mover.polys)
@@ -1191,12 +1198,12 @@ void MapViewer::update(uint64_t nowMs) {
         LevelPlay::Look look;
         // Lit where it is now, by the lights as they are now.
         if (live && play_->look(live, look)) {
-            const MeshLight light = meshLightAt(look.location);
+            const MeshLight light = moverLightAt(look.location, m.reach);
             drawBatches(m.batches, moverMesh_, moverPlacement(m.mover, look.location, look.rotation), false, false,
                         &light);
         } else {
             const gfx::Mat4 place = moverTransform(m);
-            const MeshLight light = meshLightAt(Vec3f{place[12], -place[13], place[14]});
+            const MeshLight light = moverLightAt(Vec3f{place[12], -place[13], place[14]}, m.reach);
             drawBatches(m.batches, moverMesh_, place, false, false, &light);
         }
     }
@@ -1671,6 +1678,12 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
             call.ambientLight = moverLight->ambient;
             call.directedLight = moverLight->directed;
             call.lightDirection = moverLight->direction;
+            if (moverLight->perVertex) {
+                call.surfaceLighting = true;
+                call.vertexLightCount = int(std::min<size_t>(moverLight->lights.size(), gfx::kMaxVertexLights));
+                for (int i = 0; i < call.vertexLightCount; ++i)
+                    call.vertexLights[size_t(i)] = moverLight->lights[size_t(i)];
+            }
         }
         if (!(b.polyFlags & polyflag::Modulated)) // those multiply what's there, so stay as they are
             call.color = {kExposure, kExposure, kExposure, 1};
@@ -1939,6 +1952,53 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at, const LevelPlay::Look* actor) 
     light.direction = len > 0 ? toWorld(Vec3f{toward[0] / len, toward[1] / len, toward[2] / len}) : gfx::Vec3{0, 0, 1};
     if (actor)
         actorLights(at, *actor, light);
+    return light;
+}
+
+// The mover's brushes have no lightmaps of their own (their models' are
+// stale, pointing at no surface), so its vertices are lit as the level's
+// surfaces are, where it is now: the lights reaching its brush (at most
+// six, the brightest there), each colour x (1 - 3 f^2 + 2 f^3) x the
+// facing (a cylinder light 1 - f^2 across), with its zone's ambient
+// light, at most 1; without the lights' shadows. Reluva's reading: how
+// the original's moving-brush tracker lights them isn't known.
+MeshLight MapViewer::moverLightAt(const Vec3f& at, float reach) const {
+    MeshLight light;
+    struct Candidate {
+        const LightSource* l;
+        float level, importance;
+    };
+    std::vector<Candidate> found;
+    auto consider = [&](const LightSource& l, float level) {
+        if (level <= 0 || l.specialLit || l.radius <= 0)
+            return;
+        const float dist = lightDistance(l, at);
+        if (dist >= l.radius + reach)
+            return;
+        const float near = std::max(0.0f, dist - reach);
+        found.push_back({&l, level, float(l.brightness) * level * (1 - near / l.radius)});
+    };
+    for (const LightSource& l : lights_.unique)
+        consider(l, levelOf(l));
+    for (const LightSource& l : dynamic_)
+        consider(l, 1);
+    std::stable_sort(found.begin(), found.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.importance > b.importance; });
+    for (size_t i = 0; i < found.size() && i < size_t(gfx::kMaxVertexLights); ++i) {
+        gfx::VertexLight v;
+        v.position = toWorld(found[i].l->position);
+        v.radius = found[i].l->radius;
+        v.cylinder = found[i].l->cylinder;
+        for (size_t k = 0; k < 3; ++k)
+            v.color[k] = found[i].l->color[k] * found[i].level;
+        light.lights.push_back(v);
+    }
+    const int zone = zones_.zoneAt(at);
+    const Vec3f ambient = zone >= 0 && size_t(zone) < lights_.zoneAmbient.size() ? lights_.zoneAmbient[size_t(zone)]
+                                                                                 : Vec3f{};
+    light.ambient = {ambient[0], ambient[1], ambient[2]};
+    light.directed = {0, 0, 0};
+    light.perVertex = true;
     return light;
 }
 

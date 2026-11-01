@@ -247,6 +247,19 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                     const gfx::VertexLight& l = call.vertexLights[size_t(i)];
                     const float dx = l.position[0] - out.wx, dy = l.position[1] - out.wy, dz = l.position[2] - out.wz;
                     const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    if (call.surfaceLighting) { // as surfaces are lit
+                        float amount = 0;
+                        if (l.cylinder) {
+                            const float f = l.radius > 0 ? std::sqrt(dx * dx + dy * dy) / l.radius : 1;
+                            amount = f < 1 ? 1 - f * f : 0;
+                        } else if (l.radius > 0 && dist > 0 && dist < l.radius) {
+                            const float f = dist / l.radius;
+                            amount = (1 - 3 * f * f + 2 * f * f * f) * std::max(0.0f, (dx * nx + dy * ny + dz * nz) / dist);
+                        }
+                        for (int k = 0; k < 3; ++k)
+                            sum[k] += l.color[size_t(k)] * amount;
+                        continue;
+                    }
                     const float fall = l.radius > 0 ? 1 - dist / l.radius : 0;
                     if (fall <= 0 || dist <= 0)
                         continue;

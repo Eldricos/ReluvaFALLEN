@@ -45,7 +45,7 @@ layout(set = 1, binding = 0) uniform Draw {
     DeformData deforms[2];
     vec4 vlPos[6];   // vertex lights (gfx::kMaxVertexLights): xyz, radius
     vec4 vlColor[6];
-    vec4 vlParams;   // x: how many, y: scale, z: specular
+    vec4 vlParams;   // x: how many, y: scale, z: specular, w: 1 lit as surfaces are
 };
 
 const float TAU = 6.28318530718;
@@ -95,6 +95,18 @@ vec4 source(float which, vec4 vertexColor, vec3 normal, vec3 world) {
                 break;
             vec3 d = vlPos[i].xyz - world;
             float dist = length(d);
+            if (vlParams.w > 0.5) { // as surfaces are lit
+                if (vlColor[i].w > 0.5) {
+                    float f = length(d.xy) / vlPos[i].w;
+                    if (f < 1.0)
+                        sum += vlColor[i].rgb * (1.0 - f * f);
+                } else {
+                    float f = dist / vlPos[i].w;
+                    if (f < 1.0 && dist > 0.0)
+                        sum += vlColor[i].rgb * ((1.0 - 3.0 * f * f + 2.0 * f * f * f) * max(dot(d, normal) / dist, 0.0));
+                }
+                continue;
+            }
             float fall = 1.0 - dist / vlPos[i].w;
             if (fall <= 0.0 || dist <= 0.0)
                 continue;
