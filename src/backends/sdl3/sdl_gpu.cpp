@@ -762,7 +762,17 @@ void SdlGpuRenderer::draw(const gfx::DrawCall& call) {
         fu.params[1] = 2; // the brightness pass
         fu.params[2] = 1.0f / gamma_;
     }
-    if (call.dynamicLights || call.dynamicLightsTextured) {
+    if (call.volumeLights) {
+        fu.params[1] = 4;
+        fu.lightCount[0] = float(volumes_.size());
+        std::copy(eye_.begin(), eye_.end(), fu.lightCount + 1);
+        for (size_t i = 0; i < volumes_.size(); ++i) {
+            std::copy(volumes_[i].origin.begin(), volumes_[i].origin.end(), fu.lightPos[i]);
+            fu.lightPos[i][3] = volumes_[i].radius;
+            std::copy(volumes_[i].color.begin(), volumes_[i].color.end(), fu.lightColor[i]);
+            fu.lightColor[i][3] = volumes_[i].fog;
+        }
+    } else if (call.dynamicLights || call.dynamicLightsTextured) {
         fu.params[1] = call.dynamicLightsTextured ? 3 : 1;
         fu.lightCount[0] = float(lights_.size());
         for (size_t i = 0; i < lights_.size(); ++i) {

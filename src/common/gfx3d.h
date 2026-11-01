@@ -5,7 +5,9 @@
 
 #include "common/types.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -115,6 +117,7 @@ struct DynamicLight {
     Vec3 origin{};
     float radius = 0;
     Vec3 color{}; // 1 = full
+    float fog = 0; // a volume light's: how much it hides what's behind it, through its middle
 };
 constexpr int kMaxDynamicLights = 16;
 
@@ -127,6 +130,27 @@ struct VertexLight {
     bool cylinder = false; // surfaceLighting: by its distance across, whatever the facing
 };
 constexpr int kMaxVertexLights = 6;
+// How much of a volume light (a glowing sphere, densest at its centre and
+// fading to nothing at its radius, (1 - (d / r)^2)) lies between `eye` and
+// `at`: 1 for a line straight through the whole of it.
+inline float volumeGlow(const Vec3& eye, const Vec3& at, const DynamicLight& l) {
+    const float rx = at[0] - eye[0], ry = at[1] - eye[1], rz = at[2] - eye[2];
+    const float len = std::sqrt(rx * rx + ry * ry + rz * rz);
+    if (len <= 0 || l.radius <= 0)
+        return 0;
+    const float ux = rx / len, uy = ry / len, uz = rz / len;
+    const float cx = l.origin[0] - eye[0], cy = l.origin[1] - eye[1], cz = l.origin[2] - eye[2];
+    const float along = cx * ux + cy * uy + cz * uz;
+    const float r2 = l.radius * l.radius, b2 = cx * cx + cy * cy + cz * cz - along * along;
+    if (b2 >= r2)
+        return 0;
+    const float half = std::sqrt(r2 - b2);
+    const float s1 = std::max(0.0f, along - half) - along, s2 = std::min(len, along + half) - along;
+    if (s2 <= s1)
+        return 0;
+    const float amount = (s2 - s1) * (1 - b2 / r2) - (s2 * s2 * s2 - s1 * s1 * s1) / (3 * r2);
+    return amount * 3 / (4 * l.radius);
+}
 
 struct DrawCall {
     MeshId mesh = 0;
@@ -185,6 +209,11 @@ struct DrawCall {
     // that adds it over drawn geometry, so the light adds to what's there
     // (UE1's texture x (lightmap + dynamic light)).
     bool dynamicLightsTextured = false;
+    // Instead, the glow of the frame's volume lights (setVolumeLights)
+    // between the camera and each pixel: colour the sum of each colour x
+    // its glow, alpha the sum of each fog x its glow (at most 1), for a
+    // pass blended One, OneMinusSrcAlpha over drawn geometry.
+    bool volumeLights = false;
     DrawState state;
 };
 
@@ -233,6 +262,8 @@ public:
     // The dynamic lights for draws with DrawCall::dynamicLights (at most
     // kMaxDynamicLights; the rest are left out).
     virtual void setDynamicLights(const std::vector<DynamicLight>& lights) = 0;
+    // The volume lights for draws with DrawCall::volumeLights (as many).
+    virtual void setVolumeLights(const std::vector<DynamicLight>& lights) = 0;
     // Where the draws that follow land in the frame, in pixels (w or h 0:
     // all of it), within the frame.
     virtual void setViewport(int x, int y, int w, int h) = 0;

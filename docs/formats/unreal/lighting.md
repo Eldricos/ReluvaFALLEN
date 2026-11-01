@@ -435,6 +435,36 @@ the original's reaches further, maybe from another light it kept. On the
 Promenade shrine's platform, the light it chooses is now one beyond a
 wall that the earlier reading left out.
 
+## Volumetric lights
+
+A light with a `VolumeRadius` (as `LightRadius`: 25 x (it + 1) units) is
+also a glowing sphere, in its hue and saturation at `VolumeBrightness`,
+hiding what's behind it by `VolumeFog` (0-255). 37 of The Fallen's maps
+have fog zones (`bFogZone`) or such lights, many both. The original
+(`VolumetricLighting=True` by default) works them into a fog map for each
+surface in a fog zone: for each texel, how much of each light's sphere
+lies on the line from the camera to it, its density 1 - (d / r)^2 along
+the line (Render.dll's surface setup, read for what it does), 1 for a
+line straight through the middle; the light's colour times that added,
+and what's behind dimmed by its fog times that (Direct3D blends fog maps
+`ONE`, `INVSRCALPHA`), each at most the fog map's full 127.
+
+Reluva does the same in a pass over the level's surfaces in fog zones
+(a surface seen from a fog zone, flagged `PF_RenderFog` 0x40000000 on its
+batch), working the line out per pixel rather than per texel; the
+nearest 16 lights to the camera. Not on actors or movers yet. The
+lights' glow on Hass'terral's lab floor (M10_WorfL2, M10_SiskoL2: a row
+of white volume lights under a grate) shows through the grate's gaps.
+M07_SiskoL1A's lab, hazy in the recording, is in a zone without a
+ZoneInfo, so no fog zone, and gets none: its haze is still unexplained.
+
+## Detail textures
+
+Not drawn: the original's Direct3D renderer has them off by default
+(`DetailTextures=False` in `[D3DDrv.D3DRenderDevice]`; the OpenGL and
+Glide renderers have them on), and the recording matches Direct3D's
+display curve.
+
 ## Mirrors
 
 A surface flagged Mirrored (poly flag 0x8000000) is a mirror: Sisko's

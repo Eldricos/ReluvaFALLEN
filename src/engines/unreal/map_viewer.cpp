@@ -40,7 +40,6 @@ constexpr float kEyeHeight = 27; // above a PlayerStart's location, roughly a pl
 // The frame's colours are multiplied by this before the display gamma:
 // none, the lights' units being the original's (lighting.md).
 constexpr float kExposure = 1;
-// How much of the floor's light a character's shadow takes off.
 
 enum Held { Forward, Back, Left, Right, Up, Down, Fast, TurnLeft, TurnRight, LookUp, LookDown, Fire, HeldCount };
 
@@ -51,6 +50,10 @@ gfx::Vec3 toWorld(const Vec3f& v) { return {v[0], -v[1], v[2]}; }
 // The surface flags that change how a polygon is drawn, for grouping.
 constexpr uint32_t kDrawFlags = polyflag::Masked | polyflag::Translucent | polyflag::Modulated |
                                 polyflag::FakeBackdrop | polyflag::Unlit | polyflag::TwoSided | polyflag::Mirrored;
+
+// UE1's flag for a surface in a fog zone (PF_RenderFog), kept on the
+// level's batches for the volume lights' pass.
+constexpr uint32_t kRenderFog = 0x40000000;
 
 bool blended(uint32_t flags) { return flags & (polyflag::Translucent | polyflag::Modulated); }
 
@@ -255,10 +258,21 @@ void MapViewer::load(int index) {
     const std::vector<Polygon> polys = levelPolygons(model);
     // And by the zones they're seen from, to leave out those not seen.
     zones_.build(model);
+    volumes_.clear();
+    for (const LightSource& l : lights_.unique)
+        if (l.volumeRadius > 0 && (l.volumeFog > 0 || l.volumeColor[0] + l.volumeColor[1] + l.volumeColor[2] > 0))
+            volumes_.push_back(&l);
+    // The surfaces in fog zones (bFogZone): those volume lights show on.
+    uint64_t fogZones = 0;
+    for (size_t z = 0; z < lights_.zoneFog.size() && z < 64; ++z)
+        if (lights_.zoneFog[z])
+            fogZones |= uint64_t(1) << z;
     std::map<std::tuple<bool, int32_t, uint32_t, int, uint64_t>, std::vector<const Polygon*>> groups;
     for (const Polygon& p : polys) {
         const BspSurf& s = model.surfs[size_t(p.surf)];
-        const uint32_t flags = s.polyFlags & kDrawFlags;
+        uint32_t flags = s.polyFlags & kDrawFlags;
+        if (p.zones & fogZones)
+            flags |= kRenderFog;
         int page = blended(flags) || (flags & polyflag::FakeBackdrop) ? -1 : atlas.surfs[size_t(p.surf)].page;
         if (flags & polyflag::Mirrored) // a mirror: a batch of its own, for its plane
             page = -2 - p.surf;
@@ -1200,6 +1214,7 @@ void MapViewer::update(uint64_t nowMs) {
     }
     drawBatches(levelBatches(), mesh_, gfx::identity(), true);
     drawSurfaceSwaps();
+    drawVolumes(pos_);
     for (size_t i = 0; i < movers_.size(); ++i) {
         const MoverDraw& m = movers_[i];
         VmObject* live = play_ && i < moverActors_.size() ? moverActors_[i] : nullptr;
@@ -1754,6 +1769,49 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
         // The zone's distance fog over it, last.
         if (fog_.distance > 0 && !over && !blended(b.polyFlags))
             drawFogOver(*renderer_, call, fog_);
+    }
+}
+
+// The level's volume lights (VolumeRadius) over its surfaces in fog zones,
+// as the original's volumetric lighting does through their fog maps: at
+// each point, for each light, how much of its sphere lies between the
+// camera and the surface (its density 1 - (d / r)^2 along the line, 1
+// straight through the middle); its colour (VolumeBrightness) times that
+// added, and what's there dimmed by its VolumeFog times that (blended
+// One, OneMinusSrcAlpha).
+void MapViewer::drawVolumes(const gfx::Vec3& eye) {
+    if (volumes_.empty() || !lightmaps_)
+        return;
+    const Vec3f e{eye[0], -eye[1], eye[2]};
+    std::vector<std::pair<float, const LightSource*>> near;
+    for (const LightSource* l : volumes_) {
+        const float dx = l->position[0] - e[0], dy = l->position[1] - e[1], dz = l->position[2] - e[2];
+        near.push_back({std::sqrt(dx * dx + dy * dy + dz * dz) - l->volumeRadius, l});
+    }
+    std::sort(near.begin(), near.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::vector<gfx::DynamicLight> lights;
+    for (size_t i = 0; i < near.size() && i < size_t(gfx::kMaxDynamicLights); ++i) {
+        const LightSource& l = *near[i].second;
+        lights.push_back({toWorld(l.position), l.volumeRadius,
+                          {l.volumeColor[0] * kExposure, l.volumeColor[1] * kExposure, l.volumeColor[2] * kExposure},
+                          l.volumeFog});
+    }
+    renderer_->setVolumeLights(lights);
+    for (const Batch& b : levelBatches()) {
+        if (!(b.polyFlags & kRenderFog) || (b.polyFlags & polyflag::FakeBackdrop) || blended(b.polyFlags) ||
+            !(b.zones & zonesSeen_))
+            continue;
+        gfx::DrawCall call;
+        call.mesh = mesh_;
+        call.firstIndex = b.firstIndex;
+        call.indexCount = b.indexCount;
+        call.volumeLights = true;
+        call.state.cull = (b.polyFlags & polyflag::TwoSided) ? gfx::Cull::None : gfx::Cull::Front;
+        call.state.src = gfx::Blend::One;
+        call.state.dst = gfx::Blend::OneMinusSrcAlpha;
+        call.state.depthEqual = true;
+        call.state.depthWrite = false;
+        renderer_->draw(call);
     }
 }
 

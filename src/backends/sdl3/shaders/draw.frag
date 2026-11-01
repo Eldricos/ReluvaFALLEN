@@ -18,8 +18,8 @@ layout(set = 2, binding = 0) uniform sampler2D tex;
 
 layout(set = 3, binding = 0) uniform Fragment {
     vec4 params; // x: alpha test (0 none, 1 > 0, 2 < 0.5, 3 >= 0.5), y: dynamic lights instead (1),
-                 // times the texture (3), or the brightness pass (2, z: 1 / gamma)
-    vec4 lightCount; // x
+                 // times the texture (3), the brightness pass (2, z: 1 / gamma), or volume lights (4)
+    vec4 lightCount; // x; yzw: the camera, for volume lights
     vec4 lightPos[16]; // xyz, w: radius
     vec4 lightColor[16];
 };
@@ -34,7 +34,38 @@ vec3 dynamicLight() {
     return sum;
 }
 
+// A volume light's glow between the camera and the pixel: the sphere's
+// density (1 - (d / r)^2) along the line, 1 straight through it all.
+float volumeGlow(vec3 eye, vec3 at, vec4 l) {
+    vec3 r = at - eye;
+    float len = length(r);
+    if (len <= 0.0 || l.w <= 0.0)
+        return 0.0;
+    vec3 u = r / len, c = l.xyz - eye;
+    float along = dot(c, u), r2 = l.w * l.w, b2 = dot(c, c) - along * along;
+    if (b2 >= r2)
+        return 0.0;
+    float half_ = sqrt(r2 - b2);
+    float s1 = max(0.0, along - half_) - along, s2 = min(len, along + half_) - along;
+    if (s2 <= s1)
+        return 0.0;
+    return ((s2 - s1) * (1.0 - b2 / r2) - (s2 * s2 * s2 - s1 * s1 * s1) / (3.0 * r2)) * 3.0 / (4.0 * l.w);
+}
+
 void main() {
+    if (params.y > 3.5) {
+        // The volume lights' glow and fog, blended over drawn geometry.
+        vec3 sum = vec3(0.0);
+        float fog = 0.0;
+        int n = int(lightCount.x + 0.5);
+        for (int i = 0; i < n; ++i) {
+            float g = volumeGlow(lightCount.yzw, inWorld, lightPos[i]);
+            sum += lightColor[i].rgb * g;
+            fog += lightColor[i].a * g;
+        }
+        outColor = vec4(sum, min(fog, 1.0));
+        return;
+    }
     if (params.y > 2.5) {
         // The texture times the dynamic lights' light, alpha tested.
         vec4 t = texture(tex, inUv);

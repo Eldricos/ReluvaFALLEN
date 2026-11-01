@@ -479,6 +479,9 @@ private:
     void actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLight& light) const;
     void drawActorMesh(const GpuMesh& gpu, const gfx::Mat4& placement, const MeshPose& pose,
                        const std::vector<gfx::TextureId>& skins, const MeshLight& light, const LevelPlay::Look& look);
+    // The level's lights with a volume, in fog zones (drawVolumes).
+    std::vector<const LightSource*> volumes_;
+    void drawVolumes(const gfx::Vec3& eye);
 
     // Playing (Enter): the level live, drawn as its scripts have it.
     // From the start the portal tags, or from a saved game.

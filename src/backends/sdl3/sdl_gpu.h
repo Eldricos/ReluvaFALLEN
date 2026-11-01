@@ -46,6 +46,10 @@ public:
         lights_.assign(lights.begin(), lights.begin() + std::min<ptrdiff_t>(ptrdiff_t(lights.size()),
                                                                              gfx::kMaxDynamicLights));
     }
+    void setVolumeLights(const std::vector<gfx::DynamicLight>& lights) override {
+        volumes_.assign(lights.begin(), lights.begin() + std::min<ptrdiff_t>(ptrdiff_t(lights.size()),
+                                                                              gfx::kMaxDynamicLights));
+    }
     void setViewport(int x, int y, int w, int h) override;
     void setDepthRange(float maxDepth) override;
     void clearDepth() override;
@@ -117,7 +121,7 @@ private:
     SDL_GPUGraphicsPipeline* boundPipeline_ = nullptr;
     gfx::MeshId boundMesh_ = 0;
     int32_t boundOffset_ = 0, boundOldOffset_ = 0; // the vertex buffers' bindings, in vertices
-    std::vector<gfx::DynamicLight> lights_;
+    std::vector<gfx::DynamicLight> lights_, volumes_;
 };
 
 } // namespace reluva

@@ -70,6 +70,10 @@ struct LightSource {
     // bActorShadows (every Light by default): characters' projected
     // shadows may fall from it. bStatic: it stays where it is.
     bool actorShadows = false, isStatic = false;
+    // Its volume (VolumeRadius, VolumeBrightness): in a fog zone, a sphere
+    // of that radius glowing in its colour; radius 0 for none.
+    float volumeRadius = 0, volumeFog = 0;
+    Vec3f volumeColor{};
     // Its actor (an object reference in the level's package), its own
     // LightBrightness, and whether scripts may change it while the game
     // runs (a TriggerLight and the like, or one a trigger can name by its
@@ -139,6 +143,7 @@ struct LevelLights {
     float levelBrightness = 1;        // LevelInfo's Brightness
     std::vector<uint8_t> zoneAmbientBrightness; // its AmbientBrightness, one per zone
     std::vector<Vec3f> zoneActorAmbient; // engineHsv of its ambient: what actors in it get
+    std::vector<bool> zoneFog;        // one per zone: bFogZone, where volume lights glow
     std::vector<LightSource> unique;  // each light once (sources repeats them)
     std::vector<LightSource> animated; // those of them whose brightness changes
     int unreadable = 0;               // light actors whose properties didn't read

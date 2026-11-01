@@ -397,7 +397,20 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                             src[k] = sum[k];
                         src[3] = 1;
                     }
-                    if (tex && !call.dynamicLights) {
+                    if (call.volumeLights) {
+                        const gfx::Vec3 at{attr(&ClipVertex::wx), attr(&ClipVertex::wy), attr(&ClipVertex::wz)};
+                        float sum[3] = {0, 0, 0}, fog = 0;
+                        for (const gfx::DynamicLight& l : volumes_) {
+                            const float f = gfx::volumeGlow(eye_, at, l);
+                            for (int k = 0; k < 3; ++k)
+                                sum[k] += l.color[size_t(k)] * f;
+                            fog += l.fog * f;
+                        }
+                        for (int k = 0; k < 3; ++k)
+                            src[k] = sum[k];
+                        src[3] = std::min(fog, 1.0f);
+                    }
+                    if (tex && !call.dynamicLights && !call.volumeLights) {
                         float u = attr(&ClipVertex::u), v = attr(&ClipVertex::v);
                         auto wrap = [&](int c, int n) { return tex->clamp ? std::clamp(c, 0, n - 1) : ((c % n) + n) % n; };
                         auto at = [&](int x, int y) {
