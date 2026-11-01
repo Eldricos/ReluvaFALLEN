@@ -118,6 +118,15 @@ struct DynamicLight {
 };
 constexpr int kMaxDynamicLights = 16;
 
+// A light on a mesh's vertices (ColorSource::Lighting with
+// vertexLightCount > 0): UE1's actor lighting, worked out per vertex.
+struct VertexLight {
+    Vec3 position{};
+    float radius = 0;
+    Vec3 color{}; // 1 = full
+};
+constexpr int kMaxVertexLights = 6;
+
 struct DrawCall {
     MeshId mesh = 0;
     uint32_t firstIndex = 0, indexCount = 0;
@@ -146,6 +155,15 @@ struct DrawCall {
     ColorSource rgbSource = ColorSource::Constant, alphaSource = ColorSource::Constant;
     Vec3 ambientLight{}, directedLight{}; // for ColorSource::Lighting, 1 = full
     Vec3 lightDirection{0, 0, 1};         // towards the light, in world space
+    // Instead of the directed light, these lights: each vertex gets
+    // min(1, ambientLight + vertexLightScale x the sum over them of colour
+    // x (1 - distance / radius) x (max(0, (cos + 1)^2 - 1.5) + 6 x
+    // (specular x cos')^2 where cos' > 0)): cos the angle between the
+    // vertex's normal and the light, cos' between the camera's ray to the
+    // vertex and the light mirrored in the vertex's plane.
+    std::array<VertexLight, kMaxVertexLights> vertexLights{};
+    int vertexLightCount = 0;
+    float vertexLightScale = 1, specular = 0;
     Vec3 shadowLight{};                   // for ColorSource::Shadow
     float shadowReach = 0, shadowStrength = 0, shadowMax = 0;
     // > 0: the fragment's alpha is instead clamp(distance from the camera

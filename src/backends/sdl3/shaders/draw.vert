@@ -43,6 +43,9 @@ layout(set = 1, binding = 0) uniform Draw {
     vec4 directed; // xyz: directed light; shadow: x strength, y most darkness
     vec4 lightDir; // xyz: towards the light, world space
     DeformData deforms[2];
+    vec4 vlPos[6];   // vertex lights (gfx::kMaxVertexLights): xyz, radius
+    vec4 vlColor[6];
+    vec4 vlParams;   // x: how many, y: scale, z: specular
 };
 
 const float TAU = 6.28318530718;
@@ -81,6 +84,29 @@ vec4 source(float which, vec4 vertexColor, vec3 normal, vec3 world) {
         float off = abs(distance(world, ambient.xyz) - ambient.w);
         float dark = off > 0.0 ? min(directed.x / off, directed.y) : directed.y;
         return vec4(vec3(1.0 - dark), 1.0);
+    }
+    if (w == 3 && vlParams.x > 0.5) {
+        // UE1's actor lighting (gfx::DrawCall::vertexLights).
+        vec3 sum = vec3(0.0);
+        vec3 view = world - eye.xyz;
+        float viewLen = length(view);
+        for (int i = 0; i < 6; ++i) {
+            if (float(i) >= vlParams.x)
+                break;
+            vec3 d = vlPos[i].xyz - world;
+            float dist = length(d);
+            float fall = 1.0 - dist / vlPos[i].w;
+            if (fall <= 0.0 || dist <= 0.0)
+                continue;
+            float c = dot(d, normal) / dist + 1.0;
+            float amount = max(c * c - 1.5, 0.0);
+            vec3 mirrored = vlPos[i].xyz - 2.0 * dot(normal, d) * normal;
+            float s = dot(mirrored - world, view) * vlParams.z;
+            if (s > 0.0 && viewLen > 0.0)
+                amount += 6.0 * s * s / (dist * dist * viewLen * viewLen);
+            sum += vlColor[i].rgb * (amount * fall);
+        }
+        return vec4(min(ambient.rgb + vlParams.y * sum, vec3(1.0)), 1.0);
     }
     if (w == 3)
         return vec4(clamp(ambient.rgb + directed.rgb * max(dot(normal, lightDir.xyz), 0.0), 0.0, 1.0), 1.0);

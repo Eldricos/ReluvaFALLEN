@@ -465,7 +465,10 @@ private:
                                                             bool masked = false);
     std::map<std::tuple<const Package*, int, bool>, std::pair<gfx::TextureId, std::array<int, 2>>> textureCache_;
     LevelLights lights_; // the level's, for lighting what moves
-    MeshLight meshLightAt(const Vec3f& location) const;
+    // `actor`: an actor's look (its ScaleGlow, AmbientGlow, Specular), lit
+    // per vertex as the original lights actors; without, a mover's.
+    MeshLight meshLightAt(const Vec3f& location, const LevelPlay::Look* actor = nullptr) const;
+    void actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLight& light) const;
 
     // Playing (Enter): the level live, drawn as its scripts have it.
     // From the start the portal tags, or from a saved game.
@@ -532,10 +535,11 @@ private:
     bool textured_ = true;
     bool lightmaps_ = true;  // drawn with the lightmaps (else shaded by facing)
     float lightScale_ = 1;   // the lightmaps' brightness, [ and ]
-    // How the finished frame is shown: colours times kExposure, then
-    // raised to displayGamma_ (- and =). Fitted to the original's
-    // screenshots: see lighting.md.
-    float displayGamma_ = 1.3f;
+    // How the finished frame is shown: raised to displayGamma_ (- and =).
+    // The original's Direct3D renderer sets the display's gamma ramp to
+    // 1 / (2.5 x Brightness), Brightness 0.5 (the game's default) giving
+    // 0.8: see lighting.md.
+    float displayGamma_ = 1 / (2.5f * 0.5f);
     bool hasLightmaps_ = false;
     bool runScripts_ = true; // the level's scripts started, for how it looks when play begins (P)
     // Lights whose brightness changes, and the lightmaps they reach,

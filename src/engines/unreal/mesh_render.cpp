@@ -288,6 +288,13 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
             call.ambientLight = light.ambient;
             call.directedLight = light.directed;
             call.lightDirection = light.direction;
+            if (light.perVertex) {
+                call.vertexLightCount = int(std::min<size_t>(light.lights.size(), gfx::kMaxVertexLights));
+                for (int i = 0; i < call.vertexLightCount; ++i)
+                    call.vertexLights[size_t(i)] = light.lights[size_t(i)];
+                call.vertexLightScale = light.scale;
+                call.specular = light.specular;
+            }
         }
         if (b.polyFlags & polyflag::Masked)
             call.state.alphaTest = gfx::AlphaTest::Ge128;

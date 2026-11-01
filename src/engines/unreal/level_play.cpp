@@ -19,7 +19,8 @@ LevelPlay::LevelPlay(const PackageSet& packages, const Package& map)
                                      "bHidden",  "Mesh",     "Skin",     "Texture",   "MultiSkins",
                                      "AnimSequence", "AnimFrame", "AnimRate", "bAnimLoop", "Style", "ScaleGlow",
                                      "LastRenderTime", "bUnlit", "bMultiMeshRenderInitial", "Region",
-                                     "AmbientSound", "SoundRadius", "SoundVolume", "SoundPitch", "bCorona"};
+                                     "AmbientSound", "SoundRadius", "SoundVolume", "SoundPitch", "bCorona",
+                                     "AmbientGlow", "Specular"};
     for (size_t k = 0; k < FieldCount; ++k)
         names_[k] = vm_->name(names[k]);
 }
@@ -507,6 +508,10 @@ bool LevelPlay::look(VmObject* a, Look& out) {
         out.scaleGlow = v->asFloat();
     if (const Value* v = at(Unlit))
         out.unlit = v->asBool();
+    if (const Value* v = at(AmbientGlow))
+        out.ambientGlow = uint8_t(v->asInt());
+    if (const Value* v = at(SpecularField))
+        out.specular = v->asFloat();
     if (const Value* v = at(RenderInitial))
         out.renderInitial = v->asBool();
     out.tweenFrom.clear();

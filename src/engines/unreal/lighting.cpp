@@ -32,11 +32,14 @@ Vec3f cross(const Vec3f& a, const Vec3f& b) {
     return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
 }
 float length(const Vec3f& a) { return std::sqrt(dot(a, a)); }
+// One light's share of a texel, as its palette holds it: at most 1 (127 of
+// the lightmap's 7 bits) in each channel.
+Vec3f capped(const Vec3f& c) { return {std::min(c[0], 1.0f), std::min(c[1], 1.0f), std::min(c[2], 1.0f)}; }
 
 // A light actor's light, its classes' defaults under its own properties;
 // false if they don't read (it then lights nothing).
 bool readLight(const PackageSet& packages, const Package& package, int32_t ref, ClassDefaults& defaults,
-               const ScriptedActors* scripted, LightSource& l) {
+               const ScriptedActors* scripted, float levelBrightness, LightSource& l) {
     const ObjectRef obj = packages.resolve(package, ref);
     ActorProperties props;
     if (!obj || defaults.actorProperties(*obj.package, obj.exportIndex, props) ||
@@ -71,7 +74,7 @@ bool readLight(const PackageSet& packages, const Package& package, int32_t ref, 
     }
     if (brightness == 0 || (l.type == kLightNone && !l.scripted))
         return true;
-    l.color = lightColor(props.byte("LightHue"), props.byte("LightSaturation", 255), brightness);
+    l.color = lightColor(props.byte("LightHue"), props.byte("LightSaturation", 255), brightness, levelBrightness);
     l.radius = kRadiusUnit * (float(props.byte("LightRadius", 64)) + 1);
     // LightPeriod in 35ths of a second a cycle, LightPhase in 256ths of one.
     l.period = float(std::max<uint8_t>(props.byte("LightPeriod", 32), 1)) / 35;
@@ -91,7 +94,9 @@ bool readLight(const PackageSet& packages, const Package& package, int32_t ref, 
         const float pitch = float(rot.pitch) * 2 * kPi / 65536, yaw = float(rot.yaw) * 2 * kPi / 65536;
         l.direction = {std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), std::sin(pitch)};
         // LightCone 0-255 as 0-90 degrees off the axis.
-        l.cosCone = std::cos(float(props.byte("LightCone", 128)) / 256.0f * kPi / 2);
+        // LightCone: the cosine of its edge is 1 - LightCone / 256 (as
+        // Render.dll's spot lighting has it).
+        l.cosCone = 1 - float(props.byte("LightCone", 128)) / 256.0f;
     }
     return true;
 }
@@ -132,52 +137,68 @@ std::vector<int> surfaceZones(const Model& model) {
 
 } // namespace
 
-Vec3f mixedLightColor(uint8_t hue, uint8_t saturation, uint8_t brightness) {
-    // The hue round six sectors (red, yellow, green, cyan, blue, magenta),
-    // then mixed with white by the saturation.
-    const float h = float(hue) / 256.0f * 6.0f;
-    const int sector = int(h) % 6;
-    const float f = h - std::floor(h);
+Vec3f engineHsv(uint8_t hue, uint8_t saturation, uint8_t value) {
+    const float v = float(value) * 1.4f / 255;
+    const float level = std::clamp(0.7f * v / (std::sqrt(v) + 0.01f), 0.0f, 1.0f);
+    const float h = float(hue);
     Vec3f c;
-    switch (sector) {
-    case 0: c = {1, f, 0}; break;
-    case 1: c = {1 - f, 1, 0}; break;
-    case 2: c = {0, 1, f}; break;
-    case 3: c = {0, 1 - f, 1}; break;
-    case 4: c = {f, 0, 1}; break;
-    default: c = {1, 0, 1 - f}; break;
-    }
-    const float white = float(saturation) / 255.0f;
-    const float b = float(brightness) / kBrightnessUnit;
-    for (float& v : c)
-        v = (v * (1 - white) + white) * b;
+    if (hue < 86)
+        c = {(85 - h) / 85, h / 85, 0};
+    else if (hue < 171)
+        c = {0, (170 - h) / 85, (h - 85) / 85};
+    else
+        c = {(h - 170) / 85, 0, (255 - h) / 84};
+    const float white = float(saturation) / 255;
+    for (float& x : c)
+        x = (x + (1 - x) * white) * level;
     return c;
 }
 
-Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness) {
+Vec3f mixedLightColor(uint8_t hue, uint8_t saturation, uint8_t brightness) {
+    Vec3f c = engineHsv(hue, saturation, 255);
+    for (float& x : c)
+        x *= float(brightness) / 255;
+    return c;
+}
+
+Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness, float levelBrightness) {
+    // A light's lightmap is a palette of 256 levels (its falloff and
+    // shadow at a texel) times its colour, each at most 127, drawn
+    // doubled (OpenGLDrv's GL_DST_COLOR x GL_SRC_COLOR blend): 127 is the
+    // texture as it is, so a level of 255 times the colour is twice it.
     Vec3f c = mixedLightColor(hue, saturation, brightness);
-    const float b = float(brightness) / kBrightnessUnit;
-    // As strong whatever its colour: the channels scaled to sum as white's
-    // would, so a pure red light puts all its brightness into red (three
-    // times what mixing it with white left it). Checked against a
-    // recording of the original: the shortfall grew with how saturated a
-    // light was (a pale blue lab about right, a yellow-lit strip 1.5 times
-    // too dark, the red emergency lights of M03_SiskoL1A 2.7 times).
-    const float sum = c[0] + c[1] + c[2];
-    if (sum > 0)
-        for (float& v : c)
-            v *= 3 * b / sum;
+    for (float& x : c)
+        x *= 2 * levelBrightness;
+    return c;
+}
+
+Vec3f zoneAmbientColor(uint8_t hue, uint8_t saturation, uint8_t brightness) {
+    // Filled in as 64 of the 127 before the lights add theirs.
+    Vec3f c = engineHsv(hue, saturation, brightness);
+    for (float& x : c)
+        x *= 64.0f / 127.5f;
     return c;
 }
 
 float lightLevel(const LightSource& l, float time) { return lightLevel(l, l.type, time); }
 
-// Linear. Checked against a recording of the original (the opening's lab,
-// Kira's monastery courtyard): bright areas came within 10-20%, and how
-// far the dark ones fell short followed only how dark they were (the
-// recording's brightness setting, not the falloff); 1 - f^2 brightened
-// some dark areas towards it and others past it.
-float lightFalloff(float f) { return 1 - std::clamp(f, 0.0f, 1.0f); }
+// 1 - 3 f^2 + 2 f^3 of the way out to its radius, as Render.dll's table
+// of 4096 steps of (distance / radius)^2 (it divides that by f, and
+// multiplies by the light's distance from the surface's plane over its
+// radius: together this falloff times the cosine of the light's angle).
+float lightFalloff(float f) {
+    f = std::clamp(f, 0.0f, 1.0f);
+    return 1 - 3 * f * f + 2 * f * f * f;
+}
+
+float surfaceFalloff(const LightSource& l, float f) {
+    f = std::clamp(f, 0.0f, 1.0f);
+    if (l.cylinder) // across the floor only, no facing: 1 - (d / r)^2
+        return 1 - f * f;
+    if (!l.incidence) // LE_NonIncidence: straight, no facing
+        return std::min(1.0f, 1.02f - f);
+    return lightFalloff(f);
+}
 
 // A large cylinder light (the outdoor maps' sky light, radius 1000 and
 // more) lights without its shadows. Hass'terral's snowfield (M10_SiskoL1A)
@@ -335,19 +356,31 @@ LevelLights gatherLights(const PackageSet& packages, const Package& package, con
     ClassDefaults defaults(packages);
     for (const Zone& z : model.zones) {
         ActorProperties props;
-        Vec3f ambient{};
+        Vec3f ambient{}, actorAmbient{};
         uint8_t ambientBrightness = 0;
         const ObjectRef zone = z.actor ? packages.resolve(package, z.actor) : ObjectRef{};
         if (zone && !defaults.actorProperties(*zone.package, zone.exportIndex, props)) {
             ambientBrightness = props.byte("AmbientBrightness");
-            ambient = lightColor(props.byte("AmbientHue"), props.byte("AmbientSaturation", 255), ambientBrightness);
+            ambient = zoneAmbientColor(props.byte("AmbientHue"), props.byte("AmbientSaturation", 255), ambientBrightness);
+            actorAmbient = engineHsv(props.byte("AmbientHue"), props.byte("AmbientSaturation", 255), ambientBrightness);
         }
         out.zoneAmbient.push_back(ambient);
         out.zoneAmbientBrightness.push_back(ambientBrightness);
+        out.zoneActorAmbient.push_back(actorAmbient);
     }
     // The lights list repeats each light for every lightmap it reaches
     // (hundreds of thousands of entries in a large level), so each actor
     // is read once.
+    // The level's Brightness (LevelInfo) scales every light.
+    float levelBrightness = 1;
+    for (size_t i = 0; i < package.exports().size(); ++i)
+        if (package.className(int32_t(i) + 1) == "LevelInfo") {
+            ActorProperties props;
+            if (!defaults.actorProperties(package, int(i), props))
+                levelBrightness = props.number("Brightness", 1);
+            break;
+        }
+    out.levelBrightness = levelBrightness;
     std::map<int32_t, LightSource> byRef;
     for (int32_t ref : model.lights) {
         if (ref == 0) {
@@ -357,7 +390,7 @@ LevelLights gatherLights(const PackageSet& packages, const Package& package, con
         auto it = byRef.find(ref);
         if (it == byRef.end()) {
             LightSource l;
-            if (!readLight(packages, package, ref, defaults, scripted, l))
+            if (!readLight(packages, package, ref, defaults, scripted, levelBrightness, l))
                 ++out.unreadable;
             if (l.radius > 0 && changes(l)) {
                 l.animated = int(out.animated.size());
@@ -384,7 +417,7 @@ void AnimatedLightmap::draw(const std::vector<float>& levels, std::vector<uint8_
             float level = size_t(l.index) < levels.size() ? levels[size_t(l.index)] : 1;
             if (!l.points.empty() && sources && now && size_t(l.index) < sources->size() && size_t(l.index) < now->size())
                 level *= lightPattern((*sources)[size_t(l.index)], (*now)[size_t(l.index)], l.points[t]);
-            light = add(light, scale(share, level));
+            light = add(light, capped(scale(share, level)));
         }
         for (size_t k = 0; k < 3; ++k)
             rgba[t * 4 + k] = uint8_t(std::clamp(light[k], 0.0f, kMaxLight) / 2 * 255 + 0.5f);
@@ -580,8 +613,8 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
                             const float dist = lightDistance(src, p), straight = length(d);
                             if (dist >= src.radius || straight <= 0)
                                 continue;
-                            float amount = lightFalloff(dist / src.radius);
-                            if (src.incidence) {
+                            float amount = surfaceFalloff(src, dist / src.radius);
+                            if (src.incidence && !src.cylinder) {
                                 const float facing = dot(n, d) / straight;
                                 if (facing <= 0)
                                     continue;
@@ -591,11 +624,12 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
                                 const float c = -dot(d, src.direction) / straight;
                                 if (c < src.cosCone)
                                     continue;
-                                amount *= (c - src.cosCone) / std::max(1e-3f, 1 - src.cosCone);
+                                const float f = (c - src.cosCone) / std::max(1e-3f, 1 - src.cosCone);
+                                amount *= f * f;
                             }
                             anyLit = true;
                             if (src.animated < 0) {
-                                light = add(light, scale(src.color, amount));
+                                light = add(light, capped(scale(src.color, amount)));
                                 continue;
                             }
                             auto it = animIndex.find(src.animated);

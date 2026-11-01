@@ -466,17 +466,28 @@ static void testModel() {
     }
     CHECK(m.hasLighting() && m.zones.size() == 1 && m.lightMaps.size() == 1 && m.lights.size() == 2 &&
           m.trailingBytes == 0);
-    // A saturated colour as strong as white: its channels sum to three
-    // times its brightness.
+    // The engine's colour: the hue in three straight thirds (channels
+    // summing to 1), white by the saturation, the value through its curve
+    // (0.821 at 255).
     auto near = [](const Vec3f& a, const Vec3f& b) {
-        return std::fabs(a[0] - b[0]) < 1e-5f && std::fabs(a[1] - b[1]) < 1e-5f && std::fabs(a[2] - b[2]) < 1e-5f;
+        return std::fabs(a[0] - b[0]) < 1e-3f && std::fabs(a[1] - b[1]) < 1e-3f && std::fabs(a[2] - b[2]) < 1e-3f;
     };
-    CHECK(near(lightColor(0, 0, 128), Vec3f{3, 0, 0}) && near(lightColor(128, 0, 64), Vec3f{0, 0.75f, 0.75f}));
-    CHECK((lightColor(42, 255, 128) == Vec3f{1, 1, 1})); // saturation 255: white
+    const float top = 0.98f / (std::sqrt(1.4f) + 0.01f);
+    CHECK(near(engineHsv(0, 0, 255), Vec3f{top, 0, 0}) && near(engineHsv(0, 255, 255), Vec3f{top, top, top}));
+    CHECK(near(engineHsv(42, 0, 255), Vec3f{43.0f / 85 * top, 42.0f / 85 * top, 0}));
+    CHECK(near(engineHsv(128, 0, 255), Vec3f{0, 42.0f / 85 * top, 43.0f / 85 * top}));
+    // A light: that at full value times brightness / 255, doubled.
+    CHECK(near(lightColor(0, 0, 128), Vec3f{top * 256 / 255, 0, 0}));
+    CHECK(near(lightColor(42, 255, 128, 0.5f), Vec3f{top * 128 / 255, top * 128 / 255, top * 128 / 255}));
+    // Its falloff: 1 - 3 f^2 + 2 f^3.
+    CHECK(lightFalloff(0) == 1 && lightFalloff(1) == 0 && std::fabs(lightFalloff(0.5f) - 0.5f) < 1e-6f);
     PackageSet set;
     const LevelLights lights = gatherLights(set, p, m);
     CHECK(lights.sources.size() == 2 && lights.unreadable == 0 && lights.sources[0].radius == 250);
-    CHECK(lights.zoneAmbient.size() == 1 && lights.zoneAmbient[0][0] == 0.125f);
+    const Vec3f ambient = zoneAmbientColor(0, 255, 16);
+    CHECK(lights.zoneAmbient.size() == 1 && near(lights.zoneAmbient[0], ambient));
+    const float lit = ambient[0] + lights.sources[0].color[0] * lightFalloff(64.0f / 250);
+    const int under = int(lit / 2 * 255 + 0.5f), shade = int(ambient[0] / 2 * 255 + 0.5f);
     const LightmapAtlas atlas = buildLightmaps(m, lights);
     CHECK(atlas.pages.size() == 1 && atlas.stats.lightmaps == 1 && atlas.stats.lit == 1);
     CHECK(atlas.stats.fromBounds == 0 && atlas.stats.badFit == 0);
@@ -484,20 +495,20 @@ static void testModel() {
         const auto uv = atlas.uv(0, {0, 0, 0}), far = atlas.uv(0, {128, 128, 0});
         CHECK(uv[0] * 1024 == 1.5f && uv[1] * 1024 == 1.5f && far[0] * 1024 == 5.5f);
         const image::Image& page = atlas.pages[0];
-        // Under the light: ambient 0.125 + (1 - 64 / 250), stored halved.
-        CHECK(std::abs(int(page.pixel(1, 1)[0]) - 111) <= 1);
-        CHECK(page.pixel(5, 5)[0] == 16);                        // in shadow: ambient alone
+        // Under the light: ambient + its colour x the falloff, stored halved.
+        CHECK(std::abs(int(page.pixel(1, 1)[0]) - under) <= 1);
+        CHECK(std::abs(int(page.pixel(5, 5)[0]) - shade) <= 1); // in shadow: ambient alone
         CHECK(page.pixel(0, 0)[0] == page.pixel(1, 1)[0]);       // the border repeats the edge
         CHECK(page.pixel(3, 1)[0] < page.pixel(1, 1)[0]);        // further from the light, darker
     }
-    // A light four times as bright: capped at the texture's own colours
-    // (1, stored halved), not brighter.
+    // A light four times as bright: one light gives at most the texture's
+    // own colours (1, stored halved), not brighter.
     LevelLights bright = lights;
     for (float& c : bright.sources[0].color)
         c *= 4;
     const LightmapAtlas capped = buildLightmaps(m, bright);
     if (capped.pages.size() == 1)
-        CHECK(capped.pages[0].pixel(1, 1)[0] == 128 && capped.pages[0].pixel(5, 5)[0] == 16);
+        CHECK(capped.pages[0].pixel(1, 1)[0] == 128 && std::abs(int(capped.pages[0].pixel(5, 5)[0]) - shade) <= 1);
     // The same light pulsing: its share kept apart, redrawn by its level.
     CHECK(lights.animated.empty() && atlas.animated.empty());
     LevelLights pulsing = lights;
@@ -513,9 +524,9 @@ static void testModel() {
         a.draw({1.0f}, full);
         a.draw({0.0f}, off);
         CHECK(full.size() == 7 * 7 * 4 && full[(1 * 7 + 1) * 4] == atlas.pages[0].pixel(1, 1)[0]);
-        CHECK(off[(1 * 7 + 1) * 4] == 16); // out: the ambient light alone
+        CHECK(std::abs(int(off[(1 * 7 + 1) * 4]) - shade) <= 1); // out: the ambient light alone
         // Drawn into the page as at time 0: the pulse's 0.6.
-        CHECK(std::abs(int(changing.pages[0].pixel(1, 1)[0]) - int(16 + (111 - 16) * 0.6f)) <= 1);
+        CHECK(std::abs(int(changing.pages[0].pixel(1, 1)[0]) - int(shade + (under - shade) * 0.6f)) <= 1);
     }
     LightSource l;
     l.type = kLightPulse;

@@ -127,6 +127,8 @@ public:
         bool tweenFromLoop = false;
         uint8_t style = 1;
         float scaleGlow = 1;
+        uint8_t ambientGlow = 0; // AmbientGlow: added to the zone's ambient light on it (255: pulsing)
+        float specular = 1;      // Specular: its highlights' strength
         bool unlit = false;            // bUnlit: as bright as its ScaleGlow, not the light where it is
         bool renderInitial = false;    // bMultiMeshRenderInitial: drawn itself as well as its copies
         // The Fallen's layered animations on parts of it (C3DPlayAnim).
@@ -216,7 +218,8 @@ private:
     // frame took as long as the scripts' ticks).
     enum Field { Location, PrePivot, Rotation, DrawScale, DrawType, Hidden, MeshField, Skin, Texture, MultiSkins,
                  AnimSequence, AnimFrame, AnimRate, AnimLoop, Style, ScaleGlow, LastRenderTime, Unlit,
-                 RenderInitial, Region, AmbientSoundField, SoundRadius, SoundVolume, SoundPitch, CoronaField, FieldCount };
+                 RenderInitial, Region, AmbientSoundField, SoundRadius, SoundVolume, SoundPitch, CoronaField, AmbientGlow,
+                 SpecularField, FieldCount };
     const std::array<int, FieldCount>& slotsOf(const VmClass* cls);
     int regionZoneField_ = -1; // ZoneNumber's place in PointRegion
     std::unordered_map<const VmClass*, std::array<int, FieldCount>> slots_;

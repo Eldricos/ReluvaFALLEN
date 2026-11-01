@@ -37,9 +37,9 @@ constexpr int kFrameH = 720;
 constexpr float kPi = 3.14159265358979f;
 constexpr float kSpeed = 400;    // units per second
 constexpr float kEyeHeight = 27; // above a PlayerStart's location, roughly a player's eyes
-// The frame's colours are multiplied by this before the display gamma; with
-// a gamma of 1.3 it matches the original's screenshots (lighting.md).
-constexpr float kExposure = 0.88f;
+// The frame's colours are multiplied by this before the display gamma:
+// none, the lights' units being the original's (lighting.md).
+constexpr float kExposure = 1;
 // How much of the floor's light a character's shadow takes off.
 
 enum Held { Forward, Back, Left, Right, Up, Down, Fast, TurnLeft, TurnRight, LookUp, LookDown, Fire, HeldCount };
@@ -1743,11 +1743,8 @@ void MapViewer::gatherDynamicLights(const gfx::Vec3& eye) {
         const float level = lightLevel(l, lightTime_);
         if (level <= 0)
             continue;
-        // Without the level's lights' scaling for saturated colours: CM10_SWK_L3's
-        // red orb (pure red, brightness 255) with it lit the floor round its
-        // pedestal five times as red as the recording and the pedestal a
-        // saturated red, where the recording has it pink.
-        const Vec3f c = mixedLightColor(a.hue, a.saturation, a.brightness);
+        // As the level's lights: the original lights with them the same way.
+        const Vec3f c = lightColor(a.hue, a.saturation, a.brightness, lights_.levelBrightness);
         l.color = {c[0] * level, c[1] * level, c[2] * level};
         dynamic_.push_back(l);
     }
@@ -1883,7 +1880,7 @@ std::pair<gfx::TextureId, std::array<int, 2>> MapViewer::textureOf(const ObjectR
 
 // The lights reaching where an actor stands: some all round, the rest
 // from their average direction.
-MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
+MeshLight MapViewer::meshLightAt(const Vec3f& at, const LevelPlay::Look* actor) const {
     MeshLight light;
     Vec3f total{}, toward{};
     // The level's lights as bright as they are now (pulsing, flickering,
@@ -1935,7 +1932,78 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at) const {
         light.directed[k] = std::min((1 - 0.3f * spread) * total[k], std::max(0.0f, kMaxLight - light.ambient[k]));
     }
     light.direction = len > 0 ? toWorld(Vec3f{toward[0] / len, toward[1] / len, toward[2] / len}) : gfx::Vec3{0, 0, 1};
+    if (actor)
+        actorLights(at, *actor, light);
     return light;
+}
+
+// An actor's light as the original's renderer works it out (Render.dll's
+// actor lighting, read for what it does): the lights reaching it, most
+// important first ((1 - distance / radius) x brightness), down to an
+// eighth of the first's, at most three that stay where they are and
+// others while there are fewer than three, each seen from it (no wall
+// between; lights that move needn't be). Its ambient light is its zone's
+// ambient through the engine's colour curve plus AmbientGlow / 255 (255:
+// pulsing, 0.25 + 0.2 sin 8t). Each vertex then adds 1.4 x ScaleGlow x
+// its lights (gfx::DrawCall::vertexLights), at most 1.
+void MapViewer::actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLight& light) const {
+    struct Candidate {
+        const LightSource* l;
+        float level, importance;
+        bool moves;
+    };
+    std::vector<Candidate> found;
+    auto consider = [&](const LightSource& l, float level, bool moves) {
+        if (level <= 0 || l.specialLit || l.radius <= 0)
+            return;
+        const float dist = lightDistance(l, at);
+        if (dist >= l.radius)
+            return;
+        found.push_back({&l, level, (1 - dist / l.radius) * float(l.brightness) * level, moves});
+    };
+    for (const LightSource& l : lights_.unique)
+        consider(l, levelOf(l), !l.isStatic);
+    for (const LightSource& l : dynamic_)
+        consider(l, 1, true);
+    std::stable_sort(found.begin(), found.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.importance > b.importance; });
+    int total = 0, still = 0;
+    for (const Candidate& c : look.unlit ? std::vector<Candidate>{} : found) {
+        if (c.importance < found.front().importance / 8)
+            break;
+        if (c.moves ? total >= 3 : still >= 3)
+            continue;
+        if (!c.moves && play_ && play_->wallBetween(at, c.l->position))
+            continue;
+        ++total;
+        if (!c.moves)
+            ++still;
+        gfx::VertexLight v;
+        v.position = toWorld(c.l->position);
+        v.radius = c.l->radius;
+        // The lightmaps' colours are doubled (lightColor); actors' aren't.
+        for (size_t k = 0; k < 3; ++k)
+            v.color[k] = c.l->color[k] * c.level / 2;
+        light.lights.push_back(v);
+    }
+    const int zone = zones_.zoneAt(at);
+    const Vec3f zoneAmbient = zone >= 0 && size_t(zone) < lights_.zoneActorAmbient.size()
+                                  ? lights_.zoneActorAmbient[size_t(zone)]
+                                  : Vec3f{};
+    const float glow = look.ambientGlow == 255 ? 0.25f + 0.2f * std::sin(8 * lightTime_)
+                                               : float(look.ambientGlow) / 255;
+    // bUnlit: no lights, half of them all round instead (1.4 x ScaleGlow
+    // x 0.5).
+    const float unlit = look.unlit ? 0.7f * look.scaleGlow : 0;
+    if (look.unlit)
+        light.lights.clear();
+    for (size_t k = 0; k < 3; ++k) {
+        light.ambient[k] = std::min(1.0f, zoneAmbient[k] + glow + unlit);
+        light.directed[k] = 0;
+    }
+    light.perVertex = true;
+    light.scale = 1.4f * look.scaleGlow;
+    light.specular = look.specular;
 }
 
 // --- Playing --------------------------------------------------------------------------------
@@ -2432,7 +2500,7 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
         }
         play_->drawn(a);
         const gfx::Mat4 placement = meshPlacement(look.location, look.rotation, look.drawScale, look.prePivot);
-        const MeshLight light = meshLightAt(look.location);
+        const MeshLight light = meshLightAt(look.location, &look);
         lastMesh_ = {};
         if ((look.layers.empty() && look.adjust.empty() && look.faces.empty()) || !mesh.bones ||
             !drawLayered(look, at, placement, skins, light))

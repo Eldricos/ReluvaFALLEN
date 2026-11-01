@@ -24,12 +24,21 @@
 
 namespace reluva::unreal {
 
-// The colour Unreal's hue and saturation (0-255 each; saturation 255 is
-// white, 0 the pure hue) give, times brightness / kBrightnessUnit.
-constexpr float kBrightnessUnit = 128;
-Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness);
-// The colour without that scaling: the hue mixed with white by the
-// saturation, times the brightness (the lights actors carry).
+// The engine's colour for a hue, saturation and value (0-255 each;
+// saturation 255 is white, 0 the pure hue): the hue running red, green,
+// blue and back to red in three straight thirds (its channels summing to
+// 1), mixed with white by the saturation, times a curve of the value
+// (about 0.82 x sqrt(value / 255) up to 0.82 at 255). Engine.dll's FGetHSV.
+Vec3f engineHsv(uint8_t hue, uint8_t saturation, uint8_t value);
+// A light's colour in lightmap units (1: the texture as it is): its hue
+// and saturation at full value, times brightness / 255 and the level's
+// Brightness (LevelInfo), doubled as the renderers draw lightmaps.
+Vec3f lightColor(uint8_t hue, uint8_t saturation, uint8_t brightness, float levelBrightness = 1);
+// A zone's ambient light in those units: its AmbientHue, AmbientSaturation
+// and AmbientBrightness through engineHsv, a quarter of the lightmap's
+// range.
+Vec3f zoneAmbientColor(uint8_t hue, uint8_t saturation, uint8_t brightness);
+// The colour without the doubling: what the lights actors carry give.
 Vec3f mixedLightColor(uint8_t hue, uint8_t saturation, uint8_t brightness);
 
 // Engine.Actor's ELightType: how a light's brightness changes over time.
@@ -103,6 +112,12 @@ float lightDistance(const LightSource& light, const Vec3f& point);
 
 // How much of a light reaches `fraction` of the way to its radius (0 at
 // the light, 1 at the edge): 1 down to 0.
+// How a light falls off on a surface by f = distance / radius, as
+// Render.dll's lighting functions do: a cylinder light by its distance
+// across, 1 - f^2, whatever the surface faces; a non-incidence light
+// 1.02 - f (at most 1), whatever it faces; any other lightFalloff(f),
+// times the cosine of the light's angle to the surface (the caller's).
+float surfaceFalloff(const LightSource& l, float f);
 float lightFalloff(float fraction);
 
 // Whether a light lights without its shadow bits (a large cylinder light).
@@ -121,7 +136,9 @@ constexpr float kMaxLight = 1;
 struct LevelLights {
     std::vector<LightSource> sources; // one per entry of Model::lights
     std::vector<Vec3f> zoneAmbient;   // one per zone
+    float levelBrightness = 1;        // LevelInfo's Brightness
     std::vector<uint8_t> zoneAmbientBrightness; // its AmbientBrightness, one per zone
+    std::vector<Vec3f> zoneActorAmbient; // engineHsv of its ambient: what actors in it get
     std::vector<LightSource> unique;  // each light once (sources repeats them)
     std::vector<LightSource> animated; // those of them whose brightness changes
     int unreadable = 0;               // light actors whose properties didn't read

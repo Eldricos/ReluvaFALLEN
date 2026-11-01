@@ -50,50 +50,110 @@ for a few hundred actors. Each actor is read once.
 
 ## Working out the light
 
-For each sample, its position on the surface's plane, then:
+As the original's renderer does it (Render.dll's light manager and
+lighting functions, and Engine.dll's `FGetHSV`, read for what they do and
+written anew). For each sample, its position on the surface's plane,
+then:
 
     light = zone ambient + sum over the lights whose bit is set of
-            colour * (1 - distance / radius) * facing * cone
+            min(1, colour * falloff * facing * cone)
 
-- **Colour** (`lightColor()`): `LightHue` round the colour wheel (0 red,
-  43 yellow, 85 green, 128 cyan, 171 blue, 213 magenta), mixed with white
-  by `LightSaturation` (255 white, 0 the pure hue), times
-  `LightBrightness / 128`, then scaled so its channels sum to three
-  times that (as white's do): a light is as strong whatever its colour,
-  a pure red one putting all of it into red (3 at brightness 128).
-  Defaults as `Engine.Light`'s: brightness 64, hue 0, saturation 255.
-  Before, mixing with white took most of a saturated light away; against
-  a recording of the original the shortfall grew with saturation (a pale
-  blue lab about right, a yellow-lit strip 1.5 times too dark, the red
-  emergency lights of M03_SiskoL1A 2.7 times).
+all at most 1, and the surface drawn as texture x light. The original's
+lightmaps are 7 bits, 127 the texture as it is, drawn doubled (OpenGLDrv
+blends them `GL_DST_COLOR`, `GL_SRC_COLOR`); Reluva's lightmaps are in
+those units, 1 the texture as it is.
+
+- **The engine's colour** (`engineHsv()`, `FGetHSV`): the hue runs red
+  to green to blue and back to red in three straight thirds (0-85 red to
+  green, 86-170 green to blue, 171-255 blue to red), its channels
+  summing to 1 (yellow is 0.5, 0.5, 0); mixed with white by the
+  saturation (255 white, 0 the pure hue); times a curve of the value v:
+  with b = 1.4 v / 255, 0.7 b / (sqrt(b) + 0.01), at most 1 (0.82 at
+  255, 0.58 at 128, 0.41 at 64: roughly 0.83 sqrt(v / 255)).
+- **A light's colour** (`lightColor()`): its `LightHue` and
+  `LightSaturation` at value 255, times `LightBrightness / 255`, its
+  `LightType`'s level now, and the level's `Brightness` (`LevelInfo`;
+  M05_KiraL1 has 0.75, most 1). Each light's palette is 256 levels times
+  that, each channel at most 127: so in Reluva's units twice it, and one
+  light gives a sample at most 1. Defaults as `Engine.Light`'s:
+  brightness 64, hue 0, saturation 255. (Reluva used to scale saturated
+  lights up so their channels summed as white's, fitted to a recording;
+  the original doesn't, and the brightness differences that fit chased
+  came from the display, below.)
 - **Radius**: `25 * (LightRadius + 1)` world units; default radius 64.
-- **Facing**: the cosine between the surface's normal and the direction to
-  the light (none for `LightEffect` 13, non-incidence).
+- **Falloff and facing**, by f = distance / radius: 1 - 3 f^2 + 2 f^3
+  (`lightFalloff()`), times the cosine between the surface's normal and
+  the direction to the light. (The original keeps a table of 4096 steps
+  of f^2 holding (1 - 3 f^2 + 2 f^3) / f, and multiplies by the light's
+  distance from the surface's plane over its radius: together the same.)
+- **Non-incidence** (`LightEffect` 13): 1.02 - f (at most 1), whatever
+  way the surface faces.
 - **Cylinder** (`LightEffect` 17, 4,301 of The Fallen's lights, the most
-  used effect): the distance is across only, so the light reaches its
-  radius at any height, as UE1's cylinder lights do. A large one (radius
-  1000 and more, the sky lights of the outdoor maps) ignores its shadow
-  bits (below, compared with the recording).
+  used effect): f is the distance across only, so the light reaches its
+  radius at any height; 1 - f^2, whatever way the surface faces. A large
+  one (radius 1000 and more, the sky lights of the outdoor maps) ignores
+  its shadow bits (below, compared with the recording: Reluva's fitted
+  rule; the original's cylinder lighting does read the shadow bits).
 - **Cone** (`LightEffect` 8 static spot, 12 spotlight): the light's
-  `Rotation` gives its direction, `LightCone` (0-255) its half-angle as
-  0-90 degrees, fading to the edge.
+  `Rotation` gives its direction; with s = 1 - `LightCone` / 256 the
+  cosine of the cone's edge, ((cos - s) / (1 - s))^2 inside it, nothing
+  outside.
 - **Zone ambient**: the surface's zone (the front zone of its first node)
-  gives its ZoneInfo's `AmbientBrightness`, `AmbientHue`,
-  `AmbientSaturation`, as a colour the same way. Surfaces without a
-  lightmap get only this; unlit surfaces (poly flag 0x400000) are drawn
-  as their texture.
+  gives its ZoneInfo's `AmbientHue`, `AmbientSaturation` and
+  `AmbientBrightness` through the engine's colour, a quarter of the
+  lightmap's range (64 of the 7 bits' 127: about half of it in Reluva's
+  units). Surfaces without a lightmap get only this; unlit surfaces (poly
+  flag 0x400000) are drawn as their texture.
 - A light's properties are its own over its class's defaults
   ([actors.md](actors.md#class-defaults)). On The Fallen that changes
   only the 90 `Spotlight` actors (now cones, `LightEffect` 12 from their
   class) and the 30 `DS9_LavaZone` zones (now an orange glow of
   brightness 255).
-- **At most 1** (`kMaxLight`): the texture's own colours. In the
-  original, a lamp right against a wall (TrainingRoom, the two over the
-  far door) shows its texture's detail, and the wall round it keeps its
-  colour; summed as above the light there is well over 1, and drawn so it
-  washed out to white. So the original doesn't brighten surfaces past
-  their texture (as UE1's renderers do with 1x blending), and Reluva caps
-  it the same.
+
+## How the frame is shown
+
+The original's Direct3D renderer sets the display's gamma ramp to
+x^(1 / (2.5 x Brightness)), `Brightness` the player's setting
+(`[WinDrv.WindowsClient]`, 0.5 by default: x^0.8). Its screenshots
+(`ReadPixels`) instead raise what's drawn to 1 / (1.5 x Brightness)
+(x^1.33 at 0.5). Reluva shows the frame as the display does, x^0.8
+(`-` and `=` change it).
+
+That explains both comparisons below: the TrainingRoom screenshot was
+about 0.85 x Reluva^1.31 (the screenshot's curve on lights a little
+brighter than the original's), and the recording, a capture of the
+display, was about 1.07 x Reluva^0.83. Against the recording's cut scenes
+(22 frames matched by shape from CM05_Kira, CM01a_SW, Cm11B_SWK and
+others), Reluva is now within 10-20% of it at every brightness (its 25th,
+50th, 75th and 95th percentiles 1.21, 1.11, 1.10 and 1.17 times the
+recording's), where before its dark tones were 3 to 9 times darker.
+
+## Actors' lighting
+
+Meshes are lit at each vertex, as the original's renderer does:
+
+- **Its lights**: those whose radius reaches the actor (special lit ones
+  only for a special lit actor), most important first, importance
+  (1 - distance / radius) x `LightBrightness`; down to an eighth of the
+  first's; at most three that stay put (`bStatic`), and lights that move
+  only while it has fewer than three. A light that stays put must see
+  the actor's `Location`, no wall between.
+- **At each vertex**, for each light, with d the vector to it and N the
+  vertex's normal: (max(0, (cos + 1)^2 - 1.5) + specular) x (1 - |d| /
+  radius) x the light's colour (undoubled: half of a lightmap's), cos
+  the cosine between d and N. Light from beside and a little behind
+  still reaches it (the term is 2.5 facing the light, 0 from about 77
+  degrees). Specular: the light mirrored in the vertex's plane; where
+  the camera's ray to the vertex runs along the mirrored light's
+  direction from it, 6 x (`Specular` x that cosine)^2 (`Specular` is 1
+  on every actor).
+- **Summed**: the zone's ambient light (its ambient through the
+  engine's colour, not halved) plus `AmbientGlow` / 255 (255 pulses,
+  0.25 + 0.2 sin 8t), plus 1.4 x `ScaleGlow` x the lights, at most 1.
+  `bUnlit`: no lights, 0.7 x `ScaleGlow` all round.
+
+Reluva does this in the renderers (`gfx::DrawCall::vertexLights`). Movers
+are still lit as one directed light and ambient.
 
 ## Lights whose brightness changes
 
@@ -184,6 +244,9 @@ first things to tune against the original.
 
 ## Compared with the original (TrainingRoom, October 2026)
 
+(History: the curve fitted here was the screenshot's, not the display's;
+see "How the frame is shown". Reluva no longer uses it.)
+
 A screenshot of the original and one of the Maps page from about the same
 place, sampled over matching areas (0-255, averaged):
 
@@ -212,6 +275,11 @@ screenshot of the same place at another Brightness (say 1.0) would show
 it, and then the curve can follow the player's setting.
 
 ## Compared with a recording of the original (October 2026)
+
+(History, in part: the fits below for light colours, characters' light,
+the falloff and the display curve have been replaced by what the
+original's code does, in the sections above. They're kept for what the
+recording showed.)
 
 A full play-through recorded from the original (5 h 40 m, 960x720)
 against the same views here, matched shot for shot in cut scenes:

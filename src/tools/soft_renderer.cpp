@@ -222,8 +222,36 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
             const float facing = len > 0 ? std::max(0.0f, (wn[0] * call.lightDirection[0] + wn[1] * call.lightDirection[1] +
                                                          wn[2] * call.lightDirection[2]) / len)
                                          : 0;
-            for (int k = 0; k < 3; ++k)
-                c[size_t(k)] *= call.ambientLight[size_t(k)] + call.directedLight[size_t(k)] * facing;
+            if (call.vertexLightCount > 0) {
+                const float inv = len > 0 ? 1 / len : 0;
+                const float nx = wn[0] * inv, ny = wn[1] * inv, nz = wn[2] * inv;
+                const float vx = out.wx - eye_[0], vy = out.wy - eye_[1], vz = out.wz - eye_[2];
+                const float view2 = vx * vx + vy * vy + vz * vz;
+                float sum[3] = {0, 0, 0};
+                for (int i = 0; i < call.vertexLightCount && i < gfx::kMaxVertexLights; ++i) {
+                    const gfx::VertexLight& l = call.vertexLights[size_t(i)];
+                    const float dx = l.position[0] - out.wx, dy = l.position[1] - out.wy, dz = l.position[2] - out.wz;
+                    const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    const float fall = l.radius > 0 ? 1 - dist / l.radius : 0;
+                    if (fall <= 0 || dist <= 0)
+                        continue;
+                    const float nd = dx * nx + dy * ny + dz * nz;
+                    const float cw = nd / dist + 1;
+                    float amount = std::max(cw * cw - 1.5f, 0.0f);
+                    const float mx = l.position[0] - 2 * nd * nx - out.wx, my = l.position[1] - 2 * nd * ny - out.wy,
+                                mz = l.position[2] - 2 * nd * nz - out.wz;
+                    const float sp = (mx * vx + my * vy + mz * vz) * call.specular;
+                    if (sp > 0 && view2 > 0)
+                        amount += 6 * sp * sp / (dist * dist * view2);
+                    for (int k = 0; k < 3; ++k)
+                        sum[k] += l.color[size_t(k)] * amount * fall;
+                }
+                for (int k = 0; k < 3; ++k)
+                    c[size_t(k)] *= std::min(1.0f, call.ambientLight[size_t(k)] + call.vertexLightScale * sum[k]);
+            } else {
+                for (int k = 0; k < 3; ++k)
+                    c[size_t(k)] *= call.ambientLight[size_t(k)] + call.directedLight[size_t(k)] * facing;
+            }
         } else if (call.rgbSource == gfx::ColorSource::Shadow) {
             const float dx = out.wx - call.shadowLight[0], dy = out.wy - call.shadowLight[1], dz = out.wz - call.shadowLight[2];
             const float off = std::abs(std::sqrt(dx * dx + dy * dy + dz * dz) - call.shadowReach);

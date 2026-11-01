@@ -31,6 +31,9 @@ struct VertexUniforms {
     float mode2[4];
     float ambient[4], directed[4], lightDir[4];
     DeformUniforms deforms[2];
+    float vlPos[gfx::kMaxVertexLights][4];   // xyz, radius
+    float vlColor[gfx::kMaxVertexLights][4]; // rgb
+    float vlParams[4];                       // count, scale, specular
 };
 struct FragmentUniforms {
     float params[4];
@@ -693,6 +696,15 @@ void SdlGpuRenderer::draw(const gfx::DrawCall& call) {
     put(vu.ambient, call.ambientLight);
     put(vu.directed, call.directedLight);
     put(vu.lightDir, call.lightDirection);
+    vu.vlParams[0] = float(call.rgbSource == gfx::ColorSource::Lighting ? call.vertexLightCount : 0);
+    vu.vlParams[1] = call.vertexLightScale;
+    vu.vlParams[2] = call.specular;
+    for (int i = 0; i < call.vertexLightCount && i < gfx::kMaxVertexLights; ++i) {
+        const gfx::VertexLight& l = call.vertexLights[size_t(i)];
+        put(vu.vlPos[i], l.position);
+        vu.vlPos[i][3] = l.radius;
+        put(vu.vlColor[i], l.color);
+    }
     if (call.rgbSource == gfx::ColorSource::Shadow) {
         put(vu.ambient, call.shadowLight);
         vu.ambient[3] = call.shadowReach;

@@ -95,6 +95,11 @@ MeshPose poseAtFraction(const Mesh& mesh, const MeshAnimSeq* anim, float fractio
 
 struct MeshLight {
     gfx::Vec3 ambient{1, 1, 1}, directed{}, direction{0, 0, 1}; // direction in the renderer's axes
+    // An actor's: its lights worked out on each vertex as UE1 does
+    // (gfx::DrawCall::vertexLights), not the directed light.
+    std::vector<gfx::VertexLight> lights;
+    bool perVertex = false;
+    float scale = 1, specular = 0;
 };
 
 // Draws it: `textures` by texture index (0: untextured), `exposure` as
