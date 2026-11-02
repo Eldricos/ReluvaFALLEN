@@ -2052,26 +2052,6 @@ void registerMovementNatives(Vm& vm) {
         g.timeLeft = 3;
         goal(c, g);
     });
-    // Whether a pawn could walk straight there: nothing in the world in
-    // the way of its box (paths round corners aren't looked for yet).
-    auto reachable = [](NativeCall& c, const std::array<float, 3>& to) {
-        if (!c.vm.level || !c.self)
-            return false;
-        Value* loc = c.self->find(c.vm, "Location");
-        Value* r = c.self->find(c.vm, "CollisionRadius");
-        Value* h = c.self->find(c.vm, "CollisionHeight");
-        if (!loc)
-            return false;
-        const float rr = r ? r->asFloat() : 0, hh = h ? h->asFloat() : 0;
-        std::array<float, 3> where{}, n{};
-        return !c.vm.level->trace(c.self, Vm::vectorOf(*loc), to, {rr * 0.9f, rr * 0.9f, hh * 0.5f}, false, where, n);
-    };
-    reg("Pawn.pointReachable", [=](NativeCall& c) { c.result = B(reachable(c, Vm::vectorOf(c.args[0]))); });
-    reg("Pawn.actorReachable", [=](NativeCall& c) {
-        VmObject* o = c.o(0);
-        Value* loc = o ? o->find(c.vm, "Location") : nullptr;
-        c.result = B(loc && reachable(c, Vm::vectorOf(*loc)));
-    });
     (void)lower;
 }
 

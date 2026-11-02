@@ -199,6 +199,20 @@ public:
         };
         std::vector<Turn> turns;
         std::vector<SpaceTurn> spaceTurns;
+        // The scripts' bone turns this tick, in the order made, each on
+        // the pose as the ones before left it (C3DApplyRotation: about the
+        // bone's own axis; C3DApplyWorldRotation: `turn` in the skeleton's
+        // space, about its origin; C3DRemoveRotation: the bone's yaw (Y),
+        // pitch (X) and/or roll (Z) away from its bind pose taken out).
+        struct Op {
+            enum Kind { Own, Space, Remove } kind = Own;
+            std::string bone;
+            int axis = 0;
+            float radians = 0;
+            std::array<Vec3f, 3> turn{};
+            std::array<bool, 3> remove{}; // pitch (X), yaw (Y), roll (Z)
+        };
+        std::vector<Op> ops;
         std::vector<Reach> reaches;
         bool empty() const { return turns.empty() && spaceTurns.empty() && reaches.empty(); }
     };

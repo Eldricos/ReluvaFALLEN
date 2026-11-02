@@ -513,35 +513,32 @@ void ScriptLevel::forgetPose(VmObject* a) {
     posedBones_.erase(a);
 }
 
-void ScriptLevel::turnBone(VmObject* a, NameId bone, int axis, float degrees) {
-    bends_[a].turns[{bone, axis}] = degrees;
+// The scripts' bone turns: kept in order for this tick (a tick's first
+// starts the list afresh), as the engine applies each to the pose at once
+// and works the pose out again next frame.
+ScriptLevel::Bends::Op& ScriptLevel::newBoneOp(VmObject* a) {
+    Bends& b = bends_[a];
+    if (b.opsTick != int64_t(ticks_)) {
+        b.ops.clear();
+        b.opsTick = int64_t(ticks_);
+    }
     forgetPose(a);
+    return b.ops.emplace_back();
+}
+
+void ScriptLevel::turnBone(VmObject* a, NameId bone, int axis, float degrees) {
+    Bends::Op& op = newBoneOp(a);
+    op.kind = 0, op.bone = bone, op.axis = axis, op.degrees = degrees;
 }
 
 void ScriptLevel::turnBoneInActor(VmObject* a, NameId bone, const Rot& rotation) {
-    bends_[a].actorTurns[bone] = rotation;
-    forgetPose(a);
+    Bends::Op& op = newBoneOp(a);
+    op.kind = 1, op.bone = bone, op.rotation = rotation;
 }
 
 void ScriptLevel::removeBoneTurn(VmObject* a, NameId bone, bool yaw, bool pitch, bool roll) {
-    auto it = bends_.find(a);
-    if (it == bends_.end())
-        return;
-    Bends& b = it->second;
-    // C3DApplyRotation's axes: 0 Pitch, 1 Yaw, 2 Roll.
-    const std::array<bool, 3> off{pitch, yaw, roll};
-    for (int k = 0; k < 3; ++k)
-        if (off[size_t(k)])
-            b.turns.erase({bone, k});
-    if (auto t = b.actorTurns.find(bone); t != b.actorTurns.end()) {
-        // A rotator: Pitch, Yaw, Roll.
-        for (size_t k = 0; k < 3; ++k)
-            if (off[k])
-                t->second[k] = 0;
-        if (t->second[0] == 0 && t->second[1] == 0 && t->second[2] == 0)
-            b.actorTurns.erase(t);
-    }
-    forgetPose(a);
+    Bends::Op& op = newBoneOp(a);
+    op.kind = 2, op.bone = bone, op.remove = {pitch, yaw, roll};
 }
 
 void ScriptLevel::ikOnBase(VmObject* a, NameId chain, bool onBase) {
@@ -616,22 +613,33 @@ LayeredPoser::Adjust ScriptLevel::adjustOf(VmObject* a, ActorMesh& m) {
         if (!first.reaches.empty())
             measureEffectors(a, m, b, &first);
     }
-    for (const auto& [key, degrees] : b.turns)
-        out.turns.push_back({vm_.nameText(key.first), key.second, degrees * 3.14159265f / 180});
+    // This tick's turns (or the last tick's, until the next one's scripts run).
     const Axes& sk = m.skeleton;
-    for (const auto& [bone, rot] : b.actorTurns) {
-        // Where each of the skeleton's axes goes: into the actor's space,
-        // turned there, and back.
-        const Axes turn = axesOf(rot);
-        LayeredPoser::Adjust::SpaceTurn t{vm_.nameText(bone), {}};
-        for (size_t k = 0; k < 3; ++k) {
-            Vec turned{};
-            for (size_t j = 0; j < 3; ++j)
-                turned = add(turned, mul(turn[j], sk[k][j]));
-            t.turn[k] = vec3(within(turned, sk));
+    if (b.opsTick == int64_t(ticks_) || b.opsTick + 1 == int64_t(ticks_))
+        for (const Bends::Op& op : b.ops) {
+            LayeredPoser::Adjust::Op o;
+            o.bone = vm_.nameText(op.bone);
+            if (op.kind == 0) {
+                o.kind = LayeredPoser::Adjust::Op::Own;
+                o.axis = op.axis;
+                o.radians = op.degrees * 3.14159265f / 180;
+            } else if (op.kind == 1) {
+                // Where each of the skeleton's axes goes: into the actor's
+                // space, turned there, and back.
+                o.kind = LayeredPoser::Adjust::Op::Space;
+                const Axes turn = axesOf(op.rotation);
+                for (size_t k = 0; k < 3; ++k) {
+                    Vec turned{};
+                    for (size_t j = 0; j < 3; ++j)
+                        turned = add(turned, mul(turn[j], sk[k][j]));
+                    o.turn[k] = vec3(within(turned, sk));
+                }
+            } else {
+                o.kind = LayeredPoser::Adjust::Op::Remove;
+                o.remove = op.remove;
+            }
+            out.ops.push_back(o);
         }
-        out.spaceTurns.push_back(t);
-    }
     // From the world into the actor's own space (as toWorld, undone).
     const Value* loc = prop(a, "Location");
     const Value* pivot = prop(a, "PrePivot");

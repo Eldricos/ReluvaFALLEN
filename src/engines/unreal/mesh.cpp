@@ -1941,6 +1941,58 @@ void LayeredPoser::setPlacement(const std::array<Vec3f, 3>& skeletonInActor) {
 // target (kept in the plane they bend in now), the middle bone turned to
 // point at the target, and the end bone given its axes.
 void LayeredPoser::Impl::adjusted(std::vector<Mat43>& local, const Adjust& adjust) const {
+    for (const Adjust::Op& op : adjust.ops) {
+        const int i = indexOf(op.bone);
+        if (i < 0)
+            continue;
+        const size_t b = size_t(i);
+        if (op.kind == Adjust::Op::Own) {
+            if (op.axis < 0 || op.axis > 2)
+                continue;
+            Vec3f axis{};
+            axis[size_t(op.axis)] = 1;
+            local[b] = then(turnAbout(axis, op.radians), local[b]);
+            continue;
+        }
+        const std::vector<Mat43> world = worlds(local);
+        Mat43 w{};
+        if (op.kind == Adjust::Op::Space) {
+            Mat43 turn{};
+            for (size_t k = 0; k < 3; ++k)
+                setRow(turn, k, op.turn[k]);
+            w = then(world[b], turn);
+        } else {
+            // Its turn from its bind pose, X = Bind^-1 Current, as yaw (Y),
+            // pitch (X), roll (Z): X = roll, then pitch, then yaw.
+            std::vector<Mat43> bind(bones.size());
+            for (size_t k = 0; k < bones.size(); ++k)
+                bind[k] = bones[k].placement;
+            const Mat43 bindWorld = worlds(bind)[b];
+            Mat43 inverse{};
+            for (size_t r = 0; r < 3; ++r)
+                for (size_t c = 0; c < 3; ++c)
+                    inverse[r * 3 + c] = bindWorld[c * 3 + r];
+            Mat43 rot = world[b];
+            rot[9] = rot[10] = rot[11] = 0;
+            const Mat43 x = then(inverse, rot);
+            float pitch = std::asin(std::clamp(-x[7], -1.0f, 1.0f));
+            float yaw = std::atan2(x[6], x[8]);
+            float roll = std::atan2(x[1], x[4]);
+            if (op.remove[0])
+                pitch = 0;
+            if (op.remove[1])
+                yaw = 0;
+            if (op.remove[2])
+                roll = 0;
+            const Mat43 kept = then(then(turnAbout({0, 0, 1}, roll), turnAbout({1, 0, 0}, pitch)), turnAbout({0, 1, 0}, yaw));
+            Mat43 bindRot = bindWorld;
+            bindRot[9] = bindRot[10] = bindRot[11] = 0;
+            w = then(bindRot, kept);
+        }
+        for (size_t c = 0; c < 3; ++c)
+            w[9 + c] = world[b][9 + c];
+        local[b] = inParent(b, w, world);
+    }
     for (const Adjust::Turn& t : adjust.turns) {
         const int i = indexOf(t.bone);
         if (i < 0 || t.axis < 0 || t.axis > 2)

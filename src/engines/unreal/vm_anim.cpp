@@ -77,30 +77,25 @@ void notifyBetween(Vm& vm, VmObject* a, const MeshAnimSeq* s, float lo, float hi
 
 bool boolOf(const Value* v) { return v && v->asBool(); }
 
-// Where through an animation its last frame is (AnimLast): a still one
-// is there from the start.
-float lastOf(const MeshAnimSeq& s) { return s.numFrames > 1 ? 1 - 1.0f / float(s.numFrames) : 0; }
-
 } // namespace
 
-// PlayAnim, LoopAnim: the sequence from its start (after a tween into it
-// of `tween` seconds), `rate` times its own speed.
+// PlayAnim, LoopAnim, as the engine's: a sequence the mesh hasn't
+// changes nothing. AnimRate is Rate x its speed / its frames; AnimLast
+// 1 - 1/frames. TweenTime -1 (the default) tweens by the old rate (or a
+// fortieth of the sequence); 0 starts at once (just past 0); a tween is
+// in units of 1/(TweenTime x frames). None playing before: no tween. A
+// one-frame sequence only tweens (1/TweenTime, else 10 a second).
 void ScriptLevel::startAnim(VmObject* a, NameId sequence, float rate, float tween, bool loop, float minRate) {
     Value* seqValue = prop(a, "AnimSequence");
     if (!seqValue)
         return;
     const MeshAnimSeq* s = findAnim(vm_, a, sequence);
-    // Looping it already: only its speed changes.
-    if (loop && s && seqValue->i == sequence && boolOf(prop(a, "bAnimLoop")) && animating(a)) {
-        const float perRate = s->rate / float(std::max(1, s->numFrames));
-        if (Value* r = prop(a, "AnimRate"))
-            r->f = rate * perRate;
-        if (Value* m = prop(a, "AnimMinRate"))
-            m->f = std::max(0.0f, minRate) * perRate;
+    if (!s)
         return;
-    }
-    noteTweenFrom(a, tween > 0 && s);
-    seqValue->i = sequence;
+    auto get = [&](const char* name) {
+        const Value* p = prop(a, name);
+        return p ? p->asFloat() : 0.0f;
+    };
     auto set = [&](const char* name, float v) {
         if (Value* p = prop(a, name))
             p->f = v;
@@ -109,31 +104,56 @@ void ScriptLevel::startAnim(VmObject* a, NameId sequence, float rate, float twee
         if (Value* p = prop(a, name))
             p->i = v ? 1 : 0;
     };
-    setBool("bAnimLoop", loop);
-    if (!s) { // a sequence its mesh hasn't (or no mesh): nothing to play, done at once
-        set("AnimFrame", 0);
-        set("AnimRate", 0);
-        set("AnimLast", 0);
-        setBool("bAnimFinished", true);
+    const float n = float(std::max(1, s->numFrames));
+    const float perRate = s->rate / n;
+    // Looping it already: only its speed changes.
+    if (loop && seqValue->i == sequence && boolOf(prop(a, "bAnimLoop")) && animating(a)) {
+        set("AnimRate", rate * perRate);
+        setBool("bAnimFinished", false);
+        set("AnimMinRate", minRate != 0 ? minRate * perRate : 0);
+        set("OldAnimRate", rate * perRate);
         return;
     }
-    const float n = float(std::max(1, s->numFrames));
-    // Negative: scaled by its speed (each unit a second, `-rate` times its
-    // own speed), but no slower than `minRate` times it.
-    set("AnimRate", rate * s->rate / n);
-    set("AnimMinRate", std::max(0.0f, minRate) * s->rate / n);
-    set("AnimLast", lastOf(*s));
+    if (seqValue->i == 0)
+        tween = 0;
+    seqValue->i = sequence;
+    set("AnimRate", rate * perRate);
+    set("AnimLast", 1 - 1 / n);
+    set("TweenAnimFrame", 0);
     setBool("bAnimFinished", false);
-    if (tween > 0) {
-        set("TweenRate", 1 / tween);
-        set("AnimFrame", -1 / n); // below 0: tweening into the first frame
+    setBool("bAnimLoop", loop);
+    setBool("bAnimReversed", false);
+    setBool("bAnimNotify", !s->notifies.empty());
+    set("AnimMinRate", loop && minRate != 0 ? minRate * perRate : 0);
+    if (s->numFrames <= 1) {
+        set("AnimMinRate", 0);
+        set("OldAnimRate", 0);
+        setBool("bAnimNotify", false);
+        set("AnimRate", 0);
+        set("AnimFrame", -1 / n);
+        set("TweenRate", tween > 0 ? 1 / tween : 10);
+    } else if (tween > 0) {
+        set("TweenRate", 1 / (tween * n));
+        set("AnimFrame", -1 / n);
+    } else if (tween == -1) {
+        set("AnimFrame", -1 / n);
+        const float old = get("OldAnimRate");
+        float speed = 0;
+        if (const Value* v = prop(a, "Velocity")) {
+            const auto vel = Vm::vectorOf(*v);
+            speed = std::sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
+        }
+        set("TweenRate", old > 0 ? old : old < 0 ? std::max(0.5f * get("AnimRate"), -old * speed) : 1 / (0.025f * n));
     } else {
-        set("AnimFrame", 0);
+        set("TweenRate", 0);
+        set("AnimFrame", loop ? 0.0001f : 0.001f);
     }
+    set("OldAnimRate", get("AnimRate"));
+    noteTweenFrom(a, get("AnimFrame") < 0);
 }
 
-// TweenAnim: from wherever it is to the sequence's first frame over
-// `seconds`, then still (AnimEnd when there).
+// TweenAnim: from wherever it is into the sequence over `seconds`, then
+// still (AnimEnd when there); no time: there at once, not animating.
 void ScriptLevel::tweenAnim(VmObject* a, NameId sequence, float seconds) {
     Value* seqValue = prop(a, "AnimSequence");
     if (!seqValue)
@@ -142,19 +162,16 @@ void ScriptLevel::tweenAnim(VmObject* a, NameId sequence, float seconds) {
     seqValue->i = sequence;
     const MeshAnimSeq* s = findAnim(vm_, a, sequence);
     const float n = s ? float(std::max(1, s->numFrames)) : 1;
-    if (Value* p = prop(a, "bAnimLoop"))
-        p->i = 0;
-    if (Value* p = prop(a, "bAnimFinished"))
-        p->i = 0;
-    if (Value* p = prop(a, "AnimRate"))
-        p->f = 0;
-    if (Value* p = prop(a, "AnimLast"))
-        p->f = s ? lastOf(*s) : 0;
-    // A tween of no time ends at the next tick.
+    for (const char* b : {"bAnimFinished", "bAnimLoop", "bAnimNotify"})
+        if (Value* p = prop(a, b))
+            p->i = 0;
+    for (const char* f : {"AnimLast", "AnimMinRate", "AnimRate", "OldAnimRate", "TweenAnimFrame"})
+        if (Value* p = prop(a, f))
+            p->f = 0;
     if (Value* p = prop(a, "TweenRate"))
-        p->f = seconds > 0 ? 1 / seconds : 1e6f;
+        p->f = seconds > 0 ? 1 / (n * seconds) : 0;
     if (Value* p = prop(a, "AnimFrame"))
-        p->f = -1 / n;
+        p->f = seconds > 0 ? -1 / n : 0;
 }
 
 // Where a tween about to begin starts from: the animation showing now. One
@@ -180,9 +197,13 @@ const ScriptLevel::TweenFrom* ScriptLevel::tweenFromOf(VmObject* a) const {
 }
 
 bool ScriptLevel::animating(VmObject* a) {
+    const Value* seq = prop(a, "AnimSequence");
     const Value* frame = prop(a, "AnimFrame");
     const Value* rate = prop(a, "AnimRate");
-    return (frame && frame->asFloat() < 0) || (rate && rate->asFloat() != 0);
+    const Value* tween = prop(a, "TweenRate");
+    if (!seq || !seq->i || !frame)
+        return false;
+    return frame->asFloat() >= 0 ? (rate && rate->asFloat() != 0) : (tween && tween->asFloat() != 0);
 }
 
 float ScriptLevel::rateNow(VmObject* a, float rate, float minRate) {
@@ -234,69 +255,92 @@ void ScriptLevel::animate(VmObject* a, float dt) {
     animateLayers(a, dt);
     if (a->deleted)
         return;
+    // As the engine's (in AActor::Tick): up to four passes a tick, each
+    // to the next tween's end, notification or end of the sequence.
     Value* frame = prop(a, "AnimFrame");
     Value* rate = prop(a, "AnimRate");
-    if (!frame || !rate || (frame->asFloat() >= 0 && rate->asFloat() == 0)) {
+    Value* tweenRate = prop(a, "TweenRate");
+    const Value* seqValue = prop(a, "AnimSequence");
+    if (!frame || !rate || !seqValue) {
         endAnimWait(a, false);
         return;
     }
-    const Value* minRate = rate->f < 0 ? prop(a, "AnimMinRate") : nullptr;
-    const float playRate = rateNow(a, rate->f, minRate ? minRate->asFloat() : 0);
-    const Value* seqValue = prop(a, "AnimSequence");
-    const MeshAnimSeq* s = seqValue ? findAnim(vm_, a, seqValue->i) : nullptr;
-    const float n = s ? float(std::max(1, s->numFrames)) : 1;
     float left = dt;
-    // Tweening into the first frame.
-    if (frame->f < 0) {
-        const Value* tweenRate = prop(a, "TweenRate");
-        const float speed = tweenRate ? std::max(0.0f, tweenRate->asFloat()) : 0;
-        const float towards = -frame->f * n; // 1 at the tween's start, 0 at its end
-        if (speed <= 0 || towards > speed * left) {
-            frame->f = -(towards - speed * left) / n;
-            return;
+    for (int pass = 0; pass < 4 && left > 0 && !a->deleted; ++pass) {
+        if (!seqValue->i)
+            break;
+        const bool tweening = frame->f < 0;
+        if (tweening ? (!tweenRate || tweenRate->f == 0) : rate->f == 0)
+            break;
+        const float old = frame->f;
+        if (tweening) {
+            frame->f += left * tweenRate->f;
+            if (frame->f < 0) {
+                left = 0;
+                break;
+            }
+            left = frame->f * left / (frame->f - old);
+            const Value* landing = prop(a, "TweenAnimFrame");
+            frame->f = landing ? landing->asFloat() : 0;
+            if (rate->f == 0) {
+                if (Value* f = prop(a, "bAnimFinished"))
+                    f->i = 1;
+                vm_.callEvent(a, "AnimEnd");
+                endAnimWait(a, true);
+                break;
+            }
+            continue;
         }
-        left -= speed > 0 ? towards / speed : left;
-        frame->f = 0;
-        if (rate->f == 0) { // TweenAnim: there
+        const bool reversed = boolOf(prop(a, "bAnimReversed"));
+        float r = reversed ? -rate->f : rate->f;
+        if (rate->f < 0) {
+            const Value* minRate = prop(a, "AnimMinRate");
+            r = rateNow(a, rate->f, minRate ? minRate->asFloat() : 0);
+        }
+        const float next = frame->f + r * left;
+        // The nearest notification passed (old, next].
+        const MeshAnimSeq* s = boolOf(prop(a, "bAnimNotify")) ? findAnim(vm_, a, seqValue->i) : nullptr;
+        const MeshAnimSeq::Notify* note = nullptr;
+        if (s)
+            for (const MeshAnimSeq::Notify& n : s->notifies) {
+                const bool passed = reversed ? (n.time >= next && n.time < old) : (n.time > old && n.time <= next);
+                if (passed && (!note || std::fabs(n.time - old) < std::fabs(note->time - old)))
+                    note = &n;
+            }
+        if (note) {
+            left = std::fabs((next - note->time) * left / (next - old));
+            frame->f = note->time;
+            if (!note->function.empty())
+                if (VmFunction* fn = vm_.findFunction(a, vm_.name(note->function)))
+                    vm_.invoke(fn, a, {});
+            continue;
+        }
+        if (reversed ? next <= 0 : next >= 1) {
+            if (boolOf(prop(a, "bAnimLoop"))) {
+                left = std::fabs((next - (reversed ? 0.0f : 1.0f)) * left / (next - old));
+                frame->f = reversed ? 1.0f : 0.0f;
+                if (reversed ? old > 0 : old < 1) {
+                    if (animWaits_.count(a))
+                        if (Value* f = prop(a, "bAnimFinished"))
+                            f->i = 1;
+                    vm_.callEvent(a, "AnimEnd");
+                    endAnimWait(a, true);
+                }
+                continue;
+            }
+            frame->f = reversed ? 0.0f : 1.0f;
+            rate->f = 0;
             if (Value* f = prop(a, "bAnimFinished"))
                 f->i = 1;
             vm_.callEvent(a, "AnimEnd");
             endAnimWait(a, true);
-            return;
+            break;
         }
+        frame->f = next;
+        left = 0;
     }
-    // Playing: on by its rate, past the notifications on the way.
-    const bool loop = boolOf(prop(a, "bAnimLoop"));
-    const float last = s ? lastOf(*s) : 0;
-    const float end = loop ? 1.0f : last; // a loop goes round through its last frame back to its first
-    const float from = frame->f;
-    float to = from + playRate * left;
-    auto notify = [&](float lo, float hi) { notifyBetween(vm_, a, s, lo, hi); };
-    if (to < end) {
-        frame->f = to;
-        notify(from, to);
-        return;
-    }
-    notify(from, end);
-    if (a->deleted)
-        return;
-    if (loop) {
-        const NameId playing = seqValue ? seqValue->i : 0;
-        frame->f = std::fmod(to - end, 1.0f);
-        vm_.callEvent(a, "AnimEnd");
-        endAnimWait(a, true);
-        // Still the same loop (AnimEnd may have started another): on into
-        // its next round.
-        if (!a->deleted && seqValue && seqValue->i == playing && boolOf(prop(a, "bAnimLoop")) && frame->f > 0)
-            notify(0, frame->f);
-    } else {
-        frame->f = last;
-        rate->f = 0;
-        if (Value* f = prop(a, "bAnimFinished"))
-            f->i = 1;
-        vm_.callEvent(a, "AnimEnd");
-        endAnimWait(a, true);
-    }
+    if (!a->deleted && !animating(a))
+        endAnimWait(a, false);
 }
 
 // A latent FinishAnim waiting on this actor ends: at the end of its
@@ -388,6 +432,14 @@ void ScriptLevel::tweenOutLayer(VmObject* a, NameId group, float seconds) {
     l->second.fromSequence = 0;
 }
 
+void ScriptLevel::stopLayerLooping(VmObject* a, NameId group) {
+    auto it = layers_.find(a);
+    if (it == layers_.end())
+        return;
+    if (auto l = it->second.find(group); l != it->second.end())
+        l->second.loop = false;
+}
+
 bool ScriptLevel::layerAnimating(VmObject* a, NameId group) {
     auto it = layers_.find(a);
     if (it == layers_.end())
@@ -432,15 +484,15 @@ void ScriptLevel::animateLayers(VmObject* a, float dt) {
         if (l.finished)
             continue;
         if (l.rate == 0) {
-            if (l.weightRate == 0) { // a tween there
+            if (l.weightRate == 0) // a tween there: still, no C3DAnimEnd
                 l.finished = true;
-                ended.push_back(group);
-            }
             continue;
         }
+        if (l.weightRate > 0)
+            continue; // tweening in: its time starts once it's there
         const MeshAnimSeq* s = findAnim(vm_, a, l.sequence);
-        const float end = l.loop ? 1.0f : (s ? lastOf(*s) : 0);
-        const float from = l.frame, to = from + rateNow(a, l.rate, l.minRate) * dt;
+        const float end = 1.0f;
+        const float from = l.frame, to = from + l.rate * dt; // Rate multiplies time: not by speed
         if (to < end) {
             l.frame = to;
             notifyBetween(vm_, a, s, from, to);
@@ -448,20 +500,20 @@ void ScriptLevel::animateLayers(VmObject* a, float dt) {
         }
         notifyBetween(vm_, a, s, from, end);
         if (l.loop) {
-            l.frame = std::fmod(to - end, 1.0f);
-        } else {
-            l.frame = end;
-            l.rate = 0;
-            l.finished = true;
+            l.frame = std::fmod(to - end, 1.0f); // round again; no C3DAnimEnd for a loop
+            continue;
         }
+        l.frame = end; // held there, at full strength, until faded out
+        l.rate = 0;
+        l.finished = true;
         ended.push_back(group);
     }
     for (NameId group : gone) {
         it->second.erase(group);
         endLayerWait(a, group);
     }
-    // At its end (and each loop's): C3DAnimEnd(group), whose usual answer
-    // is to fade the layer out.
+    // A layer played once, at its end: C3DAnimEnd(group), whose usual
+    // answer is to fade the layer out.
     for (NameId group : ended) {
         if (a->deleted)
             return;
@@ -511,13 +563,13 @@ void registerAnimationNatives(Vm& vm) {
     reg("Actor.PlayAnim", [](NativeCall& c) {
         if (c.vm.level && c.self)
             c.vm.level->startAnim(c.self, c.i(0), c.given.size() > 1 && c.given[1] ? c.f(1) : 1,
-                                  c.given.size() > 2 && c.given[2] ? c.f(2) : 0, false);
+                                  c.given.size() > 2 && c.given[2] ? c.f(2) : -1, false);
     });
     // LoopAnim(name Sequence, optional float Rate, optional float TweenTime, optional float MinRate)
     reg("Actor.LoopAnim", [](NativeCall& c) {
         if (c.vm.level && c.self)
             c.vm.level->startAnim(c.self, c.i(0), c.given.size() > 1 && c.given[1] ? c.f(1) : 1,
-                                  c.given.size() > 2 && c.given[2] ? c.f(2) : 0, true,
+                                  c.given.size() > 2 && c.given[2] ? c.f(2) : -1, true,
                                   c.given.size() > 3 && c.given[3] ? c.f(3) : 0);
     });
     // TweenAnim(name Sequence, float Time)
@@ -528,9 +580,17 @@ void registerAnimationNatives(Vm& vm) {
     reg("Actor.IsAnimating", [](NativeCall& c) {
         c.result = Value::boolValue(c.vm.level && c.self && c.vm.level->animating(c.self));
     });
-    // Latent: until the animation (or this loop of it) ends.
+    // Latent: until the animation ends; a loop is made to end at the end
+    // of this round (bAnimLoop off).
     reg("Actor.FinishAnim", [](NativeCall& c) {
-        if (!c.vm.level || !c.self || !c.vm.level->animating(c.self)) {
+        if (c.self)
+            if (Value* loop = c.self->find(c.vm, "bAnimLoop"); loop && loop->asBool()) {
+                loop->i = 0;
+                if (Value* f = c.self->find(c.vm, "bAnimFinished"))
+                    f->i = 0;
+            }
+        const Value* frame = c.self ? c.self->find(c.vm, "AnimFrame") : nullptr;
+        if (!c.vm.level || !c.self || !c.vm.level->animating(c.self) || (frame && frame->asFloat() >= 1)) {
             c.latentSeconds = 0;
             return;
         }
@@ -558,12 +618,12 @@ void registerAnimationNatives(Vm& vm) {
     };
     reg("Actor.C3DPlayAnim", [=](NativeCall& c) {
         if (c.vm.level && c.self)
-            c.vm.level->playLayer(c.self, c.i(0), c.i(1), f(c, 3, 1), f(c, 4, 0), false, n(c, 5), 0, clears(c, 6));
+            c.vm.level->playLayer(c.self, c.i(0), c.i(1), f(c, 3, 1), f(c, 4, 0.2f), false, n(c, 5), 0, clears(c, 6));
     });
     // C3DLoopAnim(group, sequence, boned, rate, tween time, min rate, inherit bone, clear...)
     reg("Actor.C3DLoopAnim", [=](NativeCall& c) {
         if (c.vm.level && c.self)
-            c.vm.level->playLayer(c.self, c.i(0), c.i(1), f(c, 3, 1), f(c, 4, 0), true, n(c, 6), f(c, 5, 0),
+            c.vm.level->playLayer(c.self, c.i(0), c.i(1), f(c, 3, 1), f(c, 4, 0.2f), true, n(c, 6), 0, // MinRate: unused
                                   clears(c, 7));
     });
     // C3DTweenAnim(group, sequence, boned, time, inherit bone, clear...)
@@ -578,7 +638,11 @@ void registerAnimationNatives(Vm& vm) {
     reg("Actor.C3DIsAnimating", [](NativeCall& c) {
         c.result = Value::boolValue(c.vm.level && c.self && c.vm.level->layerAnimating(c.self, c.i(0)));
     });
-    reg("Actor.C3DFinishAnim", [](NativeCall& c) { // latent: until the group's animation ends
+    // Latent: a loop made to end at the end of this round, then until the
+    // group's animation ends.
+    reg("Actor.C3DFinishAnim", [](NativeCall& c) {
+        if (c.vm.level && c.self)
+            c.vm.level->stopLayerLooping(c.self, c.i(0));
         if (!c.vm.level || !c.self || !c.vm.level->layerAnimating(c.self, c.i(0))) {
             c.latentSeconds = 0;
             return;

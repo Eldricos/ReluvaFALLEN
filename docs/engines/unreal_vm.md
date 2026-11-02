@@ -512,25 +512,61 @@ search over the paths the editor stored with the map.
   348: rooms joined by doors and lifts, ledges with no way down (there
   are no jumps or drops among the reaches). Ladders are the player's
   alone.
-- **`FindPathToward(Actor)`, `FindPathTo(Vector)`:** the goal itself if
-  the pawn can go straight there (`pointReachable`'s sweep). Else the
-  nearest few points (up to 8 within 1200) the pawn can go straight
-  to, and those that can see the goal (or the goal, if it's a point).
-  Then the shortest way between them (Dijkstra) along reaches the pawn
-  fits and can take (`bCanWalk`, `bCanFly`... against the reach's
-  flags), each costing its length and its end's `ExtraCost`. The route
-  goes in the pawn's `RouteCache`, and the answer is its first point
-  the pawn isn't already at; None if there's no way (the scripts then
-  wait, or give up).
-- **The iterators:** `AllPathNodes` (by class, and tag), `RadiusPathNodes`
-  and `RadiusVisiblePathNodes` (those within a radius, and those of them
-  that can see the place: nothing in the world in the way), and
-  `LineOfSightTo` (from the eyes to the other's middle, or its top).
-- **In play:** on M01_WorfL1 the Grigari now roam from point to point at
-  a walk (they stood still before). Over all maps' first 20 seconds,
-  about 15,000 ways were straight, 9,700 along paths and 15,000 none:
-  mostly pawns asking again and again for a point in another island.
-  `ue-run` reports these per map.
+- **Matched against Engine.dll** (`APawn::findPathToward`,
+  `breadthPathFrom`, `pointReachable`, `actorReachable`,
+  `LineOfSightTo`, the path iterators): Reluva's own code, written from
+  what the routines were read to do.
+- **The order of the points** is the level's: LevelInfo's
+  `NavigationPointList` and each point's `nextNavigationPoint`, as saved
+  with the map; the iterators and the searches follow it, so ties go the
+  same way.
+- **Reaching a place** (`pointReachable`, and what the search asks):
+  within 800 across, not water the pawn can't swim, seen from its eyes
+  (`BaseEyeHeight`) unless already known, the place nudged to where the
+  pawn fits. Then a walk test: steps of the collision radius (at least
+  128) along the floor, each a test move (as `MoveActor`, without events)
+  up a step when blocked and down onto a floor (0.7 or flatter) within
+  `MaxStepHeight` + 2; a fall, too steep a climb or 101 steps and it
+  can't. Flyers and swimmers test a straight move. The pawn is put back.
+- **Reaching an actor** (`actorReachable`): The Fallen's native takes a
+  navigation point (or an item's marker) by the network alone when the
+  pawn is at a point and fits the level's biggest; else the engine's
+  test: within 800 (a pawn at any range), seen unless known, near enough
+  by both sizes.
+- **`FindPathToward(Actor, bSinglePath, bClearPaths)`, `FindPathTo(Vector,
+  ...)`:** `bClearPaths` (on unless told otherwise) first sets each
+  point's cost back (its `ExtraCost`, or what its `SpecialCost` event
+  says). Then **one** start point: of the nearest 32 within 800, the
+  nearest the pawn sees and can reach (or the one it stands on); a
+  falling pawn looks from where it will land. **One** end point: of
+  those near the goal, the nearest it can be reached from. The search
+  goes back from the end over each point's `upstreamPaths` (the reaches
+  into it) the pawn fits (its size in whole units; walking, flying,
+  swimming, jumping, doors, special and player-only against its
+  abilities) and a mover doesn't bar (one it can't open), cheapest first,
+  each step costing its length and the point's cost, until a start is
+  reached. A start further along (nearer the goal, or behind the pawn
+  against the way it was going) is preferred over the nearest. The way
+  goes in `RouteCache`; a point with its own handling (a lift, a door)
+  names where to go instead (`SpecialHandling`, the pawn's
+  `SpecialGoal`). None if there's no way.
+- **The iterators:** `AllPathNodes` (by class and tag, in the level's
+  order); `RadiusPathNodes` and `RadiusVisiblePathNodes`: of the **8**
+  nearest points within the radius (the engine keeps one nearest-points
+  list for everyone, reused while asked near where it was made), nearest
+  first, those of the class, and for the visible one those that can see
+  the place.
+- **`LineOfSightTo(Other)`:** from the eyes. Its enemy: its middle.
+  Within 1000: its chest (0.8 of its height up) and, for a pawn within
+  500, its sides. Further, a pawn's middle only, and for the AI only
+  half the time and not past half its sight range.
+- **In play:** over all maps' first 20 seconds, 1,599 ways were straight, 2,277 along paths and 1,975 none. Many of the
+  failures are faithful: on M05_WorfL2 the patrol points a guard is sent
+  to are an island in the map's own data (no reach in or out either
+  way), so the original fails there too.
+- **Not done:** jumping and dropping reaches (none of The Fallen's maps
+  has them), and the editor's path building (the maps' own reaches are
+  used).
 
 ### Dialogue
 
@@ -1305,8 +1341,10 @@ gone.
 ## Animation
 
 `vm_anim.cpp` plays actors' animations as the scripts ask, each tick
-after physics. It's Reluva's reading of the public UnrealScript
-documentation of these natives and of what The Fallen's scripts expect.
+after physics. How the natives and the tick behave was checked against
+Engine.dll (`execPlayAnim`, `execLoopAnim`, `execTweenAnim`,
+`execFinishAnim`, `AActor::UpdateAnimation`, and The Fallen's `C3D`
+layer natives); the code is Reluva's own.
 An actor's animation is its own properties:
 - `AnimSequence`.
 - `AnimFrame`: 0 to 1 through it; below 0 while tweening into it.
@@ -1320,10 +1358,15 @@ frame count and frames a second.
 
 - `PlayAnim(Sequence, Rate, TweenTime)` plays it once: `AnimRate` is
   `Rate` times the sequence's frames a second over its frame count.
-  With a tween, it first tweens into the first frame over `TweenTime`,
-  from the frame showing when it began (kept with the actor; one begun
-  mid-tween starts from where that one started). While `AnimFrame` is
-  below 0 the mesh is drawn blended from that frame to the first.
+  `TweenTime` left out is -1: tween only if another sequence was showing
+  (over one frame's time), else start at once. A tween sets `TweenRate`
+  to 1 / (time × frames) and `AnimFrame` to minus one frame; with none,
+  `AnimFrame` starts at 0.001 (0.0001 looping) so the first frame's
+  notification isn't missed. A one-frame sequence just tweens. Each
+  call keeps `OldAnimRate` and the frame it tweens from
+  (`TweenAnimFrame`). While `AnimFrame` is below 0 the mesh is drawn
+  blended from that frame to the first. A sequence the mesh doesn't have
+  changes nothing.
 - A negative rate is scaled by the actor's speed (as the public
   UnrealScript documentation has it): each unit a second of `Velocity`
   plays `-Rate` times the sequence's speed, never slower than
@@ -1332,22 +1375,24 @@ frame count and frames a second.
 - `LoopAnim` does the same, looping. If it's looping that sequence
   already, only its rate changes (scripts call it every tick).
 - `TweenAnim(Sequence, Time)` goes to its first frame over `Time` and
-  stays.
-- A sequence its mesh doesn't have (or an actor without a mesh) is
-  finished at once, so nothing waits on it.
-- Each tick moves `AnimFrame` on.
+  stays; with no time it's there at once, not animating.
+- `IsAnimating`: a sequence, and `AnimRate` (playing) or `TweenRate`
+  (tweening in) not 0.
+- Each tick moves `AnimFrame` on, in up to four steps when a step ends
+  something (a tween landing, a notification, the end).
   - Passing a notification's time calls the function it names on the
     actor. These are the mesh's own, kept with each sequence (78 of
     The Fallen's meshes have them, 3,190 in all): footsteps, AI firing
     their weapons (`FireWeapon`), the jump's push (`ApplyJumpVelocity`),
     and more. No script sets `bAnimNotify`, so they're called whenever
-    a sequence has them.
-  - At the end, `AnimEnd` is sent. A loop goes on round (and sends
-    `AnimEnd` each time). One played once stops at its last frame,
-    finished.
-- `FinishAnim` (latent: The Fallen's scripts call it 638 times) waits
-  until then: the end of the animation, or of this round of a loop. It
-  returns at once if nothing's playing. `IsAnimating` says whether one
+    a sequence has them, each one passed since the last tick (after
+    the old frame, up to and with the new), in order.
+  - At the end (1.0), `AnimEnd` is sent. A loop goes on round and sends
+    `AnimEnd` when it wraps (not when it began past the end). One
+    played once stops at its last frame, finished.
+- `FinishAnim` (latent: The Fallen's scripts call it 638 times) clears
+  `bAnimLoop` and `bAnimFinished`, then waits for the end: a loop plays
+  out its round and stops. It returns at once if nothing's playing. `IsAnimating` says whether one
   is playing or tweening. `GetAnimDuration` gives a sequence's length
 in seconds at a rate. `HasAnim` and `GetAnimGroup` read the
   sequences, borrowed ones included (`runf` is Kira's, not only her
@@ -1374,8 +1419,10 @@ natives:
 - **Starting:** `C3DPlayAnim(Group, Sequence, Boned, Rate, TweenTime,
   InheritBone, ...)` and `C3DLoopAnim` play the sequence on the bone
   named and those under it. A group named lower (`LowerTorso`) is the
-  rest of the skeleton. It fades in over the tween, its weight rising
-  from 0 to 1.
+  rest of the skeleton. It fades in over the tween (0.2 s when left
+  out), its weight rising from 0 to 1, its time held at the start
+  until it's in. The rate is a plain multiplier of the sequence's own
+  speed.
 - **Holding a pose:** `C3DTweenAnim` fades to the first frame.
 - **Replacing one:** a layer started on a group whose layer shows holds
   the old one where it was, under the new one, until the new one has
@@ -1386,14 +1433,15 @@ natives:
   about each); the bones below take the layer as it is. `CTV_Human`'s
   melee sets all three except when swimming, so a punch while running
   keeps the spine turned with the run and the arm punches.
-- **Speed-scaled:** `C3DLoopAnim`'s negative rate and `MinRate` as an
-  actor's own.
-- **Ticking:** a layer moves on at its rate, calls the sequence's
-  notifications, and at its end (and each loop's) sends
-  `C3DAnimEnd(Group)`. The scripts answer that with
+- **Speed:** `C3DLoopAnim`'s `MinRate` is ignored, as the engine does.
+- **Ticking:** a layer moves on at its rate and calls the sequence's
+  notifications. One played once sends `C3DAnimEnd(Group)` at its end
+  and holds its last frame; a loop sends none as it goes round, nor
+  does a tween. The scripts answer `C3DAnimEnd` with
   `C3DTweenOutAnim(Group, 0.1)`, which fades it out, and then it goes.
-- **Waiting and asking:** `C3DFinishAnim(Group)` (latent) waits for that
-  end, and `C3DIsAnimating(Group)` says whether one's playing.
+- **Waiting and asking:** `C3DFinishAnim(Group)` (latent) stops a loop
+  looping and waits for that end, and `C3DIsAnimating(Group)` says
+  whether one's playing.
 
 Faces are channels:
 - `C3DPlaySkinAnim()` hands out a tag. `Pawn` asks for one each for
@@ -1550,9 +1598,13 @@ The natives:
   they do nothing here.
 
 **Bending the bones.** The scripts change a pose on top of its
-animations. What they set is kept per actor until they change it. The
-pose for drawing, for the bone natives and for the attachment points
-includes it, in this order:
+animations. As in Engine.dll, each turn is applied to the pose at once,
+on top of the ones before it, and the next tick's pose starts again
+from the animations, so the scripts make them anew every tick (they
+do: `UpdatePlayerIK`, `UpdateHeadAnimation`). Reluva keeps a tick's turns
+in the order made and applies them in that order to the pose for
+drawing, for the bone natives and for the attachment points; they
+last until the scripts' next tick replaces them:
 - **`C3DApplyRotation(Bone, Axis, Angle)`:** degrees about one of the
   bone's axes (in the scripts' order), turning as a rotator's `Pitch`,
   `Yaw` or `Roll` would. In the skeleton's own axes, Pitch is about X,
@@ -1566,6 +1618,11 @@ includes it, in this order:
   pitch (the hips' and spine's twist in `ApplyBackTwist`, a head turning
   to look at someone in `Pawn`). In the world's axes, a pitch would tip
   the head sideways whenever the actor faced along Y.
+- **`C3DRemoveRotation(Bone, bYaw, bPitch, bRoll)`:** takes the bone's
+  turn away from its bind pose (the skeleton as modelled) apart into
+  yaw, pitch and roll (roll first, then pitch, then yaw, in the
+  skeleton's axes), drops those asked for, and puts the rest back: the
+  bone where it is, turned from its bind pose by what's left.
 - **The IK chains:** `C3DSetIkTargetPositionAbs` / `C3DSetIkTargetOrientationAbs`
   (in the world), and `C3DSetIkTargetPosition` / `C3DSetIkTargetOrientation`
   (from another actor's place and turn). Each takes a chain's name and a
@@ -1615,13 +1672,13 @@ Not done:
   natives: the order of a bone's axes, the axes `C3DApplyRotation` turns
   about, the actor's axes for `C3DApplyWorldRotation`, and what reaches
   in an IK chain.
-- `C3DRemoveRotation(Bone, bYawAxis, bPitchAxis, bRollAxis)` and
-  `C3DApplyIKOnBasePose(IkChain, Val)` are Reluva's readings of their
-  names, as no script calls them. The first takes the bone's turns
-  (`C3DApplyRotation`'s about those axes, those parts of
-  `C3DApplyWorldRotation`'s) back off. With the second's `Val` not 0,
-  the chain's reach is done to the actor's own animation, before the
-  layers go over it, rather than after them.
+- `C3DApplyIKOnBasePose(IkChain, Val)` is a reading of its name, as no
+  script calls it: with `Val` not 0, the chain's reach is done to the
+  actor's own animation, before the layers go over it.
+- The engine's IK chains are kept with the mesh (`CCD` solving, each
+  bone's limits); Reluva's two-bone solve above stands in for them, and
+  layers are placed by a group's first bone rather than the mesh's own
+  per-bone group lists.
 - Points on triangles turn with their triangle's bone, and points from
   the origin are in the skeleton's units ([mesh.md](../formats/unreal/mesh.md),
   `reluva-tool ue-points`). With them, Kira holds the phaser rifle at

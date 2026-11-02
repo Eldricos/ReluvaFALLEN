@@ -169,7 +169,23 @@ public:
     // The next point on a pawn's way to an actor (or a place), its route in
     // its RouteCache: the goal itself if it can go straight there, none if
     // there's no way.
-    VmObject* findPath(VmObject* pawn, VmObject* goal, const std::array<float, 3>* point);
+    VmObject* findPath(VmObject* pawn, VmObject* goal, const std::array<float, 3>* point, bool singlePath = false,
+                       bool clear = true);
+    // FindPathTo/Toward as the natives: then the bShootSpecial, SpecialPause
+    // and SpecialGoal bookkeeping and a node's SpecialHandling.
+    VmObject* findPathNative(VmObject* pawn, VmObject* goal, const std::array<float, 3>* point, bool singlePath,
+                             bool clear);
+    VmObject* handleSpecial(VmObject* pawn, VmObject* result);
+    void clearPaths(VmObject* pawn);
+    bool pointReachable(VmObject* pawn, std::array<float, 3> p, bool knowVisible);
+    bool actorReachable(VmObject* pawn, VmObject* a);
+    bool actorReachableRaw(VmObject* pawn, VmObject* a, bool knowVisible);
+    const std::vector<std::pair<float, VmObject*>>& closestNodes(std::array<float, 3> at, float radius);
+    std::array<float, 3> eyeOf(VmObject* pawn);
+    float pf(VmObject* a, const char* name, float otherwise = 0);
+    bool pb(VmObject* a, const char* name);
+    std::array<float, 3> pv(VmObject* a, const char* name);
+    bool coinFlip() { return std::uniform_int_distribution<int>(0, 1)(barkRandom_) == 0; }
     // Nothing in the world between the two places.
     bool lineOfSight(VmObject* self, const std::array<float, 3>& from, const std::array<float, 3>& to);
     // The Fallen's dialogue (vm_dialog.cpp): lines from the game's
@@ -312,6 +328,7 @@ public:
     float rateNow(VmObject* actor, float rate, float minRate);
     void tweenOutLayer(VmObject* actor, NameId group, float seconds);
     bool layerAnimating(VmObject* actor, NameId group);
+    void stopLayerLooping(VmObject* actor, NameId group);
     void waitForLayer(VmObject* actor, NameId group);
     NameId newSkinChannel(VmObject* actor);
     void setSkin(VmObject* actor, NameId tag, NameId sequence, float frame, float weight, float tween);
@@ -666,8 +683,18 @@ private:
     };
     std::map<VmObject*, Attachment> attachments_;
     struct Bends {
-        std::map<std::pair<NameId, int>, float> turns; // by bone and axis: degrees
-        std::map<NameId, Rot> actorTurns;
+        // The scripts' turns this tick, in order (the engine's last until
+        // the pose is worked out again: each tick the scripts make them anew).
+        struct Op {
+            int kind = 0; // 0 own axis, 1 in the actor's axes, 2 removed
+            NameId bone = 0;
+            int axis = 0;
+            float degrees = 0;
+            Rot rotation{};
+            std::array<bool, 3> remove{}; // pitch, yaw, roll
+        };
+        std::vector<Op> ops;
+        int64_t opsTick = -2;
         // Each limb's IK (0 left arm, 1 right arm, 2 left leg, 3 right leg).
         struct Ik {
             bool place = false, turn = false;
@@ -687,6 +714,7 @@ private:
         };
         std::array<Effector, 4> effectors;
     };
+    Bends::Op& newBoneOp(VmObject* actor);
     std::map<VmObject*, Bends> bends_;
     void loadPaths();
     Hud hud_;
@@ -731,6 +759,30 @@ private:
     bool hasDialogLines(const std::string& type, const std::string& speaker);
     int ownLine(VmObject* pawn, const std::string& type);
     void playOwnLine(VmObject* pawn, int index);
+    // The path search's state per navigation point (visitedWeight,
+    // bEndPoint, previousPath, cost...), kept between searches as the
+    // engine keeps it (bClearPaths false reuses it).
+    struct NavState {
+        int visited = 10000000, bestPathWeight = 0, cost = 0, previous = -1;
+        bool endPoint = false;
+    };
+    std::vector<NavState> navState_;
+    std::map<VmObject*, size_t> navIndex_;
+    struct ClosestCache {
+        bool filled = false;
+        std::array<float, 3> center{}, last{};
+        float radius = 0;
+        std::vector<std::pair<float, VmObject*>> nodes;
+    } closest_;
+    MoveHit testMove(VmObject* a, const std::array<float, 3>& delta);
+    bool waterAt(const std::array<float, 3>& p);
+    int walkMove(VmObject* pawn, std::array<float, 3> delta, float threshold, float& floorZ);
+    bool walkReachable(VmObject* pawn, std::array<float, 3> dest, float threshold, VmObject* goal);
+    bool reachable(VmObject* pawn, const std::array<float, 3>& dest, float threshold, VmObject* goal);
+    bool specFits(VmObject* pawn, const ReachSpec& s);
+    const ReachSpec* specAt(VmObject* node, const char* list, int k);
+    bool moverAllows(VmObject* pawn, const ReachSpec& s);
+    bool canMoveTo(VmObject* pawn, VmObject* from, VmObject* to);
     std::map<VmObject*, float> noiseQuiet_; // pawns: no noise heard before this time
     std::mt19937 barkRandom_{13579};
     VmObject* conditionSubject_ = nullptr; // whose conditions (the actor the tests ask about)
@@ -754,8 +806,6 @@ private:
     VmObject* currentSpeaker_ = nullptr;
     uint32_t dialogRandom_ = 1;
     std::map<std::string, float> dialogSeconds_; // each voice's length
-    bool walkable(VmObject* pawn, const Vec& from, const Vec& to);
-    int reachAbilities(VmObject* pawn);
     std::vector<ReachSpec> reachSpecs_;
     std::vector<VmObject*> navigationPoints_;
     LayeredPoser::Adjust adjustOf(VmObject* actor, ActorMesh& mesh);

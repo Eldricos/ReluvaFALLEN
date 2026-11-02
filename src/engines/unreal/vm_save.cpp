@@ -395,18 +395,21 @@ Error ScriptLevel::saveGame(const std::string& slot) {
         name(a.childPoint);
     });
     keyed(bends_, [&](const Bends& b) {
-        out.i32(int32_t(b.turns.size()));
-        for (const auto& [key, degrees] : b.turns) {
-            name(key.first);
-            out.i32(key.second);
-            out.f32(degrees);
-        }
-        out.i32(int32_t(b.actorTurns.size()));
-        for (const auto& [bone, r] : b.actorTurns) {
-            name(bone);
-            for (int32_t k : r)
-                out.i32(k);
-        }
+        // This tick's turns, kept so a frame drawn before the scripts next
+        // run shows them.
+        const bool current = b.opsTick == int64_t(ticks_) || b.opsTick + 1 == int64_t(ticks_);
+        out.i32(current ? int32_t(b.ops.size()) : 0);
+        if (current)
+            for (const Bends::Op& op : b.ops) {
+                out.i32(op.kind);
+                name(op.bone);
+                out.i32(op.axis);
+                out.f32(op.degrees);
+                for (int32_t k : op.rotation)
+                    out.i32(k);
+                for (bool r : op.remove)
+                    out.u8(r);
+            }
         for (const Bends::Ik& ik : b.limbs) {
             out.u8(ik.place);
             out.u8(ik.turn);
@@ -729,17 +732,18 @@ Error ScriptLevel::restore(const std::filesystem::path& file) {
     keyed([&](VmObject* o) {
         Bends& b = bends_[o];
         for (int32_t k = in.count(4); k > 0; --k) {
-            const NameId bone = name();
-            const int axis = in.i32();
-            b.turns[{bone, axis}] = in.f32();
-        }
-        for (int32_t k = in.count(4); k > 0; --k) {
-            const NameId bone = name();
-            Rot r;
-            for (int32_t& v : r)
+            Bends::Op op;
+            op.kind = in.i32();
+            op.bone = name();
+            op.axis = in.i32();
+            op.degrees = in.f32();
+            for (int32_t& v : op.rotation)
                 v = in.i32();
-            b.actorTurns[bone] = r;
+            for (bool& r : op.remove)
+                r = in.u8() != 0;
+            b.ops.push_back(op);
         }
+        b.opsTick = int64_t(ticks_);
         for (Bends::Ik& ik : b.limbs) {
             ik.place = in.u8() != 0;
             ik.turn = in.u8() != 0;
