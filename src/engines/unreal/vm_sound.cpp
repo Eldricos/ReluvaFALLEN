@@ -11,6 +11,9 @@
 
 #include "engines/unreal/sound.h"
 
+#include <algorithm>
+#include <cstring>
+
 namespace reluva::unreal {
 
 namespace {
@@ -171,6 +174,169 @@ void ScriptLevel::soundNoise(VmObject* maker, float radius) {
     }
 }
 
+// Lip-sync, as the game's audio driver (Miles.dll) does it. A sound's WAV
+// may carry a `phnm` chunk: its text, then its words, each with where it
+// starts and ends and its phonemes (IPA letters with their start times),
+// in seconds. Read once a sound.
+const std::vector<ScriptLevel::LipWord>& ScriptLevel::lipWordsOf(const Package* package, int exportIndex) {
+    const auto key = std::make_pair(package, exportIndex);
+    auto it = lipWords_.find(key);
+    if (it != lipWords_.end())
+        return it->second;
+    std::vector<LipWord>& out = lipWords_[key];
+    EmbeddedFile file;
+    if (readEmbeddedFile(*package, exportIndex, file) || file.isPlaceholder() || file.data.size() < 10)
+        return out;
+    const std::vector<uint8_t>& d = file.data;
+    auto u32 = [&](size_t i) { return uint32_t(d[i]) | uint32_t(d[i + 1]) << 8 | uint32_t(d[i + 2]) << 16 | uint32_t(d[i + 3]) << 24; };
+    auto f32 = [&](size_t i) {
+        float v;
+        std::memcpy(&v, &d[i], 4);
+        return v;
+    };
+    if (d.size() < 12)
+        return out;
+    // The first phnm chunk, walking from the RIFF header's end.
+    const size_t riffEnd = std::min<size_t>(d.size(), size_t(u32(4)) + 8);
+    size_t at = 0;
+    for (size_t i = 12; i + 8 <= riffEnd; i += 8 + u32(i + 4))
+        if (std::memcmp(&d[i], "phnm", 4) == 0) {
+            at = i + 8;
+            break;
+        }
+    if (!at || at + 4 > d.size())
+        return out;
+    at += 4 + u32(at); // the text
+    if (at + 4 > d.size())
+        return out;
+    const uint32_t words = u32(at);
+    at += 4;
+    for (uint32_t w = 0; w < words && at + 52 <= d.size(); ++w) {
+        LipWord word;
+        word.start = f32(at + 40);
+        word.end = f32(at + 44);
+        const uint32_t phonemes = u32(at + 48);
+        at += 52;
+        for (uint32_t k = 0; k < phonemes && at + 14 <= d.size(); ++k, at += 14)
+            word.phonemes.push_back({uint16_t(d[at + 4] | d[at + 5] << 8), f32(at + 10)});
+        out.push_back(std::move(word));
+    }
+    return out;
+}
+
+// A sound played by an actor with lip data: kept as the driver keeps its
+// channel, begun at the last update's time (less the actor's
+// StartTimeOffset). In a slot, it takes the place of the sound there
+// (whose mouth closes), unless that one was played not to be overridden.
+void ScriptLevel::lipSyncPlay(VmObject* actor, int slot, bool noOverride, const Package* package, int exportIndex) {
+    if (slot != 0)
+        for (LipChannel& c : lipChannels_)
+            if (c.actor == actor && c.slot == slot && c.words) {
+                if (c.noOverride)
+                    return;
+                lipSyncStop(c);
+            }
+    lipChannels_.erase(std::remove_if(lipChannels_.begin(), lipChannels_.end(), [](const LipChannel& c) { return !c.words; }),
+                       lipChannels_.end());
+    const std::vector<LipWord>& words = lipWordsOf(package, exportIndex);
+    if (words.empty())
+        return;
+    LipChannel c;
+    c.actor = actor;
+    c.slot = slot;
+    c.noOverride = noOverride;
+    c.words = &words;
+    const Value* offset = prop(actor, "StartTimeOffset");
+    c.start = lipLast_ - (offset ? offset->asFloat() : 0);
+    c.seconds = soundSeconds(vm_.packages(), *package, exportIndex);
+    lipChannels_.push_back(c);
+}
+
+// The driver's StopSound: the mouth closed, C3DSpeechEvent(0, 0).
+void ScriptLevel::lipSyncStop(LipChannel& c) {
+    if (c.actor && !c.actor->deleted)
+        vm_.callEvent(c.actor, "C3DSpeechEvent", {Value::intValue(0), Value::floatValue(0)});
+    c.words = nullptr;
+}
+
+namespace {
+
+// The driver's mouth shape for an IPA letter (U+0020 its silence); false:
+// none (ɻ, ɦ and ɡ, which the voices use, among them).
+bool mouthShape(uint32_t c, int& shape, float& weight) {
+    weight = 1;
+    switch (c) {
+    case 0x20: shape = 0; return true;
+    case 0x69: case 0x26A: shape = 1, weight = 0.2f; return true;
+    case 0xE6: case 0x251: case 0x254: case 0x259: case 0x28C: shape = 1, weight = 0.8f; return true;
+    case 0x65: case 0x25A: case 0x25B: shape = 1; return true;
+    case 0x75: case 0x77: case 0x28A: shape = 2; return true;
+    case 0x62: case 0x6D: case 0x70: shape = 3; return true;
+    case 0x66: case 0x76: shape = 4; return true;
+    case 0x73: case 0x7A: case 0xF0: case 0x283: case 0x292: case 0x2A4: case 0x2A7: case 0x3B8: shape = 5; return true;
+    case 0x64: case 0x67: case 0x68: case 0x6A: case 0x6B: case 0x6C: case 0x6E: case 0x74: case 0x14B: case 0x26B:
+    case 0x279: case 0x27E: shape = 6; return true;
+    case 0x6F: shape = 7; return true;
+    default: return false;
+    }
+}
+
+} // namespace
+
+// Each update, for each sound with lip data: a sound finished closes the
+// mouth (and does nothing else this time). Otherwise the window since the
+// last update, [then, now) in the sound's level time: walking its words in
+// order, a word ending in it is silence (unless the next word's first
+// phoneme starts exactly there); else a word the window's start or end is
+// within gives its first phoneme starting in the window. The first found
+// is the one: at most one C3DSpeechEvent a sound an update, to the actor
+// that played it; a letter with no shape uses the update up all the same.
+void ScriptLevel::lipSyncUpdate() {
+    const Value* t = levelInfo_ ? prop(levelInfo_, "TimeSeconds") : nullptr;
+    const double now = t ? double(t->asFloat()) : time_;
+    if (!player_ || player_->deleted)
+        return;
+    for (LipChannel& c : lipChannels_) {
+        if (!c.words)
+            continue;
+        if (!c.actor || c.actor->deleted) {
+            c.words = nullptr;
+            continue;
+        }
+        const float from = float(lipLast_ - c.start), to = float(now - c.start);
+        if (from >= c.seconds) {
+            lipSyncStop(c);
+            continue;
+        }
+        int code = -1;
+        const std::vector<LipWord>& words = *c.words;
+        for (size_t w = 0; w < words.size() && code < 0; ++w) {
+            const LipWord& word = words[w];
+            if (from <= word.end && word.end < to) {
+                code = 0x20;
+                if (w + 1 < words.size() && !words[w + 1].phonemes.empty() &&
+                    words[w + 1].phonemes.front().second == word.end)
+                    code = -1;
+            }
+            if (code >= 0)
+                break;
+            if ((word.start <= from && from < word.end) || (word.start <= to && to < word.end))
+                for (const auto& [ipa, start] : word.phonemes)
+                    if (from <= start && start < to) {
+                        code = ipa;
+                        break;
+                    }
+        }
+        int shape = 0;
+        float weight = 0;
+        if (code >= 0 && mouthShape(uint32_t(code), shape, weight))
+            vm_.callEvent(c.actor, "C3DSpeechEvent", {Value::intValue(shape), Value::floatValue(weight)});
+    }
+    lipChannels_.erase(std::remove_if(lipChannels_.begin(), lipChannels_.end(), [](const LipChannel& c) { return !c.words; }),
+                       lipChannels_.end());
+    lipLast_ = now;
+}
+
 void registerSoundNatives(Vm& vm) {
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     // PlaySound(Sound, optional ESoundSlot Slot, optional float Volume,
@@ -228,6 +394,7 @@ void registerSoundNatives(Vm& vm) {
             ++m.serial;
             return;
         }
+        level->lipSyncPlay(c.self, r.slot, r.noOverride, sound->package, sound->exportIndex);
         auto& requests = level->soundRequests();
         if (requests.size() >= kMostRequests)
             requests.erase(requests.begin());

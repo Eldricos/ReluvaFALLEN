@@ -417,6 +417,8 @@ public:
         float lowPass = 0, highPass = 0, obstruction = 0;
     };
     std::vector<SoundRequest>& soundRequests() { return soundRequests_; }
+    // A sound played by an actor: its lip-sync (vm_sound.cpp), if it has any.
+    void lipSyncPlay(VmObject* actor, int slot, bool noOverride, const Package* package, int exportIndex);
     // Sounds stopped (an actor's slot: a line cut off), for the page.
     std::vector<std::pair<VmObject*, int>>& soundStops() { return soundStops_; }
     // The music is the streamed sound the player's CurrentMusic names. One
@@ -787,13 +789,27 @@ private:
     std::vector<int> dialogOrder_; // the lines in key order
     std::vector<std::string> dialogFaces_;
     std::map<std::string, int> dialogGroups_; // a type's priority (1 the most)
-    struct Phoneme {
-        float at = 0;
-        int shape = 0;
-        float weight = 0;
+    // Lip-sync, as the audio driver does it (vm_sound.cpp): a sound's
+    // words and their phonemes (its WAV's phnm chunk), and the sounds
+    // playing that have them, each moving its actor's mouth.
+    struct LipWord {
+        float start = 0, end = 0;
+        std::vector<std::pair<uint16_t, float>> phonemes; // IPA letter, start
     };
-    std::map<int, std::vector<Phoneme>> dialogPhonemes_; // by line
-    const std::vector<Phoneme>& phonemesOf(int line);
+    std::map<std::pair<const Package*, int>, std::vector<LipWord>> lipWords_;
+    const std::vector<LipWord>& lipWordsOf(const Package* package, int exportIndex);
+    struct LipChannel {
+        VmObject* actor = nullptr;
+        int slot = 0;
+        bool noOverride = false;
+        const std::vector<LipWord>* words = nullptr;
+        double start = 0;   // when it began, in level time
+        float seconds = 0;  // its length
+    };
+    std::vector<LipChannel> lipChannels_;
+    double lipLast_ = 0; // the level's time at the last update
+    void lipSyncStop(LipChannel& c);
+    void lipSyncUpdate();
     std::string playerSpeaker();
     bool missionFits(int index);
     int conditionTerm(const std::vector<std::string>& term, VmObject* actor);

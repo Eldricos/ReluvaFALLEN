@@ -638,81 +638,6 @@ float ScriptLevel::lineSeconds(const DialogLine& l) {
     return seconds;
 }
 
-// The voice's lip-sync, from its WAV's phnm chunk (the audio driver reads
-// it): the text, then each word (its name, where it is in samples and
-// seconds, its phonemes: a label, the IPA letter, a time). A phoneme
-// gives the mouth a shape and weight; between words, closed (silence).
-const std::vector<ScriptLevel::Phoneme>& ScriptLevel::phonemesOf(int line) {
-    auto it = dialogPhonemes_.find(line);
-    if (it != dialogPhonemes_.end())
-        return it->second;
-    std::vector<Phoneme>& out = dialogPhonemes_[line];
-    const DialogLine& l = dialogLines_[size_t(line)];
-    const Package* p = vm_.packages().get(l.table);
-    const int e = p ? p->findExport(l.record, "Sound") : -1;
-    std::vector<uint8_t> d;
-    if (e < 0 || p->readExport(e, d))
-        return out;
-    const uint8_t riff[4] = {'R', 'I', 'F', 'F'};
-    auto start = std::search(d.begin(), d.end(), riff, riff + 4);
-    size_t chunk = 0, end = 0;
-    for (size_t i = size_t(start - d.begin()) + 12; start != d.end() && i + 8 <= d.size();) {
-        const uint32_t size = le32(&d[i + 4]);
-        if (std::memcmp(&d[i], "phnm", 4) == 0) {
-            chunk = i + 8;
-            end = std::min(d.size(), chunk + size);
-            break;
-        }
-        i += 8 + size + (size & 1);
-    }
-    if (!chunk)
-        return out;
-    auto f32 = [&](size_t at) {
-        float v;
-        std::memcpy(&v, &d[at], 4);
-        return v;
-    };
-    auto shapeOf = [](uint32_t c, int& shape, float& weight) {
-        weight = 1;
-        switch (c) {
-        case 0x69: case 0x26A: shape = 1, weight = 0.2f; return true;
-        case 0xE6: case 0x251: case 0x254: case 0x259: case 0x28C: shape = 1, weight = 0.8f; return true;
-        case 0x65: case 0x25A: case 0x25B: shape = 1; return true;
-        case 0x75: case 0x77: case 0x28A: shape = 2; return true;
-        case 0x62: case 0x6D: case 0x70: shape = 3; return true;
-        case 0x66: case 0x76: shape = 4; return true;
-        case 0x73: case 0x7A: case 0xF0: case 0x283: case 0x292: case 0x2A4: case 0x2A7: case 0x3B8: shape = 5; return true;
-        case 0x64: case 0x67: case 0x68: case 0x6A: case 0x6B: case 0x6C: case 0x6E: case 0x74: case 0x14B: case 0x26B:
-        case 0x279: case 0x27E: shape = 6; return true;
-        case 0x6F: shape = 7; return true;
-        default: return false;
-        }
-    };
-    size_t at = chunk;
-    if (at + 4 > end)
-        return out;
-    at += 4 + le32(&d[at]);
-    if (at + 4 > end)
-        return out;
-    const uint32_t words = le32(&d[at]);
-    at += 4;
-    for (uint32_t w = 0; w < words && at + 52 <= end; ++w) {
-        const float wordEnd = f32(at + 44);
-        const uint32_t phonemes = le32(&d[at + 48]);
-        at += 52;
-        for (uint32_t k = 0; k < phonemes && at + 14 <= end; ++k, at += 14) {
-            const uint32_t ipa = uint32_t(d[at + 4]) | uint32_t(d[at + 5]) << 8;
-            Phoneme ph;
-            ph.at = f32(at + 10);
-            if (shapeOf(ipa, ph.shape, ph.weight))
-                out.push_back(ph);
-        }
-        out.push_back({wordEnd, 0, 1}); // closed between words
-    }
-    std::stable_sort(out.begin(), out.end(), [](const Phoneme& a, const Phoneme& b) { return a.at < b.at; });
-    return out;
-}
-
 // The level's Talker, Listener and CurrentLine fields: a line takes them
 // if none has them, or it's of a more important type, or as important and
 // said nearer the camera.
@@ -887,7 +812,10 @@ void ScriptLevel::endLine(DialogThread& t, bool cut) {
         if (soundStops_.size() >= 256)
             soundStops_.erase(soundStops_.begin());
         soundStops_.push_back({speaker, 5});
-        vm_.callEvent(speaker, "C3DSpeechEvent", {Value::intValue(0), Value::floatValue(0)});
+        // Its voice stopped (the driver's StopSound: the mouth closed).
+        for (LipChannel& c : lipChannels_)
+            if (c.actor == speaker && c.slot == 5)
+                lipSyncStop(c);
     }
     t.line = -1;
     if (cut)
@@ -918,9 +846,9 @@ void ScriptLevel::endLine(DialogThread& t, bool cut) {
     pendingLines_.push_back({t.id, next, t.self, t.back, t.backPattern});
 }
 
-// Each tick: the lines' clocks run (a HUD line's while paused too); the
-// speaker's mouth follows its voice's phonemes (C3DSpeechEvent); lines
+// Each tick: the lines' clocks run (a HUD line's while paused too); lines
 // done end and lead on; lines waiting start once their speakers are free.
+// (The mouths follow the voices: vm_sound.cpp's lip-sync.)
 void ScriptLevel::tickDialog(float seconds) {
     const bool stopped = paused();
     for (size_t k = 0; k < dialogThreads_.size(); ++k) {
@@ -928,22 +856,7 @@ void ScriptLevel::tickDialog(float seconds) {
         if (t.queued || t.line < 0 || (stopped && !t.hudClock))
             continue;
         t.timeLeft -= seconds;
-        const float before = t.elapsed;
         t.elapsed += seconds;
-        VmObject* speaker = t.speaker && !t.speaker->deleted ? t.speaker : nullptr;
-        if (speaker && before < t.seconds) {
-            const std::vector<Phoneme>& ph = phonemesOf(t.line);
-            const Phoneme* now = nullptr;
-            while (t.phoneme < ph.size() && ph[t.phoneme].at <= t.elapsed) {
-                if (ph[t.phoneme].at > before || t.phoneme == 0)
-                    now = &ph[t.phoneme];
-                ++t.phoneme;
-            }
-            if (now)
-                vm_.callEvent(speaker, "C3DSpeechEvent", {Value::intValue(now->shape), Value::floatValue(now->weight)});
-            if (t.elapsed >= t.seconds)
-                vm_.callEvent(speaker, "C3DSpeechEvent", {Value::intValue(0), Value::floatValue(0)});
-        }
         if (t.timeLeft <= 0)
             endLine(dialogThreads_[k], false);
     }

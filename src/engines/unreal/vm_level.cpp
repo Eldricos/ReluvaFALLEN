@@ -680,6 +680,8 @@ void ScriptLevel::tick(float seconds) {
         vm_.callEvent(con, "Tick", {Value::floatValue(seconds)});
     // The dialogue, paused or not.
     tickDialog(seconds);
+    // The audio driver's update: the mouths that follow the sounds.
+    lipSyncUpdate();
     tickFlis(seconds);
     ++ticks_;
     actors_.erase(std::remove_if(actors_.begin(), actors_.end(), [](VmObject* a) { return a->deleted; }),

@@ -685,7 +685,8 @@ the code is Reluva's own.
   - **Its voice** through the speaker's `PlaySpeech` (at 0.65; 1.4 for
     deaths, pain, first sight and battle cries; 0.3 for EXG), which
     plays it on the talk slot within 1100 units, high-passed on the
-    communicator's picture.
+    communicator's picture. The voice moves the speaker's mouth (Sound:
+    lip-sync).
   - Said by a pawn: **the listener** (none for a hail; else of the pawns
     within 800 of the speaker, one with the line's listener code, else
     the nearest, the player counted at a fifth of its distance; in a cut
@@ -701,13 +702,6 @@ the code is Reluva's own.
   - **How long:** the frame's time, its voice's length (3.5 seconds
     without one), its pause and a quarter second; a HUD line's clock runs
     while paused, the others' don't.
-  - **Lip-sync:** each voice's WAV has a `phnm` chunk (the game's own
-    lip data: its words and their phonemes as IPA letters, with times),
-    which the audio driver reads. As each phoneme starts, the speaker
-    gets `C3DSpeechEvent(shape, weight)`: closed (0, 1) between words;
-    1 for i and ɪ (0.2), æ ɑ ɔ ə ʌ (0.8), e ɚ ɛ (1); 2 u w ʊ; 3 b m p;
-    4 f v; 5 s z ð ʃ ʒ ʤ ʧ θ; 6 d g h j k l n t ŋ ɫ ɹ ɾ; 7 o; others
-    nothing. At the end, (0, 0).
 - **A line ending:** the level's fields cleared if they were its, its
   voice stopped. Then its EVENT (words apart by spaces: a tag to
   trigger, `DoEvent`, or with a `-` before it one of the HUD's
@@ -1048,6 +1042,33 @@ per-frame `Update`), as read from them; the code is Reluva's own.
   table's name) plays through the speaker's `PlaySpeech` (above,
   Dialogue): on its talk slot, as far as 1100 units, at the speech
   volume (its package's name has `DIALOG`).
+- **Lip-sync** is the audio driver's (Miles.dll), for any sound an
+  actor plays whose WAV has a `phnm` chunk (every voice of the dialogue
+  tables: [dialogue.md](../formats/unreal/dialogue.md)), not only
+  dialogue:
+  - The sound's clock is the level's time (`TimeSeconds`: stopped while
+    paused, slowed by `TimeDilation`) from the driver's last update, less
+    the actor's `StartTimeOffset`. Each update looks at the window from
+    the last update's time to now, the start in and the end out.
+  - Walking the sound's words in order, the first that gives something
+    is the one, so at most one shape a sound an update and the earliest
+    (the rest of a fast frame's phonemes are skipped). A word ending in
+    the window is silence, (0, 1), unless the next word's first phoneme
+    starts exactly where it ends (words run together). Else a word the
+    window's start or end is in gives its first phoneme starting in the
+    window.
+  - The phoneme's IPA letter gives `C3DSpeechEvent(shape, weight)` to
+    the actor that played it: 1 for i and ɪ (0.2), æ ɑ ɔ ə ʌ (0.8), e ɚ ɛ
+    (1); 2 u w ʊ; 3 b m p; 4 f v; 5 s z ð ʃ ʒ ʤ ʧ θ; 6 d g h j k l n t
+    ŋ ɫ ɹ ɾ; 7 o. Others give nothing, though they use the update up: the
+    voices' r (ɻ, 4,252 of their 73,513 phonemes), h (ɦ, 779) and g (ɡ,
+    553) never move the mouth, and nothing in them is e or o.
+  - When the sound stops (it ends, a new one takes its slot, a line is
+    cut off), (0, 0); the update it ends in gives nothing else.
+  - The script side (`Pawn.C3DSpeechEvent`) tweens the face's `Phonemes`
+    channel to the shape's frame (shape × 0.033 seconds) over a tenth of
+    a second, and now and then nods or tilts the head while the weight
+    isn't 0.
 - **`GetSoundDuration(Sound)`** is its length; `CTVE_Dialog` times its
   lines by it.
 - **Footsteps** go by the floor's material: `GetSurfaceTexture(Start,
