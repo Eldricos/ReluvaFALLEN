@@ -599,8 +599,16 @@ VmObject* ScriptLevel::spawn(VmClass* cls, VmObject* owner, NameId tag, const Va
         v->o = owner;
     if (Value* v = a->find(vm_, "Tag"))
         v->i = tag ? tag : cls->nameId;
-    if (location) // where it fits, if it collides with the world
-        place(a, Vm::vectorOf(*location));
+    // Where it fits, if it collides with the world (or bCollideWhenPlacing);
+    // as SpawnActor does, if it fits nowhere near it isn't spawned.
+    if (location && !place(a, Vm::vectorOf(*location), true)) {
+        a->deleted = true;
+        actors_.erase(std::remove(actors_.begin(), actors_.end(), a), actors_.end());
+        ++movement.spawnsRefused;
+        if (vm_.logger)
+            vm_.logger("Log: SpawnActor failed because of collision at the spawn location [" + cls->name + "]");
+        return nullptr;
+    }
     if (rotation)
         if (Value* v = a->find(vm_, "Rotation"))
             vm_.assign(*v, *rotation);

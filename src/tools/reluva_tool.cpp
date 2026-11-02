@@ -4604,9 +4604,9 @@ int cmdUeRun(int argc, char** argv) {
             if (const Value* phys = player->find(vm, "Physics"))
                 where = ", the player's physics " + std::to_string(phys->asInt());
         std::printf("%-20s movement: %d moves, blocked %d by the world and %d by actors, %d steps, %d landings, "
-                    "%d touches, %d zone changes, %d placings refused, %d moves to a goal given up%s\n",
+                    "%d touches, %d zone changes, %d placings refused (%d spawns), %d moves to a goal given up%s\n",
                     "", m.moves, m.blockedByWorld, m.blockedByActors, m.steps, m.landings, m.touches, m.zoneChanges,
-                    m.refused, m.gaveUp, where.c_str());
+                    m.refused, m.spawnsRefused, m.gaveUp, where.c_str());
         const auto& pf = level.paths;
         if (pf.straight + pf.found + pf.failed > 0)
             std::printf("%-20s paths: %zu navigation points, %zu reaches; %d ways found straight, %d along paths, "
@@ -4639,6 +4639,7 @@ int cmdUeRun(int argc, char** argv) {
         moved.touches += m.touches;
         moved.zoneChanges += m.zoneChanges;
         moved.refused += m.refused;
+        moved.spawnsRefused += m.spawnsRefused;
         moved.gaveUp += m.gaveUp;
         calls += vm.stats.calls;
         statements += vm.stats.statements;
@@ -4678,9 +4679,9 @@ int cmdUeRun(int argc, char** argv) {
     std::printf("\n%d maps ran, %d didn't load; %llu calls, %llu statements, None accessed %d times\n", ran, failed,
                 (unsigned long long)calls, (unsigned long long)statements, accessedNone);
     std::printf("movement: %d moves, blocked %d by the world and %d by actors, %d steps, %d landings, %d touches, "
-                "%d zone changes, %d placings refused, %d moves to a goal given up\n",
+                "%d zone changes, %d placings refused (%d spawns), %d moves to a goal given up\n",
                 moved.moves, moved.blockedByWorld, moved.blockedByActors, moved.steps, moved.landings, moved.touches,
-                moved.zoneChanges, moved.refused, moved.gaveUp);
+                moved.zoneChanges, moved.refused, moved.spawnsRefused, moved.gaveUp);
     std::printf("paths: %d ways found straight, %d along paths, %d not\n", paths.straight, paths.found, paths.failed);
     std::printf("ghosts: %d placed as ghosts set aside at the start, about %d brought back since\n", placedGhosts,
                 std::max(0, ghostsBack));

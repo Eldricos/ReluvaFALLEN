@@ -248,43 +248,101 @@ bool ScriptLevel::clear(const Vec& point, const Vec& extent, VmObject* self) {
     return true;
 }
 
-bool ScriptLevel::place(VmObject* a, const Vec& point) {
-    Value* loc = prop(a, "Location");
-    if (!loc)
-        return false;
-    const Vec e = extentOf(a);
-    if (!boolOf(prop(a, "bCollideWorld")) || clear(point, e, a)) {
-        vm_.setVector(*loc, point[0], point[1], point[2]);
-        updateRegion(a);
-        return true;
-    }
-    // Raised first, as far as its own height (most such starts are into
-    // the floor: M06_SiskoL1B's is 16 units over it, the player's half
-    // height 50; left where it was, the player began at the world's
-    // origin, in water); then nudged sideways, and both.
-    for (float d = 2; d <= 2 * e[2]; d += 2) {
-        const Vec at = add(point, Vec{0, 0, d});
-        if (clear(at, e, a)) {
-            vm_.setVector(*loc, at[0], at[1], at[2]);
-            updateRegion(a);
+bool ScriptLevel::findSpot(const Vec& e, Vec& at) {
+    // SinglePointCheck without actors: the level's geometry alone.
+    auto fits = [&](const Vec& p, const Vec& ext) {
+        if (!collision_)
             return true;
-        }
+        return ext[0] > 0 || ext[2] > 0 ? !collision_->solid(Vec3f{p[0], p[1], p[2]}, Vec3f{ext[0], ext[1], ext[2]})
+                                        : !collision_->solid(Vec3f{p[0], p[1], p[2]});
+    };
+    // The spot itself in solid: nowhere.
+    if (!fits(at, {0, 0, 0}))
+        return false;
+    if ((e[0] == 0 && e[1] == 0 && e[2] == 0) || fits(at, e))
+        return true;
+    // AdjustSpot: a line from the spot `offset` out; if the world (or a
+    // mover) is in the way, the spot is pushed back off it along its
+    // face's normal by (1.05 - how far along) times `push`, and tried.
+    Vec spot = at;
+    auto adjust = [&](const Vec& offset, float push) {
+        Vec hitAt{}, normal{};
+        const Vec end = add(spot, offset);
+        if (!trace(nullptr, spot, end, {0, 0, 0}, false, hitAt, normal))
+            return false;
+        const Vec d = sub(end, spot);
+        const float dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+        const Vec run = sub(hitAt, spot);
+        const float t = dd > 0 ? (run[0] * d[0] + run[1] * d[1] + run[2] * d[2]) / dd : 0;
+        spot = add(spot, mul(normal, (1.05f - t) * push));
+        return fits(spot, e);
+    };
+    auto done = [&] {
+        at = spot;
+        return true;
+    };
+    // Down and up, back and forth, either side, a little past its extent;
+    // then towards each corner.
+    for (int i = -1; i <= 1; i += 2) {
+        const float s = float(i);
+        if (adjust({0, 0, s * (e[2] + 2)}, e[2]) || adjust({s * (e[0] + 2), 0, 0}, e[0]) ||
+            adjust({0, s * (e[1] + 2), 0}, e[1]))
+            return done();
+    }
+    const float corner = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) + 2;
+    for (int i = -1; i <= 1; i += 2)
+        for (int j = -1; j <= 1; j += 2)
+            for (int k = -1; k <= 1; k += 2)
+                if (adjust({float(i) * e[0], float(j) * e[1], float(k) * e[2]}, corner))
+                    return done();
+    // Where all that pushed it, if that's not far and it fits there.
+    const Vec moved = sub(spot, at);
+    if ((moved[0] * moved[0] + moved[1] * moved[1] + moved[2] * moved[2]) <
+            1.5f * (e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) &&
+        fits(spot, e))
+        return done();
+    // Else up from the spot, 20 units at a time, three times.
+    spot = at;
+    for (int k = 0; k < 3; ++k) {
+        spot[2] += 20;
+        if (fits(spot, e))
+            return done();
+    }
+    // Reluva's own allowance: its box test is stricter than the engine's
+    // where sloped faces meet (M07_SiskoL1A's player start, by a ramp,
+    // found nowhere above), so a wider search before giving up: raised as
+    // far as its height, then nudged sideways, and both.
+    for (float d = 2; d <= 2 * e[2]; d += 2) {
+        spot = add(at, Vec{0, 0, d});
+        if (fits(spot, e))
+            return done();
     }
     for (int step = 1; step <= 16; ++step) {
         const float d = float(step) * 2;
-        const Vec tries[] = {{0, 0, d}, {d, 0, 0}, {-d, 0, 0}, {0, d, 0}, {0, -d, 0}, {d, d, d}, {-d, -d, d},
-                             {d, -d, d}, {-d, d, d}, {0, 0, -d}};
+        const Vec tries[] = {{d, 0, 0}, {-d, 0, 0}, {0, d, 0}, {0, -d, 0}, {d, d, d}, {-d, -d, d}, {d, -d, d}, {-d, d, d}, {0, 0, -d}};
         for (const Vec& t : tries) {
-            const Vec at = add(point, t);
-            if (clear(at, e, a)) {
-                vm_.setVector(*loc, at[0], at[1], at[2]);
-                updateRegion(a);
-                return true;
-            }
+            spot = add(at, t);
+            if (fits(spot, e))
+                return done();
         }
     }
-    ++movement.refused;
     return false;
+}
+
+bool ScriptLevel::place(VmObject* a, const Vec& point, bool spawning) {
+    Value* loc = prop(a, "Location");
+    if (!loc)
+        return false;
+    Vec at = point;
+    if (boolOf(prop(a, "bCollideWorld")) || (spawning && boolOf(prop(a, "bCollideWhenPlacing")))) {
+        if (!findSpot(extentOf(a), at)) {
+            ++movement.refused;
+            return false;
+        }
+    }
+    vm_.setVector(*loc, at[0], at[1], at[2]);
+    updateRegion(a);
+    return true;
 }
 
 bool ScriptLevel::resize(VmObject* a, float r, float h, bool alignToFloor, bool adjustToFit, bool alignToTop) {

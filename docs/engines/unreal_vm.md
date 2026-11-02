@@ -375,12 +375,31 @@ movement, built from what the scripts set and expect.
   across, down onto a floor). Otherwise it gets `HitWall` and the rest of
   the move slides along the wall, twice at most. Walkers don't climb
   walls by sliding.
-- **Placing** (`SetLocation`, spawning): if the spot is solid (the
-  world, or a mover that blocks), the actor is nudged up or sideways to
-  the nearest open one, else refused. Starts are placed for the default
-  pawn height (40), and The Fallen's characters are taller (Worf is 52).
-  So a player starting on a lift begins a little into its floor and is
-  lifted onto it.
+- **Placing** (`SetLocation`, and spawning an actor that has
+  `bCollideWorld` or `bCollideWhenPlacing`) finds a spot as Engine.dll's
+  `ULevel::FindSpot` and `AdjustSpot` do. A spot whose point is in the
+  world's solid is refused. If the actor's box fits, it stays. Otherwise
+  six tries in turn (down, then along X and Y, then up and the other
+  ways), and then towards the eight corners. Each try draws a line from
+  the spot a little past the box's edge that way (its extent + 2; to the
+  corner itself for the corners). If the world or a mover is in the way,
+  the spot is pushed back off it along the face's normal by (1.05 −
+  how far along it was) × that extent (the corner's distance + 2), and
+  kept if the box fits there. The pushes add up, so a later try starts
+  where the last one left it. Then, if all that moved it less than
+  √1.5 × the extent's length and it fits, it stays there. Else it is
+  raised from the spot 20, 40 and 60 units.
+  Reluva's box test is stricter than the engine's where sloped faces
+  meet (M07_SiskoL1A's player start, by a ramp, fits nowhere above), so
+  before giving up Reluva also tries it raised by up to twice its height,
+  and nudged up to 32 units sideways and diagonally. As SpawnActor
+  does, an actor that fits nowhere isn't spawned (`Spawn` returns None,
+  and the log says so). Over all maps' first 3 seconds, that's 3 times:
+  a Cardassian hypospray 60 units wide where nothing that wide fits.
+  Before, it was left at the world's origin. Starts are placed for the
+  default pawn height (40), and The Fallen's characters are taller (Worf
+  is 52), so a player starting on a lift begins a little into its floor
+  and is lifted onto it.
 
 Physics each tick, after the actor's scripts:
 

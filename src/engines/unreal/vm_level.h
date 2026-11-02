@@ -128,9 +128,14 @@ public:
     // (PickWallAdjust): a step aside, left or right, from which it can go
     // on; its Destination moved there. False if there's none.
     bool pickWallAdjust(VmObject* pawn);
-    // Puts an actor somewhere it fits, near `point` if it doesn't there;
-    // false if there's nowhere near.
-    bool place(VmObject* actor, const std::array<float, 3>& point);
+    // Puts an actor somewhere it fits, near `point` if it doesn't there
+    // (as the engine's FindSpot finds it, if it collides with the world;
+    // or with bCollideWhenPlacing too when `spawning`); false, and left
+    // where it was, if there's nowhere near.
+    bool place(VmObject* actor, const std::array<float, 3>& point, bool spawning = false);
+    // FindSpot: `at` moved to where a box of `extent` fits near it, as
+    // Engine.dll's ULevel::FindSpot and AdjustSpot do; false if nowhere.
+    bool findSpot(const std::array<float, 3>& extent, std::array<float, 3>& at);
     // A pawn moving or turning towards something until there (latent
     // MoveTo, MoveToward, TurnTo, TurnToward, WaitForLanding,
     // FinishRotation): what it's after.
@@ -354,7 +359,8 @@ public:
     struct MovementStats {
         int moves = 0, blockedByWorld = 0, blockedByActors = 0, steps = 0, landings = 0, touches = 0,
             zoneChanges = 0;
-        int refused = 0; // placed (SetLocation, spawned) where there's no room, nor near
+        int refused = 0;       // placed (SetLocation, spawned) where there's no room, nor near
+        int spawnsRefused = 0; // of those, spawns, so not made (as SpawnActor fails)
         int gaveUp = 0;  // latent moves (MoveTo...) that timed out short of their goal
     } movement;
 
