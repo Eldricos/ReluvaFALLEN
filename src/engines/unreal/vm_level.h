@@ -179,6 +179,9 @@ public:
     const std::vector<DialogLine>& dialogLines();
     int findDialogLine(const std::string& type, NameId filterTag, NameId listener, NameId speaker,
                        const std::string& lineId, int& index);
+    // CTVE_DialogInput.DialogTick: the AI's own lines, each tick (`input`
+    // the dialogue input, whose PawnSurrenderOrPray it asks).
+    void dialogTick(VmObject* input, float seconds);
     int startDialog(VmObject* self, const std::string& type, NameId filterTag, NameId listener, NameId speaker,
                     const std::string& lineId); // the thread's number, 0 if no line would do
     bool dialogPlaying(int thread) const;
@@ -699,21 +702,15 @@ private:
     std::string playerSpeaker();
     bool ofThisMission(const DialogLine& l);
     bool forPlayer(const DialogLine& l) const;
-    // The AI's own lines (FSE on first seeing an enemy, LSE losing it, KIL
-    // killing it, SUR surrendering, AMB and REP now and then): said by the
-    // pawn, its conditions about it.
-    void tickBarks(float seconds);
-    bool startBark(VmObject* pawn, const std::string& type);
-    struct Bark {
-        VmObject* enemy = nullptr;
-        NameId state = 0;
-        float quiet = 0;    // seconds before it may say another
-        float ambient = 0;  // before its next ambient line
-        bool ambientSet = false, killed = false;
-    };
-    std::map<VmObject*, Bark> barks_;
+    // The AI's own lines (CTVE_DialogInput.DialogTick, as the engine's):
+    // a type picked from each pawn's state, its line said by it, its
+    // conditions about it.
+    bool talksToPlayer(VmObject* pawn, float dist, bool noAction);
+    void sayOwnLine(VmObject* pawn, const std::string& type, int32_t bit, float dist);
+    bool hasDialogLines(const std::string& type, const std::string& speaker);
+    int ownLine(VmObject* pawn, const std::string& type);
+    void playOwnLine(VmObject* pawn, int index);
     std::map<VmObject*, float> noiseQuiet_; // pawns: no noise heard before this time
-    float barkTimer_ = 0;
     std::mt19937 barkRandom_{13579};
     VmObject* conditionSubject_ = nullptr; // whose conditions (the actor the tests ask about)
     void loadDialog();

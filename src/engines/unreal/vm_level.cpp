@@ -433,11 +433,6 @@ void ScriptLevel::makeNoise(VmObject* maker, float loudness) {
         quiet = time_ + 0.2f;
         ++noise.heard;
         vm_.callEvent(p, "HearNoise", {Value::floatValue(heard), Value::objectValue(maker)});
-        // A guard with no enemy yet wonders aloud ("What was that?").
-        const Value* enemy = p->deleted ? nullptr : prop(p, "Enemy");
-        if (enemy && !enemy->asObject() && dialogThreads_.empty() && (maker == player_ || owner == player_ ||
-                                                                       instigator == player_))
-            startBark(p, "FHE");
     }
 }
 
@@ -574,7 +569,6 @@ void ScriptLevel::tick(float seconds) {
         vm_.callEvent(con, "Tick", {Value::floatValue(seconds)});
     if (!stopped) {
         tickDialog(seconds);
-        tickBarks(seconds);
     }
     tickFlis(seconds);
     ++ticks_;
@@ -639,7 +633,6 @@ void ScriptLevel::destroy(VmObject* a) {
     ledgePush_.erase(a);
     clambers_.erase(a);
     noiseQuiet_.erase(a);
-    barks_.erase(a);
 }
 
 void ScriptLevel::makeGhost(VmObject* a, bool ghost) {

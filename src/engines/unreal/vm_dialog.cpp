@@ -757,96 +757,260 @@ bool ScriptLevel::dialogueCamera(std::array<float, 3>& at, std::array<int32_t, 3
     return true;
 }
 
-// The AI's own lines, which no script asks for: the engine's. A pawn with
-// a speaker code (Speaker_Tag), alive, within earshot of the player, says
-// one when its enemy appears (FSE: "Over there!"), when it loses it
-// (LSE) or when it's dead (KIL), when it gives up (SUR: its scripts'
-// Cowering or Surrender), and now and then while it has no enemy (AMB,
-// else REP: chatter, groans). Its own lines only (its code as the
-// speaker), their conditions about it ("FriendClose( 500 )"). One at a
-// time, not over other dialogue, a few seconds apart for each pawn.
-// When the game said them is Reluva's reading: the tables give only what.
-void ScriptLevel::tickBarks(float seconds) {
-    barkTimer_ -= seconds;
-    for (auto& [pawn, b] : barks_)
-        b.quiet -= seconds, b.ambient -= seconds;
-    if (barkTimer_ > 0 || !player_)
+// The AI's own lines, which no script asks for: CTVE_DialogInput's native
+// DialogTick, each tick the HUD lets dialogue events happen (no letterbox),
+// as Engine.dll does it (read for what it does; see unreal_vm.md). Each
+// pawn's state is in its own DLG_ variables.
+namespace {
+// DLG_Flags: a line type this pawn has no lines of at all (found once).
+enum : int32_t {
+    kLED = 0x1, kSUR = 0x2, kTTP = 0x4, kAMB = 0x8, kBAT = 0x10, kINT = 0x20, kREP = 0x40, kPAN = 0x80,
+    kDIE = 0x100, kFSE = 0x200, kLSE = 0x400, kKIL = 0x800, kFHE = 0x1000, kGPI = 0x2000,
+};
+} // namespace
+
+void ScriptLevel::dialogTick(VmObject* input, float dt) {
+    VmObject* player = player_;
+    if (!player || player->deleted)
         return;
-    barkTimer_ = 0.25f; // looked at four times a second
-    const bool talking = !dialogThreads_.empty();
-    const Value* at = prop(player_, "Location");
-    if (!at)
+    auto obj = [&](VmObject* o, const char* name) -> VmObject* {
+        const Value* v = o ? prop(o, name) : nullptr;
+        VmObject* r = v ? v->asObject() : nullptr;
+        return r && !r->deleted ? r : nullptr;
+    };
+    auto num = [&](VmObject* o, const char* name) {
+        const Value* v = o ? prop(o, name) : nullptr;
+        return v ? v->asFloat() : 0.0f;
+    };
+    auto flag = [&](VmObject* o, const char* name) {
+        const Value* v = o ? prop(o, name) : nullptr;
+        return v && v->asBool();
+    };
+    auto text = [&](VmObject* o, const char* name) {
+        const Value* v = o ? prop(o, name) : nullptr;
+        return v ? upper(vm_.toString(*v)) : std::string();
+    };
+    if (VmObject* hud = obj(player, "myHUD"); hud && vm_.callEvent(hud, "IsLetterBoxOn").asBool())
         return;
-    const auto here = Vm::vectorOf(*at);
-    const NameId none = vm_.name("None");
+    if (VmObject* start = obj(player, "PlayerStart"); start && flag(start, "bNoAutoTriggerDialog"))
+        return;
+    const float now = time_;
+    const bool noAction = flag(levelInfo_, "bNoActionLevel");
+    const auto here = Vm::vectorOf(*prop(player, "Location"));
+    const float playerHealth = num(player, "Health");
     std::uniform_real_distribution<float> unit(0, 1);
-    for (VmObject* a : actors_) {
-        if (a == player_ || a->deleted || !vm_.isA(a, "Pawn"))
+    auto frand = [&] { return unit(barkRandom_); };
+    const NameId none = vm_.name("None");
+
+    const std::vector<VmObject*> pawns = actors_;
+    for (VmObject* p : pawns) {
+        if (p == player || p->deleted || !vm_.isA(p, "CTVE_Pawn") || flag(p, "bIsPlayer"))
             continue;
-        const Value* code = prop(a, "Speaker_Tag");
-        const Value* health = prop(a, "Health");
-        if (!code || code->i == 0 || code->i == none || !health || health->asInt() <= 0)
+        const Value* code = prop(p, "Speaker_Tag");
+        if (!code || code->i == 0 || code->i == none)
             continue;
-        const Value* loc = prop(a, "Location");
-        if (!loc)
+        Value* flagsValue = prop(p, "DLG_Flags");
+        if (!flagsValue)
             continue;
-        const auto p = Vm::vectorOf(*loc);
-        const float dx = p[0] - here[0], dy = p[1] - here[1], dz = p[2] - here[2];
-        const bool near = dx * dx + dy * dy + dz * dz < 1500.0f * 1500.0f;
-        Bark& b = barks_[a];
-        const Value* enemyValue = prop(a, "Enemy");
-        VmObject* enemy = enemyValue ? enemyValue->asObject() : nullptr;
-        if (enemy && enemy->deleted)
-            enemy = nullptr;
-        const NameId state = a->state ? vm_.name(a->state->name) : 0;
-        std::string say;
-        if (enemy && enemy != b.enemy && !b.enemy) {
-            say = "FSE";
-            b.killed = false;
-        } else if (b.enemy && !enemy) {
-            const Value* h = b.enemy->deleted ? nullptr : prop(b.enemy, "Health");
-            say = (!h || h->asInt() <= 0) ? (b.killed ? "" : "KIL") : "LSE";
-        } else if (enemy && !b.killed) {
-            const Value* h = prop(enemy, "Health");
-            if (h && h->asInt() <= 0) {
-                say = "KIL";
-                b.killed = true;
+        const auto at = Vm::vectorOf(*prop(p, "Location"));
+        const std::array<float, 3> toPawn{at[0] - here[0], at[1] - here[1], at[2] - here[2]};
+        const float dist = std::sqrt(toPawn[0] * toPawn[0] + toPawn[1] * toPawn[1] + toPawn[2] * toPawn[2]);
+        const float health = num(p, "Health");
+        VmObject* enemy = obj(p, "Enemy");
+        const float lastSpoke = num(p, "DLG_LastSpeakTime");
+        // (The engine also needs the pawn's zone drawn in the last 5
+        // seconds; Reluva doesn't keep that.)
+        if (now - lastSpoke > 0.5f && !flag(p, "bForceStasis") && dist < 800) {
+            int32_t flags = flagsValue->asInt();
+            if (noAction)
+                flags |= ~kTTP;
+            *flagsValue = Value::intValue(flags);
+            auto open = [&](int32_t bit) { return (flags & bit) == 0; };
+            VmObject* oldEnemy = obj(p, "DLG_OldEnemy");
+            const float oldHealth = num(p, "DLG_OldHealth");
+            const bool friendly = flag(p, "bFriend");
+            const std::string command = text(p, "DLG_Command"), oldCommand = text(p, "DLG_OldCommand");
+            std::string type;
+            int32_t bit = 0;
+            bool decided = false; // a type chosen, or nothing to say this tick
+            auto pick = [&](const char* t, int32_t b) {
+                type = t, bit = b, decided = true;
+            };
+            if (health <= 0) {
+                if (oldHealth > 0 && open(kDIE))
+                    pick("DIE", kDIE);
+                decided = true;
+            } else if (health < oldHealth && open(kPAN)) {
+                if (frand() > 0.3f)
+                    pick("PAN", kPAN);
+                else // a breath instead (FS_MaleBreath)
+                    vm_.callEvent(p, "PlayFoleySound", {Value::intValue(15)}), decided = true;
+            } else if (open(kFSE) && enemy && enemy != oldEnemy && num(enemy, "Health") > 0 &&
+                       vm_.callEvent(p, "IsActorAnEnemy", {Value::objectValue(enemy)}).asBool() &&
+                       !(flag(enemy, "bIsPlayer") && friendly)) {
+                pick("FSE", kFSE);
+            } else if (open(kLSE) && !enemy && oldEnemy && num(oldEnemy, "Health") > 0 &&
+                       !(flag(oldEnemy, "bIsPlayer") && friendly)) {
+                pick("LSE", kLSE);
+            } else if (open(kKIL) && oldCommand != "KIL" && playerHealth <= 0 && obj(player, "Enemy") == p && !friendly) {
+                pick("KIL", kKIL);
+                if (Value* c = prop(p, "DLG_Command"))
+                    *c = Value::stringValue("KIL");
+            } else if (open(kFHE) && command == "FHE" && oldCommand != "FHE") {
+                pick("FHE", kFHE);
+            } else if (open(kGPI) && command == "GPI" && oldCommand != "GPI") {
+                pick("GPI", kGPI);
             }
-        }
-        if (state != b.state && a->state &&
-            (same(a->state->name, "Cowering") || same(a->state->name, "Surrender")))
-            say = "SUR";
-        b.enemy = enemy;
-        b.state = state;
-        if (say.empty() && !enemy && near) {
-            if (!b.ambientSet) {
-                b.ambient = 10 + 30 * unit(barkRandom_);
-                b.ambientSet = true;
-            } else if (b.ambient <= 0) {
-                b.ambient = 20 + 40 * unit(barkRandom_);
-                say = "AMB";
+            const float attempted = num(p, "DLG_LastAttemptedSpeakTime");
+            if (!decided && !(attempted != 0 && now <= attempted + 4)) {
+                // Now and then: a chance of dt / every seconds a tick, once
+                // it's been quiet that long (or has never spoken).
+                auto chance = [&](float quiet, float every) {
+                    return (lastSpoke == 0 || now - lastSpoke > quiet) && frand() * every < dt;
+                };
+                const bool calm = !enemy || num(enemy, "Health") <= 0 || (friendly && obj(enemy, "Enemy") != p);
+                if (flag(p, "bIsLeading") && playerHealth > 0) {
+                    if (open(kLED) && dist < 300 && chance(4, 4))
+                        pick("LED", kLED);
+                    decided = true;
+                } else if (input && vm_.callEvent(input, "PawnSurrenderOrPray", {Value::objectValue(p)}).asBool()) {
+                    if (open(kSUR) && dist < 300 && chance(4, 4))
+                        pick("SUR", kSUR);
+                    decided = true;
+                } else if (open(kTTP) && talksToPlayer(p, dist, noAction)) {
+                    pick("TTP", kTTP);
+                } else if (!noAction) {
+                    const Value* own = prop(p, "Dialogue_Tag");
+                    const bool tagged = own && own->i && own->i != none;
+                    if (open(kAMB) && chance(15, tagged ? 5.0f : 15.0f) && calm)
+                        pick("AMB", kAMB);
+                    else if (chance(4, 4)) {
+                        if (open(kBAT) && flag(p, "bIsAttacking") && enemy && num(enemy, "Health") > 0 && !friendly)
+                            pick("BAT", kBAT);
+                        else if (open(kINT) && same(vm_.nameText(prop(p, "AnimSequence") ? prop(p, "AnimSequence")->i : 0),
+                                                     "InterrogateBajoran"))
+                            pick("INT", kINT);
+                    }
+                    if (type.empty() && open(kREP) && chance(5, 5) && calm)
+                        pick("REP", kREP);
+                }
             }
+            if (!type.empty())
+                sayOwnLine(p, type, bit, dist);
         }
-        if (say.empty() || !near || talking || b.quiet > 0)
-            continue;
-        if (startBark(a, say) || (say == "AMB" && startBark(a, "REP"))) {
-            b.quiet = 4;
-            return; // one at a time
-        }
+        // What it was, for the next tick (out of range or not).
+        if (Value* v = prop(p, "DLG_OldHealth"))
+            *v = Value::intValue(int(health));
+        if (Value* v = prop(p, "DLG_OldEnemy"))
+            *v = Value::objectValue(obj(p, "Enemy"));
+        if (Value* v = prop(p, "DLG_OldCommand"))
+            *v = Value::stringValue(prop(p, "DLG_Command") ? vm_.toString(*prop(p, "DLG_Command")) : std::string());
     }
 }
 
-bool ScriptLevel::startBark(VmObject* pawn, const std::string& type) {
+// PawnTalkToPlayer: no enemy, the player alive and standing about (not
+// faster than 200) within 200, and the pawn facing the player (or nearly,
+// within 75); on a no-action level the player looking at it too.
+bool ScriptLevel::talksToPlayer(VmObject* p, float dist, bool noAction) {
+    const Value* e = prop(p, "Enemy");
+    if ((e && e->asObject()) || !player_ || dist > 200 || dist <= 0)
+        return false;
+    const Value* h = prop(player_, "Health");
+    if (!h || h->asFloat() <= 0)
+        return false;
+    const auto v = Vm::vectorOf(*prop(player_, "Velocity"));
+    if (std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) > 200)
+        return false;
+    const auto from = Vm::vectorOf(*prop(player_, "Location")), to = Vm::vectorOf(*prop(p, "Location"));
+    const std::array<float, 3> dir{(to[0] - from[0]) / dist, (to[1] - from[1]) / dist, (to[2] - from[2]) / dist};
+    auto facing = [&](VmObject* a) {
+        const auto r = Vm::rotatorOf(*prop(a, "Rotation"));
+        const auto f = rotationAxes({r[0], r[1], r[2]})[0];
+        return f[0] * dir[0] + f[1] * dir[1] + f[2] * dir[2];
+    };
+    const float pawnDot = facing(p);
+    if (noAction)
+        return facing(player_) >= 0.7f && (pawnDot < -0.7f || (dist < 75 && pawnDot < 0.7f));
+    return pawnDot < -0.7f || (dist < 75 && pawnDot < -0.3f);
+}
+
+// The chosen line, if the pawn has one and the player could hear it: seen
+// (TestCanSeeMe) past (1.2 - ObstructionFactor) x 800. A type it has no
+// lines of at all isn't tried again (DLG_Flags); else a failed try waits 4
+// seconds (DLG_LastAttemptedSpeakTime), a talk-to-player line busy 1.
+void ScriptLevel::sayOwnLine(VmObject* p, const std::string& type, int32_t bit, float dist) {
+    Value* flags = prop(p, "DLG_Flags");
+    auto failed = [&](float ago) {
+        if (!(flags->asInt() & bit))
+            if (Value* v = prop(p, "DLG_LastAttemptedSpeakTime"))
+                *v = Value::floatValue(time_ - ago);
+    };
+    const Value* obstruction = prop(p, "ObstructionFactor");
+    if (dist >= (1.2f - (obstruction ? obstruction->asFloat() : 0)) * 800) {
+        const auto eye = Vm::vectorOf(*prop(player_, "Location"));
+        const auto at = Vm::vectorOf(*prop(p, "Location"));
+        if (!lineOfSight(player_, eye, at)) {
+            failed(0);
+            return;
+        }
+    }
+    const std::string speaker = vm_.nameText(prop(p, "Speaker_Tag")->i);
+    if (!hasDialogLines(type, speaker)) {
+        *flags = Value::intValue(flags->asInt() | bit);
+        return;
+    }
+    // Not over other dialogue: the engine queues it (whether it waits there
+    // isn't known); Reluva tries again a second later, as for a busy TTP.
+    const Value* lineType = prop(levelInfo_, "CurrentLineType");
+    const std::string current = lineType ? upper(vm_.nameText(lineType->i)) : "";
+    if (!dialogThreads_.empty() ||
+        (type == "TTP" && (current == "HAL" || current == "HOP" || current == "HBO" || current == "HCL"))) {
+        failed(3);
+        return;
+    }
+    const int index = ownLine(p, type);
+    if (index < 0) {
+        failed(0);
+        return;
+    }
+    if (type == "TTP") {
+        Value* last = prop(p, "DLG_LastSpokenTTP");
+        // The same talk again, or a general one after one: not said.
+        if (last && last->asInt() != -1 && (last->asInt() == index || !dialogLineSpecial(index))) {
+            failed(3);
+            return;
+        }
+        if (last)
+            *last = Value::intValue(index);
+    }
+    playOwnLine(p, index);
+    if (Value* v = prop(p, "DLG_LastSpeakTime"))
+        *v = Value::floatValue(time_);
+    if (Value* v = prop(p, "DLG_LastSpokenLine"))
+        *v = Value::intValue(index);
+}
+
+bool ScriptLevel::hasDialogLines(const std::string& type, const std::string& speaker) {
+    loadDialog();
+    for (size_t i = 0; i < dialogLines_.size(); ++i)
+        if (dialogOurs_[i] && same(dialogLines_[i].type, type) && same(dialogLines_[i].speaker, speaker))
+            return true;
+    return false;
+}
+
+int ScriptLevel::ownLine(VmObject* pawn, const std::string& type) {
     const Value* code = prop(pawn, "Speaker_Tag");
     if (!code)
-        return false;
+        return -1;
     conditionSubject_ = pawn;
     const Value* own = prop(pawn, "Dialogue_Tag");
     const std::string tag = own && own->i && !same(vm_.nameText(own->i), "None") ? vm_.nameText(own->i) : "";
     const int index = pickDialogLine(type, vm_.nameText(code->i), "", true, false, false, &tag);
     conditionSubject_ = nullptr;
-    if (index < 0)
-        return false;
+    return index;
+}
+
+void ScriptLevel::playOwnLine(VmObject* pawn, int index) {
     DialogThread t;
     t.id = nextDialogThread_++;
     t.self = pawn;
@@ -854,7 +1018,6 @@ bool ScriptLevel::startBark(VmObject* pawn, const std::string& type) {
     dialogThreads_.push_back(t);
     ++dialog.barks;
     beginLine(dialogThreads_.back(), index);
-    return true;
 }
 
 void registerDialogNatives(Vm& vm) {
@@ -908,10 +1071,11 @@ void registerDialogNatives(Vm& vm) {
         c.result = Value::boolValue(c.vm.level && c.vm.level->testCondition(c.s(0)));
     });
     // DialogTick(float DeltaTime): the dialogue input's each tick, while the
-    // HUD lets it. The lines play on the level's own tick (cut scenes'
-    // too, which this isn't called in); what else the engine did here (the
-    // AI's own lines, it may be) isn't known.
-    reg("CTVE_DialogInput.DialogTick", [](NativeCall&) {});
+    // HUD lets it: the AI's own lines (ScriptLevel::dialogTick).
+    reg("CTVE_DialogInput.DialogTick", [](NativeCall& c) {
+        if (c.vm.level)
+            c.vm.level->dialogTick(c.self, c.f(0));
+    });
 }
 
 } // namespace reluva::unreal

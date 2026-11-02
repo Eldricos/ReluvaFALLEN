@@ -638,23 +638,68 @@ the natives.
   nearest with the speaker's code.
 - **Notes for the voice actors**, text all in brackets ("[GROAN IN PAIN
   #1]", the Grigari's "[Blah, blah, blah]"), are heard but not shown.
-- **The AI's own lines**, which no script asks for (`tickBarks`). A pawn
-  with a speaker code, alive and within 1500 of the player, says one:
-  - FSE when it first has an enemy ("We have an armed militia operative
-    loose in the arena");
-  - LSE when it loses it, KIL when it's dead;
-  - SUR when its scripts put it in `Cowering` or `Surrender`;
-  - AMB now and then while it has no enemy (every 20 to 60 seconds), else
-    REP (the injured: "Hey! Over here!").
-  
-  Only its own lines: its speaker code, and a tagged line only for the
-  actor with that `Dialogue_Tag` (a Vorta's watch-station report is that
-  Vorta's). The start of what it says, not the lines that run on from it.
-  Their conditions are about it: an actor parameter (`FriendClose( 500 )`,
-  `PlayerFaceEnemy`, `EnemyIsA( DS9_JemHadar )`) is the speaking pawn,
-  not written in the table. One at a time, not over other dialogue,
-  4 seconds apart for each pawn. When the game said them is Reluva's
-  reading: the tables say only what. `DialogTick` itself does nothing.
+- **The AI's own lines**, which no script asks for: the dialogue input's
+  native `DialogTick`, which its `Tick` calls each tick while the HUD
+  shows no letterbox. Reluva does as Engine.dll's does. It does nothing if
+  the HUD's `IsLetterBoxOn` says so, or the player's `PlayerStart` has
+  `bNoAutoTriggerDialog`. Otherwise it goes through every `CTVE_Pawn` that
+  isn't the player and has a speaker code. Each pawn's state is kept in
+  its `DLG_` variables.
+  - **Gates:** more than 0.5 seconds since it last spoke
+    (`DLG_LastSpeakTime`), not `bForceStasis`, and within 800 of the
+    player. (The engine also wants the pawn's zone drawn in the last 5
+    seconds; Reluva doesn't keep that.) On a level with `bNoActionLevel`,
+    only TTP is possible.
+  - **The type, first that fits** (a type it has no lines of at all is
+    marked in `DLG_Flags` and never tried again):
+    - DIE: the tick it dies.
+    - PAN: hurt this tick. 70% of the time; otherwise a breath
+      (`PlayFoleySound` 15) instead.
+    - FSE: a new enemy that's alive and `IsActorAnEnemy`, unless the
+      pawn is a friend and its enemy the player.
+    - LSE: its enemy gone while still alive, with the same exception.
+    - KIL: the player died with this pawn as their enemy. Once: it sets
+      `DLG_Command` to KIL.
+    - FHE and GPI: when its `DLG_Command` becomes that. The Vorta's and
+      others' card-giving sets GPI.
+    - The rest only after 4 seconds since a try that failed
+      (`DLG_LastAttemptedSpeakTime`):
+      - LED: while it's `bIsLeading`.
+      - SUR: while the dialogue input's `PawnSurrenderOrPray` says so (in
+        `Cowering` or `Surrender`).
+      - Both of those within 300 of the player, at random about once
+        every 4 seconds, once it's been 4 seconds quiet. Nothing else is
+        said while either holds.
+      - TTP: no enemy; the player alive, within 200 and not faster than
+        200; the pawn facing the player (within about 45°, or 72° inside
+        75 units). On a no-action level the player must be looking at
+        the pawn too.
+      - Else, not on a no-action level:
+        - AMB: at random about once every 15 seconds (5 with a
+          `Dialogue_Tag`), once it's been 15 quiet. Only with no live
+          enemy, or as a friend its enemy isn't after.
+        - Else, about once every 4 seconds: BAT while `bIsAttacking`
+          against a live enemy, or INT while playing
+          `InterrogateBajoran`.
+        - Else REP: about once every 5 seconds, after 5 quiet, with no
+          live enemy as for AMB.
+  - **Saying it:**
+    - Beyond (1.2 − `ObstructionFactor`) × 800 the player must see the
+      pawn, else the try fails.
+    - The line is its own (its speaker code; a tagged line only for the
+      actor with that `Dialogue_Tag`, as a Vorta's watch-station report is
+      that Vorta's), the start of what it says, its conditions about it.
+    - A TTP isn't said again: not the same line, nor a general one after
+      one (`DLG_LastSpokenTTP`). Nor while a hail is on.
+    - Said, it sets `DLG_LastSpeakTime` and `DLG_LastSpokenLine`.
+    - The engine queues it with the other dialogue (whether it waits
+      there wasn't read). Reluva instead tries again a second later while
+      other dialogue plays, as the engine does for a busy TTP.
+  - **Every tick**, for every pawn within the gates or not, its
+    `DLG_OldHealth`, `DLG_OldEnemy` and `DLG_OldCommand` are what it has
+    now. So a change while it's far off is never voiced.
+  - Over all maps' first 3 seconds the AI says 2 lines, where Reluva's
+    own earlier reading (1500 units, its own timers) had 9.
 - Over all maps' first 20 seconds, 36 dialogues start (123 lines said),
   the AI says 62 lines, and 2 calls find no line: CM11_LabRitual's
   `START_G11B` (mission 11's table isn't in the game: its voices are, in
