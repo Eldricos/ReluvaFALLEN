@@ -560,7 +560,7 @@ search over the paths the editor stored with the map.
   Within 1000: its chest (0.8 of its height up) and, for a pawn within
   500, its sides. Further, a pawn's middle only, and for the AI only
   half the time and not past half its sight range.
-- **In play:** over all maps' first 20 seconds, 1,599 ways were straight, 2,277 along paths and 1,975 none. Many of the
+- **In play:** over all maps' first 20 seconds, 1,620 ways were straight, 2,598 along paths and 1,460 none. Many of the
   failures are faithful: on M05_WorfL2 the patrol points a guard is sent
   to are an island in the map's own data (no reach in or out either
   way), so the original fails there too.
