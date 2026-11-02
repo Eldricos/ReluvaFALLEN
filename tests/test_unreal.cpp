@@ -532,8 +532,18 @@ static void testModel() {
     l.type = kLightPulse;
     l.period = 2;
     CHECK(std::abs(lightLevel(l, 0.5f) - 0.99f) < 1e-4f && std::abs(lightLevel(l, 1.5f) - 0.21f) < 1e-4f);
+    // Blink: on or out at random, frame by frame; strobe: on and out
+    // alternate frames.
     l.type = kLightBlink;
-    CHECK(lightLevel(l, 0.5f) == 1 && lightLevel(l, 1.5f) == 0);
+    int on = 0;
+    for (int f = 0; f < 350; ++f) {
+        const float v = lightLevel(l, float(f) / 35 + 0.001f);
+        CHECK(v == 0 || v == 1);
+        on += v == 1;
+    }
+    CHECK(on > 100 && on < 250);
+    l.type = kLightStrobe;
+    CHECK(lightLevel(l, 0.001f) == 1 && lightLevel(l, 1.0f / 35 + 0.001f) == 0);
     l.type = kLightSteady;
     CHECK(lightLevel(l, 1.5f) == 1);
     // A model whose BSP doesn't hold together: refused, or read without it.

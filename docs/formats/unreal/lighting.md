@@ -186,37 +186,38 @@ texture palette ones) says how a light's brightness changes over time.
 On The Fallen 1377 of the 29202 lights change: 567 pulse, 598 flicker,
 208 subtle pulse, 3 blink, 1 strobe. A cycle is `LightPeriod` 35ths of a
 second (default 32), starting `LightPhase` 256ths of the way in.
-`lightLevel()` gives the share of the brightness at a time, Reluva's own
-curves (to be compared with the original running):
+`lightLevel()` gives the share of the brightness at a time, as the
+original's renderer works it out (Render.dll's `GlobalLighting` and its
+table of type functions, read for what they do). Its random ones draw a
+new number every frame; Reluva steps them 35 times a second.
 
-| Type | Brightness through a cycle |
+| Type | Brightness |
 |---|---|
-| Pulse | 0.6 + 0.39 sin |
-| Subtle pulse | 0.9 + 0.09 sin |
-| Blink | on the first half, off the second |
-| Strobe | on the first tenth |
-| Flicker | random, a new value 20 times a second: 0.4-1, out now and then |
+| Pulse | 0.6 + 0.39 sin, a cycle each `LightPeriod` 35ths of a second (at least 1) |
+| Subtle pulse | 0.9 + 0.09 sin, the same |
+| Blink | on or out at random each frame (the parity of its phase counted in 65536ths of a cycle) |
+| Strobe | every strobe on one frame and out the next, all together |
+| Flicker | a random number each frame: out under 0.5, else that bright |
+| Backdrop | steady |
+| Texture palette once / loop | the colour and brightness of the light's `Skin` palette, by its life or its cycle (not done: none in The Fallen's maps light with it) |
 
-Light effects that change over time (`LightEffect`), on The Fallen 255
-watery shimmers, 224 fire wavers, 45 torch wavers, 30 slow and fast
-waves, and a few shocks, discos and rotors. In UE1 these move across
-the surfaces; here too, as patterns worked out texel by texel from each
-texel's place against the light (`lightPattern`; Reluva's reading of the
-names, the original's code isn't known):
+Light effects (`LightEffect`) work texel by texel on the lightmaps
+(`lightPattern`), as Render.dll's lighting functions do: each a share of
+the light's usual falloff and facing there; the light actors get is its
+type's alone, no effect.
 
-| Effect | Across the surfaces |
+| Effect | On the surfaces |
 |---|---|
-| Torch waver, fire waver | brighter and darker by direction from the flame (0.85-1, 0.7-1), the directions' shares changing at random 6 and 10 times a second |
-| Watery shimmer | two ripples crossing over the surfaces, drifting (0.6-1) |
-| Slow wave, fast wave | rings rolling out from the light, half and two a second, half its radius apart (lightmap texels are tens of units: closer rings fell between them) (0.7-1) |
-| Rotor | four beams turning round it once a period |
-| Disco | spots on a grid of directions, turning the same way |
-| Shock | the whole light dropping to 0.2 at random, as before |
-
-What moves (meshes, movers) is lit by each such light as a whole, by the
-same effect's curve over time: torch waver 0.85-1 and fire waver 0.7-1
-(smooth random, 6 and 10 changes a second), shimmer two sines round
-0.8, the waves a sine 0.7-1, disco and rotor a sine over their period.
+| Torch waver, fire waver | each texel times a new random number each frame: 0.95-1, 0.8-1 |
+| Watery shimmer | each texel 0.6-1, its number easing towards a new random one (a sixteenth of the way a tick) |
+| Slow wave, fast wave | 0.7 + 0.3 sin of rings 64 (32) units apart rolling out 35 units a second |
+| Searchlight | one beam a turn, a quarter of it wide, turning 35 / `LightPeriod` radians a second from `LightPhase` (64ths of a turn); dark within about 130 units of its axis |
+| Rotor | six beams round it, ½(1 + sin(6 yaw + 3.5 t)), even near its axis (within 100 units) |
+| Disco | spots by yaw (11 a turn) and by height (11 bands), turning 5 radians a second, darkening where they are |
+| Interference | bands by height (11), rolling 5 radians a second |
+| Shock | three fine ripples 0.9-1 each, by distance, rolling out |
+| Shell | only a thin shell from 0.8 to 1 of its radius, brightest at 0.9 (1 - 10 |f - 0.9|), whatever the facing; it doesn't change |
+| Cloud cast | as a plain light |
 
 Lights the scripts may change (any class but plain `Light`, like
 `TriggerLight`, or one with a Tag a trigger can name) are kept apart
@@ -241,13 +242,10 @@ lightmaps' rectangles (`Renderer3D::updateTextures()`), all in one copy
 each frame. On The Fallen a map has up to 49 such lights over at most
 about 89000 texels (291,000 with the scripted lights and effects).
 
-**What moves** is lit as the lights are now (some all round, the rest
-from their average direction, the two together at most the texture's
-own colour, as the lightmaps are; capped each alone they reached twice
-it, and faces under bright lights were pale against the recording): meshes and movers by the
-level's lights at their current brightness (a pulsing light pulses on
-them), from where they are each frame (a door sliding into the dark goes
-dark), and by the dynamic lights. While the game plays, a light only
+**What moves** is lit as the lights are now (see "Actors' lighting" and
+"Movers' light"): by the level's lights at their current brightness (a
+pulsing light pulses on them), from where they are each frame (a door
+sliding into the dark goes dark), and by the dynamic lights. While the game plays, a light only
 reaches a character if the level's walls aren't between them (the yellow
 lamps of the rooms round M03_SiskoL1A's red room lit Sisko white).
 
@@ -261,9 +259,6 @@ again, its texture times their light added over it (UE1's texture x
 Static lights left out of the level's lightmaps (built before they were
 placed) light nothing, as in UE1. On M01_SiskoL1A a spark burst lights
 the wall round it for a tenth of a second.
-
-The 128 brightness unit, the linear falloff and the cone's angle are the
-first things to tune against the original.
 
 ## Compared with the original (TrainingRoom, October 2026)
 

@@ -103,9 +103,9 @@ struct PatternPoint {
 PatternPoint patternPoint(const Vec3f& offset);
 // What a pattern needs of the time, worked out once a frame for each light.
 struct PatternNow {
-    float a = 0, b = 0;    // the wavers' random shares
-    float turn = 0;        // the rotor's and disco's, radians
+    float turn = 0; // the searchlight's, radians
     float time = 0;
+    uint32_t frame = 0; // the random ones' step
 };
 PatternNow patternNow(const LightSource& light, float time);
 // That pattern's share (0-1) at a point.

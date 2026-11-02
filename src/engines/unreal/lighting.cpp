@@ -21,8 +21,12 @@ constexpr float kPi = 3.14159265358979f;
 constexpr uint8_t kEffectStaticSpot = 8;
 constexpr uint8_t kEffectSpotlight = 12;
 constexpr uint8_t kEffectNonIncidence = 13;
-constexpr uint8_t kEffectTorchWaver = 1, kEffectFireWaver = 2, kEffectWateryShimmer = 3, kEffectSlowWave = 5,
-                  kEffectFastWave = 6, kEffectShock = 9, kEffectDisco = 10, kEffectCylinder = 17, kEffectRotor = 18;
+constexpr uint8_t kEffectTorchWaver = 1, kEffectFireWaver = 2, kEffectWateryShimmer = 3, kEffectSearchlight = 4,
+                  kEffectSlowWave = 5, kEffectFastWave = 6, kEffectShock = 9, kEffectDisco = 10, kEffectShell = 14,
+                  kEffectInterference = 16, kEffectCylinder = 17, kEffectRotor = 18;
+// The original's random numbers are drawn afresh every frame; Reluva's
+// step 35 times a second (the engine's tick).
+constexpr float kFrameRate = 35;
 
 Vec3f add(const Vec3f& a, const Vec3f& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
 Vec3f sub(const Vec3f& a, const Vec3f& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
@@ -111,8 +115,8 @@ bool readLight(const PackageSet& packages, const Package& package, int32_t ref, 
 
 bool animatedEffect(uint8_t effect) {
     return effect == kEffectTorchWaver || effect == kEffectFireWaver || effect == kEffectWateryShimmer ||
-           effect == kEffectSlowWave || effect == kEffectFastWave || effect == kEffectShock || effect == kEffectDisco ||
-           effect == kEffectRotor;
+           effect == kEffectSearchlight || effect == kEffectSlowWave || effect == kEffectFastWave ||
+           effect == kEffectShock || effect == kEffectDisco || effect == kEffectInterference || effect == kEffectRotor;
 }
 
 bool changes(const LightSource& l) {
@@ -201,6 +205,8 @@ float lightFalloff(float f) {
 
 float surfaceFalloff(const LightSource& l, float f) {
     f = std::clamp(f, 0.0f, 1.0f);
+    if (l.effect == kEffectShell) // a thin shell from 0.8 to 1 of its radius, whatever the facing
+        return f >= 0.8f && f < 1 ? 1 - 10 * std::fabs(f - 0.9f) : 0;
     if (l.cylinder) // across the floor only, no facing: 1 - (d / r)^2
         return 1 - f * f;
     if (!l.incidence) // LE_NonIncidence: straight, no facing
@@ -243,44 +249,18 @@ uint32_t lightSeed(const LightSource& l) {
 // The share a light's LightEffect gives as a whole, 0-1, `time` seconds
 // in: what moving actors get, and (shock) the lightmaps too. Reluva's
 // reading of the names, at the rates they suggest.
-float effectLevel(const LightSource& l, float time) {
-    const uint32_t seed = lightSeed(l);
-    switch (l.effect) {
-    case kEffectTorchWaver: return 0.85f + 0.15f * smoothNoise(seed, time, 6);
-    case kEffectFireWaver: return 0.7f + 0.3f * smoothNoise(seed, time, 10);
-    case kEffectWateryShimmer:
-        return 0.8f + 0.1f * std::sin(time * 5.1f + float(seed & 255)) + 0.1f * std::sin(time * 7.3f + float(seed >> 8 & 255));
-    case kEffectSlowWave:
-    case kEffectFastWave: {
-        const float rate = l.effect == kEffectSlowWave ? 0.5f : 2.0f;
-        return 0.7f + 0.3f * (0.5f + 0.5f * std::sin(2 * kPi * (time * rate + l.phase)));
-    }
-    case kEffectShock: return smoothNoise(seed, time, 15) < 0.3f ? 0.2f : 1.0f;
-    case kEffectDisco:
-    case kEffectRotor: return 0.6f + 0.4f * (0.5f + 0.5f * std::sin(2 * kPi * (time / std::max(l.period, 0.05f) + l.phase)));
-    default: return 1;
-    }
-}
+// The share a light's LightEffect gives as a whole: none. The original's
+// effects all work texel by texel on the lightmaps (lightPattern); the
+// light actors get is its LightType's alone (Render.dll's GlobalLighting).
+float effectLevel(const LightSource&, float) { return 1; }
 
 } // namespace
 
-bool hasLightPattern(const LightSource& l) {
-    return l.effect == kEffectTorchWaver || l.effect == kEffectFireWaver || l.effect == kEffectWateryShimmer ||
-           l.effect == kEffectSlowWave || l.effect == kEffectFastWave || l.effect == kEffectDisco ||
-           l.effect == kEffectRotor;
-}
+bool hasLightPattern(const LightSource& l) { return animatedEffect(l.effect); }
 
-// The patterns, by what the names describe (UE1's own aren't known; these
-// are Reluva's reading), each in the same range as the effect as a whole:
-// - the wavers: brighter and darker by direction from the flame, the
-//   directions' shares changing at random (6 and 10 times a second), so
-//   the light flickers across a wall rather than all at once;
-// - the shimmer: two ripples crossing over the surfaces, drifting;
-// - the waves: rings rolling out from the light (half and two a second),
-//   half its radius apart (lightmap texels are tens of units: closer
-//   rings would fall between them);
-// - the rotor: four beams turning round it once a period; disco: spots
-//   on a grid of directions, turning the same way.
+// The patterns, as Render.dll's lighting functions make them (read for what
+// they do), each a share of the light's usual falloff and facing there.
+// Angles in the light's own axes: yaw round its vertical, `turn` the time's.
 PatternPoint patternPoint(const Vec3f& o) {
     PatternPoint p;
     p.offset = o;
@@ -294,43 +274,65 @@ PatternPoint patternPoint(const Vec3f& o) {
 PatternNow patternNow(const LightSource& l, float time) {
     PatternNow n;
     n.time = time;
-    const uint32_t seed = lightSeed(l);
-    if (l.effect == kEffectTorchWaver || l.effect == kEffectFireWaver) {
-        const float rate = l.effect == kEffectTorchWaver ? 6.0f : 10.0f;
-        n.a = smoothNoise(seed, time, rate);
-        n.b = smoothNoise(seed ^ 0x9e3779b9u, time, rate);
-    }
-    n.turn = 2 * kPi * (time / std::max(l.period, 0.05f) + l.phase);
+    n.frame = uint32_t(std::max(0.0f, time) * kFrameRate);
+    // The searchlight's: 35 / LightPeriod radians a second, from LightPhase
+    // (in 64ths of a turn).
+    const float period = l.period * 35; // LightPeriod
+    n.turn = (period > 0.5f ? time * 35 / period : 0.0f) + float(l.phase * 256) * 2 * kPi / 64 + 2 * kPi;
     return n;
 }
 
+namespace {
+
+// sin of an angle in 65536ths of a turn, as the engine's table.
+float sinTurns(float units) { return std::sin(units * 2 * kPi / 65536); }
+
+uint32_t texelSeed(const PatternPoint& p) {
+    return uint32_t(int32_t(p.offset[0] * 3.1f) * 73856093 ^ int32_t(p.offset[1] * 3.1f) * 19349663 ^
+                    int32_t(p.offset[2] * 3.1f) * 83492791);
+}
+
+} // namespace
+
 float lightPattern(const LightSource& l, const PatternNow& now, const PatternPoint& p) {
     const Vec3f& o = p.offset;
+    const float flat2 = o[0] * o[0] + o[1] * o[1];
     switch (l.effect) {
-    case kEffectTorchWaver:
-    case kEffectFireWaver: {
-        const float s = 0.5f + 0.25f * std::sin(5 * p.yaw + 3 * p.pitch + 2 * kPi * now.a) +
-                        0.25f * std::sin(9 * p.yaw - 4 * p.pitch + 2 * kPi * now.b);
-        return l.effect == kEffectTorchWaver ? 0.85f + 0.15f * s : 0.7f + 0.3f * s;
+    // A random number each frame for each texel: 0.95-1 (torch), 0.8-1 (fire).
+    case kEffectTorchWaver: return 0.95f + 0.05f * noise(texelSeed(p), now.frame);
+    case kEffectFireWaver: return 0.8f + 0.2f * noise(texelSeed(p), now.frame);
+    // 0.6-1, each texel's number easing towards a new random one (a
+    // sixteenth of the way a tick).
+    case kEffectWateryShimmer: return 0.6f + 0.4f * smoothNoise(texelSeed(p), now.time, kFrameRate / 16);
+    // Rings rolling out 35 units a second, 64 (slow) or 32 (fast) apart.
+    case kEffectSlowWave: return 0.7f + 0.3f * sinTurns((p.distance - now.time * 35) * 1024);
+    case kEffectFastWave: return 0.7f + 0.3f * sinTurns((p.distance - now.time * 35) * 2048);
+    // One beam a turn, a quarter of it wide, nothing near its axis.
+    case kEffectSearchlight: {
+        const float a = std::fmod(4 * p.yaw + now.turn, 8 * kPi);
+        if (a < kPi || a > 3 * kPi)
+            return 0;
+        return 0.5f * (1 + std::sin(-a)) * std::min(1.0f, flat2 * 6e-5f);
     }
-    case kEffectWateryShimmer: {
-        const float s = 0.5f + 0.25f * std::sin((o[0] + o[1]) / 40 + now.time * 5.1f) +
-                        0.25f * std::sin((o[0] - o[1]) / 27 + o[2] / 33 - now.time * 7.3f);
-        return 0.6f + 0.4f * s;
-    }
-    case kEffectSlowWave:
-    case kEffectFastWave: {
-        const float rate = l.effect == kEffectSlowWave ? 0.5f : 2.0f;
-        const float wavelength = std::max(l.radius / 2, 64.0f);
-        return 0.7f + 0.3f * (0.5f + 0.5f * std::sin(2 * kPi * (p.distance / wavelength - now.time * rate - l.phase)));
-    }
+    // Six beams turning, even near its axis.
     case kEffectRotor: {
-        const float s = 0.5f + 0.5f * std::cos(4 * (p.yaw - now.turn));
-        return 0.3f + 0.7f * s * s;
+        const float s = 0.5f * (1 + std::sin(-(6 * p.yaw + 3.5f * now.time)));
+        const float k = std::min(1.0f, flat2 * 1e-4f);
+        return s * k + (1 - k);
     }
+    // Spots by yaw and by height, darkening where they are.
     case kEffectDisco: {
-        const float s = std::sin(6 * (p.yaw - now.turn)) * std::sin(6 * p.pitch);
-        return s > 0.5f ? 1.0f : 0.35f;
+        const float a = 0.5f * (1 + std::sin(-(11 * p.yaw + 5 * now.time)));
+        const float b = 0.5f * (1 + std::cos(-(11 * std::atan2(o[2], flat2) + 5 * now.time)));
+        return 1 - (a + b - a * b) * std::min(1.0f, flat2 * 5e-5f);
+    }
+    // Bands by height, rolling.
+    case kEffectInterference: return 0.5f * (1 + std::sin(-(11 * std::atan2(o[2], flat2) + 5 * now.time)));
+    // Three fine ripples.
+    case kEffectShock: {
+        const float d = std::round(p.distance * 8), t = now.time * 4000;
+        return (0.9f + 0.1f * sinTurns(-16 * (d + t))) * (0.9f + 0.1f * sinTurns(16 * (std::floor(d / 2) - t))) *
+               (0.9f + 0.1f * sinTurns(16 * (std::floor(d / 4) - t)));
     }
     default: return 1;
     }
@@ -341,16 +343,20 @@ float lightLevel(const LightSource& l, uint8_t type, float time, bool whole) {
     // How far through its cycle it is, 0-1.
     const float cycles = time / std::max(l.period, 1e-3f) + l.phase;
     const float at = cycles - std::floor(cycles);
+    // As Render.dll's GlobalLighting: a frame's step for the random ones.
+    const uint32_t frame = uint32_t(std::max(0.0f, time) * kFrameRate);
+    const uint32_t seed = lightSeed(l);
     switch (type) {
     case kLightPulse: return 0.6f + 0.39f * std::sin(2 * kPi * at);
     case kLightSubtlePulse: return 0.9f + 0.09f * std::sin(2 * kPi * at);
-    case kLightBlink: return at < 0.5f ? 1.0f : 0.0f;
-    case kLightStrobe: return at < 0.1f ? 1.0f : 0.0f; // a flash at the start of each cycle
+    // On or out at random each frame (the parity of its phase in 65536ths).
+    case kLightBlink: return noise(seed, frame) < 0.5f ? 1.0f : 0.0f;
+    // All of them together, on one frame and out the next.
+    case kLightStrobe: return frame % 2 == 0 ? 1.0f : 0.0f;
+    // A random number each frame: out under a half, else that bright.
     case kLightFlicker: {
-        // A new random brightness 20 times a second, now and then out.
-        const float r = noise(uint32_t(l.phase * 256) + uint32_t(int32_t(l.position[0] * 7 + l.position[1] * 13 + l.position[2])),
-                              uint32_t(std::max(0.0f, time) * 20));
-        return r < 0.15f ? 0.0f : 0.4f + 0.6f * r;
+        const float r = noise(seed ^ 0x51ed270bu, frame);
+        return r < 0.5f ? 0.0f : r;
     }
     case kLightNone: return 0.0f;
     default: return 1.0f;
@@ -625,7 +631,7 @@ LightmapAtlas buildLightmaps(const Model& model, const LevelLights& lights, int 
                             if (dist >= src.radius || straight <= 0)
                                 continue;
                             float amount = surfaceFalloff(src, dist / src.radius);
-                            if (src.incidence && !src.cylinder) {
+                            if (src.incidence && !src.cylinder && src.effect != kEffectShell) {
                                 const float facing = dot(n, d) / straight;
                                 if (facing <= 0)
                                     continue;
