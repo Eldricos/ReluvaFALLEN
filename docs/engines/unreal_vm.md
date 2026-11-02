@@ -355,26 +355,39 @@ What's left before play, by what `ue-run` reports:
 ## Movement
 
 Actors move through the level's BSP ([collision.md](../formats/unreal/collision.md))
-and each other (`vm_physics.cpp`). This is Reluva's own model of UE1's
-movement, built from what the scripts set and expect.
+and each other (`vm_physics.cpp`), as Engine.dll's `ULevel::MoveActor`
+and the actors' `phys*` functions do it (read for what they do, written
+here anew). The Fallen's ledge and ladder tests (`TestForLedge`,
+`CheckClimbing`) weren't decoded and stay Reluva's own (below).
 
-- **A move** (`Move`, and physics) sweeps the actor's box through the
-  world, if it has `bCollideWorld`. Then it sweeps against the cylinders
-  of actors that block it (`bBlockActors`, `bBlockPlayers` for players,
-  not its owner or what it owns) and movers. A mover is collided with
-  through its brush's own BSP (UnrealEd builds one for each mover), with
-  the move turned into the brush's coordinates where the mover is now. A
-  mover without one is a box. Traces count movers as the world, so a
-  pawn stands on a lift. It stops a little before the first hit. After
-  that come zone changes (`ActorLeaving` to the old zone, `ZoneChange`,
-  `ActorEntered` to the new), what it now touches (`Touch` and `UnTouch`
-  both ways, the `Touching` list), and `Bump` to both if an actor
-  stopped it.
-- **Smooth moves** (`MoveSmooth`, walking, swimming, flying): a wall
-  that stops a walker is first tried as a step (up `MaxStepHeight`,
-  across, down onto a floor). Otherwise it gets `HitWall` and the rest of
-  the move slides along the wall, twice at most. Walkers don't climb
-  walls by sliding.
+- **A move** (`MoveActor`) sweeps the actor's box 2 units further than
+  asked, through the world if it has `bCollideWorld`, then against the
+  cylinders of actors that block it (`bBlockActors`, `bBlockPlayers` for
+  players, not its owner or what it owns) and movers. Hitting something,
+  it stops 2 units back along its way (not off the wall), and doesn't
+  move if that's no further than 2. A mover is collided with through its
+  brush's own BSP (UnrealEd builds one for each mover), with the move
+  turned into the brush's coordinates where the mover is now. A mover
+  without one is a box. Traces count movers as the world, so a pawn
+  stands on a lift.
+- **After a move**, in the engine's order:
+  - if an actor stopped it, `Bump2` (hit location and normal) to that
+    actor and then to the mover, then `Bump` likewise;
+  - what it now touches (`Touch` and `UnTouch` both ways, the `Touching`
+    list);
+  - last, zone changes (`ActorLeaving` to the old zone, `ZoneChange`,
+    `ActorEntered` to the new).
+- **HitWall** goes through the engine's `processHitWall`:
+  - none for a pawn running into a pawn;
+  - for a pawn, only while it pushes (some acceleration) and the wall
+    faces back along its way to its `Destination` (dot under
+    `MinHitWall`; level, when walking);
+  - a pawn whose script has no `HitWall` of its own just gives up its
+    move (`MoveTimer` −1, `bFromWall`), unless falling.
+- **Smooth moves** (`MoveSmooth`): the move, then along what stopped it,
+  then, told `HitWall` only now, along both walls (`TwoWallAdjust`: the
+  crease between them if they face apart). Three moves at most, never a
+  step.
 - **Placing** (`SetLocation`, and spawning an actor that has
   `bCollideWorld` or `bCollideWhenPlacing`) finds a spot as Engine.dll's
   `ULevel::FindSpot` and `AdjustSpot` do. A spot whose point is in the
@@ -402,12 +415,29 @@ Physics each tick, after the actor's scripts:
 
 | Physics | What it does |
 |---|---|
-| Walking | Acceleration (flattened, at `AccelRate`) against ground friction (the zone's, 8) up to `GroundSpeed`. A smooth move, then down onto the floor if one is within a step, else falling (`Falling`). A floor is a surface facing up at least 0.7 (about 45 degrees). Against a wall or a mover, `HitWall` (the AI opens doors from it); The Fallen's player gets it as its walking state reads it: X how head-on (its way of moving against the normal), Y its speed, so it stops running against a wall. A move that gets nowhere (the crease where a ramp meets a slope too steep) tries a step too, and is told of the steep wall. |
-| Falling | Gravity (the zone's, −950) and `AirControl` of the acceleration, up to the zone's terminal velocity. Off a wall or a slope too steep to stand on, `HitWall` and the rest of the fall slides along it. On a floor, `Landed`, then walking (pawns) or none, keeping the speed across. As a fall starts, the actor's `FallHeight` is set where it is: The Fallen's `TakeFallingDamage` kills at a drop of more than 800 from it, and its scripts set it only while rising in a jump. Left at 0, every landing on a map far below the origin was fatal. |
-| Swimming, flying | Acceleration against fluid friction up to `WaterSpeed` or `AirSpeed`, smooth moves. Swimmers sink or float by `Buoyancy` against `Mass` and fall once out of water. |
+| Walking, the player | `calcVelocity` (below), then one move along the floor's slope (`FloorNormal`) with up to three slides. Each wall is told `HitWall` as The Fallen's player's walking state reads it: X how head-on (the move's direction against the normal), Y its flat speed, Z how fast it slides on. Head-on (under −0.8), it stops. A step up is tried first (Reluva's: the engine finds steps in its undecoded ledge test). Then down onto the floor for real, `MaxStepHeight` + 2, sliding down a floor steeper than 0.65. No floor: back up, `Falling`, then falling. Its velocity is then what it really moved. |
+| Walking, other pawns | `calcVelocity`, then in steps of at most 0.05 s when going far, up to 4 (8 for pawns not The Fallen's). What stops a move is stepped up (`stepUp`: up `MaxStepHeight`, across, down; a square wall tried as a step again, else slid along; landing on a slope steeper than 0.7 undone). It's kept 1.9 to 2.4 above the floor (0.7 or flatter). With no floor, a pawn that can't jump (`bCanJump`) or is walking (`bIsWalking`) goes back, stops, and gives its move up (`MoveTimer` −1). Others fall with the rest of the tick. Velocity is what it moved, flat. A CTVE pawn's rise or drop on a step is eased out of how it's drawn (`PivotOffset`, into `PrePivot`, at 10 a second). |
+| Falling, the player | Gravity 1.4 times the zone's, times 1 − 2.2·dt (kept to 0.5-1), `AirControl` of `AccelRate` across, up to the terminal velocity. One move with up to four slides, `HitWall` (head-on-ness, speed) at the first only. Landing on anything flatter than 0.65. Its velocity is then what it moved. |
+| Falling, everything else | Steps of at most 0.1 s (8 at most), each moving at the average of its velocity at the start and end, split at the top of an arc. A pawn's air control is less with something just ahead. Landing on more than 0.7 (`Landed`, then walking, or still for an actor, and the rest of the tick walked). Steeper: `HitWall` and along it, then along both. `bBounce`: `HitWall` and its script bounces it. |
+| Swimming, flying | A pawn's only: `calcVelocity` in the fluid (`WaterSpeed` or `AirSpeed`, the zone's fluid friction; swimmers float by `Buoyancy` against `Mass`). One move; a flier steps up a low wall, else slides. Swimmers fall once out of water (Reluva's: the engine's `Swim` wasn't decoded). |
 | Projectile | Its velocity plus acceleration; `HitWall` on the world. |
-| Rotating | `RotationRate` each second. Any physics also turns toward `DesiredRotation` with `bRotateToDesired` (not a player's pawn: its input turns it). |
+| Rotating | `RotationRate` each second, or toward `DesiredRotation` with `bRotateToDesired`. Only in this physics (and The Fallen's single-axis ones) does an actor turn; a pawn turns toward its `DesiredRotation` in any physics but `Spider` (not a player's pawn: its input turns it). A pawn's `MoveTimer` counts down. |
 | Moving brush | While its script has it going (`InterpolateTo` sets `bInterpolating`): a mover from its old key toward its next by `PhysAlpha`, eased in and out if it glides by time. It carries the actors based on it and sends `InterpolateEnd` at the end. |
+
+**`calcVelocity`**, the velocity towards the acceleration:
+- **Acceleration:** only capped at `AccelRate`, at 30% of it walking or
+  crouching.
+- **Steering:** the velocity is turned towards the acceleration by the
+  friction times dt.
+- **Braking,** with no acceleration:
+  - the player in one go, stopped under a speed of about 2.2;
+  - the AI in steps of 0.03 s, stopped under 10.
+- **Top speed:** `GroundSpeed`, `WaterSpeed` or `AirSpeed`, eased down to
+  30% when walking or crouching.
+  - The player's is ×0.5 strafing while walking or crouching (else ×0.8),
+    ×0.8 backing, ×0.75 crawling.
+  - Others' are times `DesiredSpeed`, which the player's isn't. Before,
+    Reluva held the player to `DesiredSpeed` too, a third of its run.
 
 The Fallen added its own modes (past 10): the player's climbing,
 free flight, fish, interpolation and one for each kind of effect.
@@ -421,7 +451,7 @@ and leave undone.
 | Trailer | At its owner's place (and turned as it, with `bTrailerSameRotation`), as UE1's. |
 | Climbing | Up and down a ladder at its `Acceleration.Z` (the scripts': `aForward` x 0.02, 120 a second). At the top, with no ladder at the chest, the ledge found there and `ChangePhysics(Clambering)`; down onto a floor, `Landed` and walking. |
 | Hanging | Along the ledge at its acceleration (`aStrafe` x 0.008), while there's ledge under its hands. |
-| Clambering | Up onto the ledge as its animation (`ledgeu`, `BigStep`) plays: the rise over its first two thirds, then forward past the wall. At the end, falling the last bit, so its scripts' `Landed` walks again (their `AnimEnd` would only start the animation again). |
+| Clambering | As the engine: up at `DodgeClickTimer` units a second (its scripts' `PlayClambering` sets 100 or 130; Kira's 104 or 130) until the feet are over `LedgeHeight`, feeling 4 units forward; clear there (or 4 over), `Landed`, which sets the rise to 0. Then forward at 120 a second until stopped, when `ChangePhysics(Walking)`; its scripts' `AnimEnd` walks too. Blocked rising: `ChangePhysics(Falling)`. |
 | RotatingYaw, RotatingPitch | Turning about the one axis by `RotationRate`. |
 | Particle | No gravity: its velocity changed by its acceleration (a ship lifting off, debris settled), moved against the world, `Landed` or `HitWall`. One that makes copies stays where its scripts put it. |
 | Newtonian | Free flight by momentum (the Vulture, the Wraith, the Arachnid): its acceleration changes its velocity, up to `AirSpeed`; no gravity, no friction. |

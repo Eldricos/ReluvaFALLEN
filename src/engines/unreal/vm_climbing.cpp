@@ -38,10 +38,6 @@ Vec flat(const Vec& a) {
     const float l = std::sqrt(a[0] * a[0] + a[1] * a[1]);
     return l > 1e-4f ? Vec{a[0] / l, a[1] / l, 0} : Vec{0, 0, 0};
 }
-float smooth(float t) {
-    t = std::clamp(t, 0.0f, 1.0f);
-    return t * t * (3 - 2 * t);
-}
 
 } // namespace
 
@@ -159,8 +155,8 @@ void ScriptLevel::climbCheck(VmObject* a, bool falling, float dt) {
         ask(kPhysClimbing);
         return;
     }
-    const float duck = prop(a, "DuckCollisionHeight") ? prop(a, "DuckCollisionHeight")->asFloat() : 32.5f;
     const float radius = prop(a, "CollisionRadius") ? prop(a, "CollisionRadius")->asFloat() : 17;
+    const float duck = prop(a, "DuckCollisionHeight") ? prop(a, "DuckCollisionHeight")->asFloat() : 32.5f;
     const bool roomy = l.depth > radius * 0.7f && l.headRoom >= duck + 2;
     const float rise = l.height - feet;
     if (rise <= kClamberHighest) {
@@ -221,7 +217,6 @@ void ScriptLevel::climbPhysics(VmObject* a, int physics, float dt) {
     const Vec normal = prop(a, "LedgeNormal") ? flat(Vm::vectorOf(*prop(a, "LedgeNormal"))) : Vec{};
     const Vec in = mul(normal, -1);
     const float height = prop(a, "CollisionHeight") ? prop(a, "CollisionHeight")->asFloat() : 49.5f;
-    const float radius = prop(a, "CollisionRadius") ? prop(a, "CollisionRadius")->asFloat() : 17;
 
     if (physics == kPhysClimbing) {
         // Up and down the ladder as the input asks (the scripts' climbing
@@ -279,49 +274,40 @@ void ScriptLevel::climbPhysics(VmObject* a, int physics, float dt) {
         return;
     }
 
-    // Clambering: up as its animation climbs, then forward onto the
-    // ledge. From where it started to standing on the ledge's top, past
-    // the wall; the rise over the animation's first two thirds, the step
-    // forward over the rest.
+    // Clambering, as ACTVE_PlayerPawn::physClambering: up at
+    // DodgeClickTimer units a second (its scripts' PlayClambering sets
+    // 100 or 130) until its feet are over the ledge (LedgeHeight), feeling
+    // 4 units forward; once clear (or 4 over), Landed (its scripts set
+    // the rise to 0); then forward at 120 a second until something stops
+    // it, when it walks. Blocked going up: it falls.
     vm_.setVector(*velocity, 0, 0, 0);
-    auto it = clambers_.find(a);
-    if (it == clambers_.end()) {
-        Clamber c;
-        c.from = Vm::vectorOf(*loc);
-        const float ledge = prop(a, "LedgeHeight") ? prop(a, "LedgeHeight")->asFloat() : c.from[2] - height;
-        c.ledge = ledge;
-        c.forward = length(in) > 0.5f ? in : Vec{0, 0, 0};
-        c.reach = radius * 2 + 3;
-        it = clambers_.emplace(a, c).first;
+    if (Value* ac = prop(a, "Acceleration"))
+        vm_.setVector(*ac, 0, 0, 0);
+    const float rise = prop(a, "DodgeClickTimer") ? prop(a, "DodgeClickTimer")->asFloat() : 0;
+    if (rise > 0) {
+        const MoveHit up = moveActor(a, {0, 0, rise * dt});
+        if (a->deleted)
+            return;
+        if (up.hit()) {
+            vm_.callEvent(a, "ChangePhysics", {Value::byteValue(kPhysFalling)});
+            return;
+        }
     }
-    Clamber& c = it->second;
-    c.seconds += dt;
-    const Value* frame = prop(a, "AnimFrame");
-    const Value* rate = prop(a, "AnimRate");
-    const Value* last = prop(a, "AnimLast");
-    float t = 0;
-    if (frame && rate && frame->asFloat() >= 0 && rate->asFloat() > 0) {
-        if (c.startFrame < 0)
-            c.startFrame = frame->asFloat();
-        else if (frame->asFloat() < c.lastFrame - 0.05f)
-            c.done = 1; // played through and started again (its scripts' AnimEnd) before this saw its end
-        c.lastFrame = frame->asFloat();
-        const float end = last && last->asFloat() > c.startFrame ? last->asFloat() : 1;
-        t = std::clamp((frame->asFloat() - c.startFrame) / std::max(0.01f, end - c.startFrame), 0.0f, 1.0f);
-    }
-    t = std::max(t, std::clamp(c.seconds - 2.0f, 0.0f, 1.0f)); // no animation to follow: in time anyway
-    c.done = std::max(c.done, t);
-    const Vec to = c.to(height);
-    const float up = smooth(c.done / 0.65f), on = smooth((c.done - 0.6f) / 0.4f);
-    const Vec want{c.from[0] + (to[0] - c.from[0]) * on, c.from[1] + (to[1] - c.from[1]) * on,
-                   c.from[2] + (to[2] - c.from[2]) * up};
-    setLocation(a, want);
-    // Up: falling the last bit onto the ledge, and landing there (its
-    // scripts' clambering state walks again once it has landed; their
-    // animation would only start again).
-    if (c.done >= 1) {
-        clambers_.erase(it);
-        physicsValue->i = kPhysFalling;
+    const float ledge = prop(a, "LedgeHeight") ? prop(a, "LedgeHeight")->asFloat() : 0;
+    const float over = Vm::vectorOf(*loc)[2] - height - ledge;
+    if (over < 0)
+        return;
+    const auto r = Vm::rotatorOf(*prop(a, "Rotation"));
+    const float yaw = float(r[1]) * 2 * kPi / 65536, pitch = float(r[0]) * 2 * kPi / 65536;
+    const Vec x{std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), std::sin(pitch)};
+    if (rise > 0) {
+        const MoveHit ahead = moveActor(a, mul(x, 4));
+        if (!a->deleted && (!ahead.hit() || over > 4))
+            vm_.callEvent(a, "Landed", {vm_.vectorValue(0, 0, 1)});
+    } else {
+        const MoveHit on = moveActor(a, mul(x, 120 * dt));
+        if (!a->deleted && on.hit())
+            vm_.callEvent(a, "ChangePhysics", {Value::byteValue(kPhysWalking)});
     }
 }
 

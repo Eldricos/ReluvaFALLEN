@@ -565,6 +565,27 @@ private:
     struct MoverSpace;
     bool moverSpace(VmObject* mover, MoverSpace& space);
     void hitWall(VmObject* a, const MoveHit& h);
+    // Movement as Engine.dll's (vm_physics.cpp).
+    struct ZoneFeel {
+        std::array<float, 3> gravity{0, 0, -950}, velocity{};
+        float groundFriction = 8, fluidFriction = 1.2f, terminal = 2500;
+        bool water = false;
+    };
+    ZoneFeel zoneFeel(VmObject* a);
+    std::array<float, 3> twoWallAdjust(const std::array<float, 3>& desired, std::array<float, 3> delta,
+                                       const std::array<float, 3>& n, const std::array<float, 3>& oldN, float time);
+    void calcVelocity(VmObject* a, std::array<float, 3>& v, std::array<float, 3>& accel, float dt, float maxSpeed,
+                      float friction, bool fluid, bool brake, bool buoyant, const std::array<float, 3>& gravity);
+    void stepUp(VmObject* a, const std::array<float, 3>& gravDir, const std::array<float, 3>& desiredDir,
+                std::array<float, 3> delta, const MoveHit& hit);
+    int physicsOf(VmObject* a);
+    void setBase(VmObject* a, VmObject* base);
+    void walkPlayer(VmObject* a, float dt);
+    void walkPawn(VmObject* a, float dt, int maxIterations);
+    void landed(VmObject* a, const std::array<float, 3>& n, VmObject* on, float remaining);
+    void fallPlayer(VmObject* a, float dt);
+    void fall(VmObject* a, float dt);
+    void swimOrFly(VmObject* a, float dt, bool swim);
     void updateBodyRegions(VmObject* a, bool events);
     bool moverNear(VmObject* mover, const std::array<float, 3>& start, const std::array<float, 3>& delta,
                    const std::array<float, 3>& extent);
