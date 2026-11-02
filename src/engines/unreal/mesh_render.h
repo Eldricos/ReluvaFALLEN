@@ -110,6 +110,9 @@ struct MeshLight {
 struct MeshFog {
     std::array<float, 3> color{};
     float distance = 0;
+    // In a fog zone: the frame's volume lights (Renderer3D::setVolumeLights)
+    // over it too, as over the level's surfaces there.
+    bool volumes = false;
 };
 // One of the passes of a MultiTexture actor (Look::MultiTexture): its
 // glow (the alpha of a blended pass; else, below 1, how much of its light
@@ -130,6 +133,9 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
 // The fog pass over a draw already made (opaque or masked): its colour
 // blended over by distance, where that draw left its depth.
 void drawFogOver(gfx::Renderer3D& renderer, const gfx::DrawCall& drawn, const MeshFog& fog);
+// The volume lights' glow and fog over a draw already made (opaque or
+// masked), where that draw left its depth: blended One, OneMinusSrcAlpha.
+void drawVolumeOver(gfx::Renderer3D& renderer, const gfx::DrawCall& drawn);
 // How dark a shadow is at each point it falls (in the renderer's world):
 // 1 - min(strength / |distance from `light` - reach|, most) of what's there
 // is left (gfx::ColorSource::Shadow).

@@ -452,7 +452,9 @@ and what's behind dimmed by its fog times that (Direct3D blends fog maps
 Reluva does the same in a pass over the level's surfaces in fog zones
 (a surface seen from a fog zone, flagged `PF_RenderFog` 0x40000000 on its
 batch), working the line out per pixel rather than per texel; the
-nearest 16 lights to the camera. Not on actors or movers yet. The
+nearest 16 lights to the camera. Actors (meshes) and movers in a fog
+zone (by where they stand) get the same pass over what they drew: the
+original fogs meshes in fog zones too. The
 lights' glow on Hass'terral's lab floor (M10_WorfL2, M10_SiskoL2: a row
 of white volume lights under a grate) shows through the grate's gaps.
 M07_SiskoL1A's lab, hazy in the recording, is in a zone without a

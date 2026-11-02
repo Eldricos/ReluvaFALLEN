@@ -338,9 +338,13 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
             call.color = {1, 1, 1, 1};
         }
         renderer.draw(call);
-        if (fog && fog->distance > 0 && !(b.polyFlags & (polyflag::Translucent | polyflag::Modulated)) &&
-            style != kStyleBlended && style != kStyleSubtractive)
-            drawFogOver(renderer, call, *fog);
+        if (fog && !(b.polyFlags & (polyflag::Translucent | polyflag::Modulated)) && style != kStyleBlended &&
+            style != kStyleSubtractive) {
+            if (fog->volumes)
+                drawVolumeOver(renderer, call);
+            if (fog->distance > 0)
+                drawFogOver(renderer, call, *fog);
+        }
     }
 }
 
@@ -397,6 +401,18 @@ void drawFogOver(gfx::Renderer3D& renderer, const gfx::DrawCall& drawn, const Me
     f.state.depthWrite = false;
     f.state.alphaTest = gfx::AlphaTest::None;
     renderer.draw(f);
+}
+
+void drawVolumeOver(gfx::Renderer3D& renderer, const gfx::DrawCall& drawn) {
+    gfx::DrawCall v = drawn;
+    v.volumeLights = true;
+    v.dynamicLights = v.dynamicLightsTextured = false;
+    v.state.src = gfx::Blend::One;
+    v.state.dst = gfx::Blend::OneMinusSrcAlpha;
+    v.state.depthEqual = true;
+    v.state.depthWrite = false;
+    v.state.alphaTest = gfx::AlphaTest::None;
+    renderer.draw(v);
 }
 
 } // namespace reluva::unreal

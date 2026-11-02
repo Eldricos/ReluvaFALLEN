@@ -485,6 +485,9 @@ private:
     // The level's lights with a volume, in fog zones (drawVolumes).
     std::vector<const LightSource*> volumes_;
     void drawVolumes(const gfx::Vec3& eye);
+    void volumesOver(const std::vector<Batch>& batches, gfx::MeshId mesh, const gfx::Mat4& model, gfx::Cull cull,
+                     bool flagged);
+    bool inFogZone(const Vec3f& at) const;
 
     // Playing (Enter): the level live, drawn as its scripts have it.
     // From the start the portal tags, or from a saved game.

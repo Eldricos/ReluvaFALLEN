@@ -1776,22 +1776,32 @@ void MapViewer::drawVolumes(const gfx::Vec3& eye) {
                           l.volumeFog});
     }
     renderer_->setVolumeLights(lights);
-    for (const Batch& b : levelBatches()) {
-        if (!(b.polyFlags & kRenderFog) || (b.polyFlags & polyflag::FakeBackdrop) || blended(b.polyFlags) ||
-            !(b.zones & zonesSeen_))
+    volumesOver(levelBatches(), mesh_, gfx::identity(), gfx::Cull::Front, true);
+}
+
+// The volume lights over batches drawn (the level's in fog zones, flagged
+// so; or all of a mover's in one), where they left their depth.
+void MapViewer::volumesOver(const std::vector<Batch>& batches, gfx::MeshId mesh, const gfx::Mat4& model,
+                            gfx::Cull cull, bool flagged) {
+    for (const Batch& b : batches) {
+        if ((flagged && !(b.polyFlags & kRenderFog)) || (b.polyFlags & polyflag::FakeBackdrop) ||
+            blended(b.polyFlags) || !(b.zones & zonesSeen_) || &b == mirrorThrough_)
             continue;
         gfx::DrawCall call;
-        call.mesh = mesh_;
+        call.mesh = mesh;
+        call.model = model;
         call.firstIndex = b.firstIndex;
         call.indexCount = b.indexCount;
-        call.volumeLights = true;
-        call.state.cull = (b.polyFlags & polyflag::TwoSided) ? gfx::Cull::None : gfx::Cull::Front;
-        call.state.src = gfx::Blend::One;
-        call.state.dst = gfx::Blend::OneMinusSrcAlpha;
-        call.state.depthEqual = true;
-        call.state.depthWrite = false;
-        renderer_->draw(call);
+        call.state.cull = (b.polyFlags & polyflag::TwoSided) ? gfx::Cull::None : cull;
+        drawVolumeOver(*renderer_, call);
     }
+}
+
+bool MapViewer::inFogZone(const Vec3f& at) const {
+    if (volumes_.empty() || !lightmaps_)
+        return false;
+    const int z = zones_.zoneAt(at);
+    return z >= 0 && size_t(z) < lights_.zoneFog.size() && lights_.zoneFog[size_t(z)];
 }
 
 // The lit actors that aren't the level's own lights (those are in its
@@ -2023,15 +2033,19 @@ void MapViewer::drawWorld(const gfx::Vec3& forward, const gfx::Vec3& right, cons
         VmObject* live = play_ && i < moverActors_.size() ? moverActors_[i] : nullptr;
         LevelPlay::Look look;
         // Lit where it is now, by the lights as they are now.
+        Vec3f at;
+        gfx::Mat4 place;
         if (live && play_->look(live, look)) {
-            const MeshLight light = moverLightAt(look.location, m.reach);
-            drawBatches(m.batches, moverMesh_, moverPlacement(m.mover, look.location, look.rotation), false, false,
-                        &light);
+            at = look.location;
+            place = moverPlacement(m.mover, look.location, look.rotation);
         } else {
-            const gfx::Mat4 place = moverTransform(m);
-            const MeshLight light = moverLightAt(Vec3f{place[12], -place[13], place[14]}, m.reach);
-            drawBatches(m.batches, moverMesh_, place, false, false, &light);
+            place = moverTransform(m);
+            at = Vec3f{place[12], -place[13], place[14]};
         }
+        const MeshLight light = moverLightAt(at, m.reach);
+        drawBatches(m.batches, moverMesh_, place, false, false, &light);
+        if (inFogZone(at))
+            volumesOver(m.batches, moverMesh_, place, gfx::Cull::Back, false);
     }
     if (play_) {
         drawLiveActors(forward, right);
@@ -2199,8 +2213,10 @@ void MapViewer::drawActorMesh(const GpuMesh& gpu, const gfx::Mat4& placement, co
                               const std::vector<gfx::TextureId>& skins, const MeshLight& light,
                               const LevelPlay::Look& look) {
     const LevelPlay::Look::MultiTexture& m = look.multi;
+    MeshFog fog = fog_;
+    fog.volumes = inFogZone(look.location);
     if (!m.on) {
-        drawMesh(*renderer_, gpu, placement, pose, skins, light, kExposure, look.style, &fog_);
+        drawMesh(*renderer_, gpu, placement, pose, skins, light, kExposure, look.style, &fog);
         return;
     }
     const gfx::Vec3 filter{m.colorFilter[0], m.colorFilter[1], m.colorFilter[2]};
@@ -2208,7 +2224,7 @@ void MapViewer::drawActorMesh(const GpuMesh& gpu, const gfx::Mat4& placement, co
     one.glow = m.oneGlow;
     one.unlit = m.oneUnlit;
     one.unlitColor = filter;
-    drawMesh(*renderer_, gpu, placement, pose, skins, light, kExposure, m.oneStyle, &fog_, &one);
+    drawMesh(*renderer_, gpu, placement, pose, skins, light, kExposure, m.oneStyle, &fog, &one);
     MeshPass two;
     two.glow = m.twoGlow;
     two.unlit = m.twoUnlit;
@@ -2223,7 +2239,9 @@ void MapViewer::drawActorMesh(const GpuMesh& gpu, const gfx::Mat4& placement, co
                            placement[size_t(c * 4 + 2)] * placement[size_t(c * 4 + 2)]) / 3;
     if (scale > 0)
         two.fatness = (float(m.twoFatness) / 16 - 8) / scale;
-    drawMesh(*renderer_, gpu, placement, pose, skins, light, kExposure, m.twoStyle, &fog_, &two);
+    MeshFog over = fog; // the volume lights once, over the first pass
+    over.volumes = false;
+    drawMesh(*renderer_, gpu, placement, pose, skins, light, kExposure, m.twoStyle, &over, &two);
 }
 
 // An actor's light as the original's renderer works it out (Render.dll's
