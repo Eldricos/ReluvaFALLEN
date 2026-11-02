@@ -2119,31 +2119,47 @@ void LayeredPoser::Impl::addFaces(const std::vector<Face>& faces, const std::vec
     std::vector<Vec3f> delta(frame, Vec3f{});
     bool any = false;
     for (const Face& f : faces) {
-        if (f.weight <= 0)
-            continue;
         const std::string wanted = fs::toLower(f.anim);
         const NamedClip* clip = nullptr;
         for (const NamedClip& c : faceClips)
             if (fs::toLower(c.name) == wanted)
                 clip = &c;
-        if (!clip)
+        if (!clip || clip->keys.empty())
             continue;
-        size_t i = 0;
-        while (i + 1 < clip->keys.size() && clip->keys[i + 1].first <= f.seconds)
-            ++i;
-        float blend = 0;
-        if (i + 1 < clip->keys.size() && clip->keys[i + 1].first > clip->keys[i].first && f.seconds > clip->keys[i].first)
-            blend = std::min(1.0f, (f.seconds - clip->keys[i].first) / (clip->keys[i + 1].first - clip->keys[i].first));
-        const float w = std::min(1.0f, f.weight);
-        for (size_t v = 0; v < frame && v < neutral.size(); ++v) {
-            Vec3f p = unpackVertex(r.u32(clip->keys[i].second + 4 * v));
-            if (blend > 0) {
-                const Vec3f q = unpackVertex(r.u32(clip->keys[i + 1].second + 4 * v));
-                p = vadd(p, vmul(vsub(q, p), blend));
+        // Its keys at a time: the first before the first, the last after
+        // the last, else between the two either side.
+        struct At {
+            size_t i = 0;
+            float blend = 0;
+        };
+        auto at = [&](float seconds) {
+            At a;
+            while (a.i + 1 < clip->keys.size() && clip->keys[a.i + 1].first <= seconds)
+                ++a.i;
+            if (a.i + 1 < clip->keys.size() && clip->keys[a.i + 1].first > clip->keys[a.i].first &&
+                seconds > clip->keys[a.i].first)
+                a.blend = std::min(1.0f, (seconds - clip->keys[a.i].first) /
+                                             (clip->keys[a.i + 1].first - clip->keys[a.i].first));
+            return a;
+        };
+        auto keyed = [&](const At& a, size_t v) {
+            Vec3f p = unpackVertex(r.u32(clip->keys[a.i].second + 4 * v));
+            if (a.blend > 0) {
+                const Vec3f q = unpackVertex(r.u32(clip->keys[a.i + 1].second + 4 * v));
+                p = vadd(p, vmul(vsub(q, p), a.blend));
             }
-            const Vec3f d = vsub(p, neutral[v]);
+            return p;
+        };
+        const At to = at(f.seconds), from = at(f.fromSeconds);
+        const float wTo = f.weight * f.mix, wFrom = f.fromWeight * (1 - f.mix);
+        if (wTo == 0 && wFrom == 0)
+            continue;
+        for (size_t v = 0; v < frame && v < neutral.size(); ++v) {
+            Vec3f d = vmul(vsub(keyed(to, v), neutral[v]), wTo);
+            if (wFrom != 0)
+                d = vadd(d, vmul(vsub(keyed(from, v), neutral[v]), wFrom));
             if (vdot(d, d) > 1e-6f) {
-                delta[v] = vadd(delta[v], vmul(d, w));
+                delta[v] = vadd(delta[v], d);
                 any = true;
             }
         }

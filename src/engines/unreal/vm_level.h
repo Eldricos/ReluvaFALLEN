@@ -314,13 +314,24 @@ public:
         NameId fromSequence = 0;
         float fromFrame = 0, fromWeight = 0;
     };
+    // A face channel, as the engine keeps it (an AnimGroupState after the
+    // mesh's own groups): its sequence, frame (seconds into it) and
+    // weight; while tweening (C3DTweenSkinAnim), the frame and weight it
+    // started from and how far through it is; and a tween asked for to
+    // start at its next tick (C3DTweenSkinAnimDelay).
     struct SkinChannel {
         NameId sequence = 0;
-        float frame = 0, weight = 0;       // where it is: seconds into the sequence
-        float target = 0, targetWeight = 0, tweenRate = 0; // where it's tweening to, and how fast
+        float frame = 0, weight = 1;
+        float fromFrame = 0, fromWeight = 0;
+        float elapsed = 0, duration = 1;
+        bool tweening = false;
+        bool pending = false;
+        NameId pendingSequence = 0;
+        float pendingFrame = 0, pendingWeight = 0, pendingTween = 0;
     };
+    using SkinChannels = std::vector<std::pair<NameId, SkinChannel>>; // in the order made
     const std::map<NameId, AnimLayer>* layersOf(VmObject* actor) const;
-    const std::map<NameId, SkinChannel>* skinsOf(VmObject* actor) const;
+    const SkinChannels* skinsOf(VmObject* actor) const;
     void playLayer(VmObject* actor, NameId group, NameId sequence, float rate, float tween, bool loop, NameId bone,
                    float minRate = 0, std::array<bool, 3> clear = {});
     void tweenLayer(VmObject* actor, NameId group, NameId sequence, float seconds, NameId bone,
@@ -333,7 +344,8 @@ public:
     void stopLayerLooping(VmObject* actor, NameId group);
     void waitForLayer(VmObject* actor, NameId group);
     NameId newSkinChannel(VmObject* actor);
-    void setSkin(VmObject* actor, NameId tag, NameId sequence, float frame, float weight, float tween);
+    // How: 0 at once (C3DSetSkinAnim), 1 tweened (C3DTweenSkinAnim), 2 tweened from its next tick (...Delay).
+    void setSkin(VmObject* actor, NameId tag, NameId sequence, float frame, float weight, float tween, int how);
     void clearSkin(VmObject* actor, NameId tag);
     void copySkins(VmObject* to, VmObject* from);
 
@@ -683,7 +695,7 @@ private:
     std::set<VmObject*> fallers_; // falling since a tick before
     std::map<VmObject*, int> animWaits_; // actors in a latent FinishAnim, by their state serial then
     std::map<VmObject*, std::map<NameId, AnimLayer>> layers_;
-    std::map<VmObject*, std::map<NameId, SkinChannel>> skins_;
+    std::map<VmObject*, SkinChannels> skins_;
     std::map<VmObject*, TweenFrom> tweenFrom_;
     void noteTweenFrom(VmObject* actor, bool tweening);
     std::map<VmObject*, std::pair<NameId, int>> layerWaits_; // in C3DFinishAnim: the group, the state serial
@@ -883,7 +895,6 @@ private:
     LayeredPoser::Adjust adjustOf(VmObject* actor, ActorMesh& mesh);
     bool measureEffectors(VmObject* actor, ActorMesh& mesh, Bends& bends, const LayeredPoser::Adjust* adjust);
     int ticks_ = 0;
-    int skinChannels_ = 0;
     int placedGhosts_ = 0;
     int localizedSet_ = 0;
     std::vector<VmObject*> movers_; // the level's, which traces of the world meet

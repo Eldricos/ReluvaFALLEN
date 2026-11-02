@@ -2963,7 +2963,7 @@ bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4
     std::vector<LayeredPoser::Face> faces;
     if (p.poser->hasFace())
         for (const LevelPlay::Look::Face& f : look.faces)
-            faces.push_back({f.anim, f.seconds, f.weight});
+            faces.push_back({f.anim, f.seconds, f.weight, f.fromSeconds, f.fromWeight, f.mix});
     std::vector<Vec3f> verts;
     if ((layers.empty() && look.adjust.empty() && faces.empty()) ||
         !p.poser->pose(look.animSequence, look.animFrame, layers, verts, &look.adjust, &faces))

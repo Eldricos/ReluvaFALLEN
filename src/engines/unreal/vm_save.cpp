@@ -328,7 +328,6 @@ Error ScriptLevel::saveGame(const std::string& slot) {
     ref(game_);
     out.f32(time_);
     out.i32(ticks_);
-    out.i32(skinChannels_);
     auto keyed = [&](const auto& table, auto&& write) {
         out.i32(int32_t(std::count_if(table.begin(), table.end(), [&](const auto& e) { return has(e.first); })));
         for (const auto& [o, entry] : table)
@@ -373,16 +372,23 @@ Error ScriptLevel::saveGame(const std::string& slot) {
             out.f32(l.weightRate);
         }
     });
-    keyed(skins_, [&](const std::map<NameId, SkinChannel>& channels) {
+    keyed(skins_, [&](const SkinChannels& channels) {
         out.i32(int32_t(channels.size()));
         for (const auto& [tag, s] : channels) {
             name(tag);
             name(s.sequence);
             out.f32(s.frame);
             out.f32(s.weight);
-            out.f32(s.target);
-            out.f32(s.targetWeight);
-            out.f32(s.tweenRate);
+            out.f32(s.fromFrame);
+            out.f32(s.fromWeight);
+            out.f32(s.elapsed);
+            out.f32(s.duration);
+            out.u8(s.tweening);
+            out.u8(s.pending);
+            name(s.pendingSequence);
+            out.f32(s.pendingFrame);
+            out.f32(s.pendingWeight);
+            out.f32(s.pendingTween);
         }
     });
     keyed(layerWaits_, [&](const std::pair<NameId, int>& w) {
@@ -649,7 +655,6 @@ Error ScriptLevel::restore(const std::filesystem::path& file) {
     game_ = ref();
     time_ = in.f32();
     ticks_ = in.i32();
-    skinChannels_ = in.i32();
     auto object = [&]() -> VmObject* {
         const int32_t id = in.i32();
         return id >= 0 && size_t(id) < objects.size() ? objects[size_t(id)] : nullptr;
@@ -712,10 +717,17 @@ Error ScriptLevel::restore(const std::filesystem::path& file) {
             s.sequence = name();
             s.frame = in.f32();
             s.weight = in.f32();
-            s.target = in.f32();
-            s.targetWeight = in.f32();
-            s.tweenRate = in.f32();
-            skins_[o][tag] = s;
+            s.fromFrame = in.f32();
+            s.fromWeight = in.f32();
+            s.elapsed = in.f32();
+            s.duration = in.f32();
+            s.tweening = in.u8() != 0;
+            s.pending = in.u8() != 0;
+            s.pendingSequence = name();
+            s.pendingFrame = in.f32();
+            s.pendingWeight = in.f32();
+            s.pendingTween = in.f32();
+            skins_[o].push_back({tag, s});
         }
     });
     layerWaits_.clear();

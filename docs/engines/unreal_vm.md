@@ -1513,13 +1513,34 @@ natives:
   looping and waits for that end, and `C3DIsAnimating(Group)` says
   whether one's playing.
 
-Faces are channels:
-- `C3DPlaySkinAnim()` hands out a tag. `Pawn` asks for one each for
-  `Phonemes`, `Blink`, `EyeBrows` and `Mouth` if its mesh has them.
-- `C3DSetSkinAnim(Tag, Sequence, FrameTime, Weight)` and
-  `C3DTweenSkinAnim(Delay)` set a channel to a time in the sequence
-  (seconds: the scripts pass frame × 0.033), tweening there.
-- `C3DClearSkinAnim` and `C3DCopySkinAnimState` clear and copy them.
+Faces are channels, as Engine.dll keeps them (after the mesh's own
+animation groups, in the actor's C3D mesh state):
+- `C3DPlaySkinAnim()` adds one and names it `sk` and its place among the
+  actor's groups (the mesh's FullBody, LowerTorso and UpperTorso first:
+  Pawn's `Phonemes`, `Blink`, `EyeBrows` and `Mouth` channels are `sk3`
+  to `sk6`), counting up while another channel has the name.
+- `C3DSetSkinAnim(Tag, Sequence, FrameTime, Weight)` sets a channel to a
+  time in a face sequence (seconds: the scripts pass frame × 0.033) at a
+  weight, at once.
+- `C3DTweenSkinAnim(..., TweenTime)` cross-fades from what the channel was
+  set to last (not what shows mid-tween; the old time read in the new
+  sequence) to the new, straight over `TweenTime`: the two shapes fade,
+  the time doesn't sweep through those between. `C3DTweenSkinAnimDelay`
+  is the same from the channel's next tick (the last asked wins): the
+  lip-sync's `C3DSpeechEvent` uses it, as it comes from the audio driver.
+- A channel's time never moves on its own. One held at time 0 shows
+  nothing.
+- `C3DClearSkinAnim` removes one. `C3DCopySkinAnimState(Other)` gives each
+  of this actor's channels the state of the other's of the same tag;
+  none made or removed.
+- The face sequences: Blink 2 keys (0, 1/30 s), EyeBrows 3, Phonemes 8 (k/30
+  s, a mouth shape each), Mouth (four PAWNAI meshes; no script uses it).
+- **Drawn:** the engine pulls each vertex a face sequence lists to that
+  sequence's keyed place (kept in an attachment point's frame, so it
+  follows the head) by the weight: at the scripts' weight of 1 the face's
+  vertices are the keyed shape. Reluva instead adds the key's difference
+  from the neutral face, turned with the bones; the C3D mesh's own face
+  table (its `SANS` block) isn't read yet.
 - The engine sends `UpdateHeadAnimation` to each pawn with one of
   The Fallen's meshes every tick. It sets the face's expression and
   blinks, and where the head looks. It returns at once for a pawn not

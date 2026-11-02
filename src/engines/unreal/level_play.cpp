@@ -588,10 +588,18 @@ bool LevelPlay::look(VmObject* a, Look& out) {
         }
     out.faces.clear();
     if (const auto* skins = level_->skinsOf(a))
-        for (const auto& [tag, c] : *skins)
-            // At its start a channel is the neutral face: nothing to add.
-            if (c.sequence && c.weight > 0.01f && c.frame > 0.001f)
-                out.faces.push_back({vm.nameText(c.sequence), c.frame, c.weight});
+        for (const auto& [tag, c] : *skins) {
+            // One held at its first frame does nothing.
+            if (!c.sequence || (!c.tweening && c.frame == 0))
+                continue;
+            Look::Face f{vm.nameText(c.sequence), c.frame, c.weight};
+            if (c.tweening) {
+                f.fromSeconds = c.fromFrame;
+                f.fromWeight = c.fromWeight;
+                f.mix = c.duration > 0 ? std::clamp(c.elapsed / c.duration, 0.0f, 1.0f) : 1.0f;
+            }
+            out.faces.push_back(f);
+        }
     out.adjust = level_->boneAdjust(a);
     return true;
 }

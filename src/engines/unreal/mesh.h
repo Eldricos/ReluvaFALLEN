@@ -222,9 +222,12 @@ public:
     // them, then `adjust`. False if an animation isn't the mesh's.
     // A face channel (C3DSetSkinAnim): one of the face's vertex-key clips
     // (Blink, EyeBrows, Phonemes) `seconds` into it, by `weight`.
+    // While it tweens, `mix` of the way from its last frame and weight
+    // (`fromSeconds`, `fromWeight`) to these: the two shapes cross-faded.
     struct Face {
         std::string_view anim;
         float seconds = 0, weight = 1;
+        float fromSeconds = 0, fromWeight = 0, mix = 1;
     };
     // ... and the face's channels over that.
     bool pose(std::string_view base, float fraction, const std::vector<Layer>& layers, std::vector<Vec3f>& out,

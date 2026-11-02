@@ -24,6 +24,23 @@ namespace reluva::unreal {
 
 namespace {
 
+// A face channel tweened to a frame and weight, from what it was set to
+// last (not what shows mid-tween).
+void tweenChannel(ScriptLevel::SkinChannel& c, NameId sequence, float frame, float weight, float tween) {
+    c.fromFrame = c.frame;
+    c.fromWeight = c.weight;
+    c.sequence = sequence;
+    c.frame = frame;
+    c.weight = weight;
+    c.duration = tween;
+    c.elapsed = 0;
+    c.tweening = true;
+}
+
+} // namespace
+
+namespace {
+
 // What the animation natives need of an actor's mesh, read once per mesh:
 // its animations by name (lower case), its own and those its frames don't
 // have (borrowed from the shared sets when drawn), and what kind it is.
@@ -363,7 +380,7 @@ const std::map<NameId, ScriptLevel::AnimLayer>* ScriptLevel::layersOf(VmObject* 
     return it == layers_.end() || it->second.empty() ? nullptr : &it->second;
 }
 
-const std::map<NameId, ScriptLevel::SkinChannel>* ScriptLevel::skinsOf(VmObject* a) const {
+const ScriptLevel::SkinChannels* ScriptLevel::skinsOf(VmObject* a) const {
     auto it = skins_.find(a);
     return it == skins_.end() || it->second.empty() ? nullptr : &it->second;
 }
@@ -460,12 +477,21 @@ void ScriptLevel::endLayerWait(VmObject* a, NameId group) {
 }
 
 void ScriptLevel::animateLayers(VmObject* a, float dt) {
+    // The face's channels: a tween asked for last tick starts; a tween
+    // runs its time out. Their frames don't move.
     if (auto it = skins_.find(a); it != skins_.end())
         for (auto& [tag, c] : it->second) {
-            // Tweening to its frame and weight.
-            const float step = std::min(1.0f, c.tweenRate * dt);
-            c.frame += (c.target - c.frame) * (c.tweenRate > 0 ? step : 1);
-            c.weight += (c.targetWeight - c.weight) * (c.tweenRate > 0 ? step : 1);
+            if (c.pending) {
+                c.pending = false;
+                tweenChannel(c, c.pendingSequence, c.pendingFrame, c.pendingWeight, c.pendingTween);
+            }
+            if (c.tweening) {
+                c.elapsed += dt;
+                if (c.elapsed >= c.duration) {
+                    c.elapsed = 0;
+                    c.tweening = false;
+                }
+            }
         }
     auto it = layers_.find(a);
     if (it == layers_.end())
@@ -522,39 +548,82 @@ void ScriptLevel::animateLayers(VmObject* a, float dt) {
     }
 }
 
+// C3DPlaySkinAnim: a new channel, named sk and its place among the
+// actor's animation groups (the mesh's own three, FullBody, LowerTorso and
+// UpperTorso, come first: Pawn's Phonemes, Blink, EyeBrows and Mouth are
+// sk3 to sk6), the number going up while another channel has the name.
 NameId ScriptLevel::newSkinChannel(VmObject* a) {
-    const NameId tag = vm_.name("SkinChannel" + std::to_string(++skinChannels_));
-    skins_[a][tag] = {};
+    SkinChannels& list = skins_[a];
+    auto taken = [&](NameId n) {
+        return std::any_of(list.begin(), list.end(), [&](const auto& c) { return c.first == n; });
+    };
+    size_t k = 3 + list.size();
+    NameId tag = vm_.name("sk" + std::to_string(k));
+    while (taken(tag))
+        tag = vm_.name("sk" + std::to_string(++k));
+    list.push_back({tag, SkinChannel{}});
     return tag;
 }
 
-// C3DSetSkinAnim, C3DTweenSkinAnim(Delay): a face channel to a frame of a
-// sequence (seconds into it), at a weight, over `tween` seconds.
-void ScriptLevel::setSkin(VmObject* a, NameId tag, NameId sequence, float frame, float weight, float tween) {
-    SkinChannel& c = skins_[a][tag];
-    if (c.sequence != sequence) {
-        c.sequence = sequence;
-        c.frame = frame;
+namespace {
+
+ScriptLevel::SkinChannel* channelOf(std::map<VmObject*, ScriptLevel::SkinChannels>& skins, VmObject* a, NameId tag) {
+    auto it = skins.find(a);
+    if (it == skins.end())
+        return nullptr;
+    for (auto& [t, c] : it->second)
+        if (t == tag)
+            return &c;
+    return nullptr;
+}
+
+
+} // namespace
+
+// C3DSetSkinAnim: there at once. C3DTweenSkinAnim: cross-faded from the
+// channel's last frame and weight over `tween` seconds (the old frame read
+// in the new sequence). C3DTweenSkinAnimDelay: the same, from the
+// channel's next tick (the last asked before then wins).
+void ScriptLevel::setSkin(VmObject* a, NameId tag, NameId sequence, float frame, float weight, float tween, int how) {
+    SkinChannel* c = channelOf(skins_, a, tag);
+    if (!c) {
+        vm_.reportError("Couldn't find AnimGroupState with this tag: " + vm_.nameText(tag));
+        return;
     }
-    c.target = frame;
-    c.targetWeight = weight;
-    c.tweenRate = tween > 0 ? 1 / tween : 0;
-    if (tween <= 0) {
-        c.frame = frame;
-        c.weight = weight;
+    if (how == 2) {
+        c->pending = true;
+        c->pendingSequence = sequence;
+        c->pendingFrame = frame;
+        c->pendingWeight = weight;
+        c->pendingTween = tween;
+    } else if (how == 1) {
+        tweenChannel(*c, sequence, frame, weight, tween);
+    } else {
+        c->sequence = sequence;
+        c->frame = frame;
+        c->weight = weight;
+        c->fromFrame = c->fromWeight = 0;
+        c->tweening = false;
     }
 }
 
 void ScriptLevel::clearSkin(VmObject* a, NameId tag) {
     if (auto it = skins_.find(a); it != skins_.end())
-        it->second.erase(tag);
+        it->second.erase(std::remove_if(it->second.begin(), it->second.end(), [&](const auto& c) { return c.first == tag; }),
+                         it->second.end());
 }
 
+// C3DCopySkinAnimState: each of this actor's channels takes the state of
+// the other's of the same tag, if it has one; none made or removed.
 void ScriptLevel::copySkins(VmObject* to, VmObject* from) {
-    if (auto it = skins_.find(from); it != skins_.end())
-        skins_[to] = it->second;
-    else
-        skins_.erase(to);
+    auto mine = skins_.find(to);
+    auto theirs = skins_.find(from);
+    if (mine == skins_.end() || theirs == skins_.end())
+        return;
+    for (auto& [tag, c] : mine->second)
+        for (const auto& [t, o] : theirs->second)
+            if (t == tag)
+                c = o;
 }
 
 void registerAnimationNatives(Vm& vm) {
@@ -657,14 +726,17 @@ void registerAnimationNatives(Vm& vm) {
     // C3DSetSkinAnim(name Tag, name Sequence, float FrameTime, float Weight)
     reg("Actor.C3DSetSkinAnim", [](NativeCall& c) {
         if (c.vm.level && c.self)
-            c.vm.level->setSkin(c.self, c.i(0), c.i(1), c.f(2), c.f(3), 0);
+            c.vm.level->setSkin(c.self, c.i(0), c.i(1), c.f(2), c.f(3), 0, 0);
     });
     // C3DTweenSkinAnim(Delay)(name Tag, name Sequence, float FrameTime, float Weight, float TweenTime)
-    for (const char* tween : {"Actor.C3DTweenSkinAnim", "Actor.C3DTweenSkinAnimDelay"})
-        reg(tween, [](NativeCall& c) {
-            if (c.vm.level && c.self)
-                c.vm.level->setSkin(c.self, c.i(0), c.i(1), c.f(2), c.f(3), c.f(4));
-        });
+    reg("Actor.C3DTweenSkinAnim", [](NativeCall& c) {
+        if (c.vm.level && c.self)
+            c.vm.level->setSkin(c.self, c.i(0), c.i(1), c.f(2), c.f(3), c.f(4), 1);
+    });
+    reg("Actor.C3DTweenSkinAnimDelay", [](NativeCall& c) {
+        if (c.vm.level && c.self)
+            c.vm.level->setSkin(c.self, c.i(0), c.i(1), c.f(2), c.f(3), c.f(4), 2);
+    });
     reg("Actor.C3DClearSkinAnim", [](NativeCall& c) {
         if (c.vm.level && c.self)
             c.vm.level->clearSkin(c.self, c.i(0));

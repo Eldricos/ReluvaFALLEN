@@ -158,6 +158,7 @@ public:
         struct Face {
             std::string anim;
             float seconds = 0, weight = 0;
+            float fromSeconds = 0, fromWeight = 0, mix = 1; // a tween's cross-fade
         };
         std::vector<Face> faces;
         // What its scripts do to its bones on top (a back bent, a hand on a gun).
