@@ -61,8 +61,17 @@ packages, only Fire.u and Engine.u name them, defining the classes.
 The class names and their settings' names come from Fire.u (the enums
 `ESpark` and `WDrop`, the structs `Spark` and `ADrop`). What each
 setting does is Reluva's own reading of those names and of the values
-in The Fallen's textures, to be compared with the original running. The
-fire and water simulations step 30 times a second.
+in The Fallen's textures, checked where noted against Fire.dll and
+Engine.dll.
+
+The fire, water and ice textures step as the engine's `UTexture::Tick`
+paces them: with `MaxFrameRate` 0, once every frame they're drawn (so
+faster on a faster display); otherwise each frame's time adds up, and
+once it's past 1 / `MaxFrameRate` the texture steps, the sum starting
+again from 0, unless it's past 1 / `MinFrameRate`, when only that much
+is taken off so a slow display catches up. Both rates are kept to
+0.01-100, and a texture steps at most once a frame. An ice texture's
+sliding goes by the clock; only its drawing is paced.
 
 ### FLC (FliTexture)
 
@@ -99,14 +108,18 @@ that sees through colour 0 does so in every frame.
 A heat value (0-255) per pixel, shown through the palette. After the
 mipmaps: a compact count, then 8 bytes a spark: type (`ESpark`), heat,
 X, Y (pixels) and four bytes A-D whose use depends on the type. Each
-step the heat spreads and cools, then the sparks add theirs (a spark
-sets its pixel to at least its heat):
+step the sparks add their heat (a spark sets its pixel to at least its
+heat), then the heat spreads and cools (Fire.dll's order):
 
-- Spreading: with `bRising` each pixel takes the heat of the three below
-  it (the middle twice), so flames climb; without, it blends with its
-  four neighbours. Either way times `RenderHeat` / 256, so a low
-  `RenderHeat` leaves only the sparks' own pixels and a high one long
-  trails. Rows below the bottom are cold; the sides wrap.
+- Spreading: each pixel becomes a quarter of four pixels' sum, plus 1,
+  less (255 - `RenderHeat`) / 16, kept to 0-255. With `bRising` the four
+  are below it: the one under and the one to its right, the one two
+  under and the one to its left, so flames climb; without, itself, the
+  one to its right, and the one under and to its left. The picture is
+  counted as one row after another, wrapping at the end: the rows past
+  the bottom are the top ones, and a pixel's left neighbour at the left
+  edge is the end of the row above. A low `RenderHeat` leaves only the
+  sparks' own pixels, a high one long trails.
 - Sparks: Burn a random heat at its spot; Sparkle flashes near it (A
   how often, B how far); Pulse and Signal rise and fall or switch on and
   off (D the speed, A the phase); Blaze, Cone, OzHasSpoken,

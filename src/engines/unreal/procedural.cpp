@@ -17,8 +17,6 @@ namespace reluva::unreal {
 namespace {
 
 constexpr float kPi = 3.14159265358979f;
-// The fire and water simulations move on in steps of this many a second.
-constexpr float kStepsPerSecond = 30;
 
 // A small repeatable random number generator (xorshift).
 struct Random {
@@ -103,19 +101,35 @@ void toRgba(const std::vector<uint8_t>& indices, const Palette& palette, bool ma
     }
 }
 
-// Steps at kStepsPerSecond: how many are due after `seconds` more (at most
-// a few, so a long pause doesn't stall).
-int dueSteps(float& pending, float seconds) {
-    pending += std::max(0.0f, seconds);
-    int n = 0;
-    while (pending * kStepsPerSecond >= 1 && n < 4) {
-        pending -= 1 / kStepsPerSecond;
-        ++n;
+// When a texture steps, as the engine's UTexture::Tick paces it (read for
+// what it does): with no MaxFrameRate, once every frame drawn; else at
+// most once a frame and no faster than MaxFrameRate, a frame's time added
+// up until 1 / MaxFrameRate has gone by, then a step; the sum starts again
+// unless it's past 1 / MinFrameRate (the rates kept to 0.01-100), when only
+// that much is taken off, so a slow display catches up.
+struct Pace {
+    float fastest = 0, slowest = 0; // the shortest and longest time between steps; fastest 0: every frame
+    float sum = 0;
+    explicit Pace(const PropertyList& props) {
+        const float most = props.number("MaxFrameRate");
+        if (most != 0) {
+            fastest = 1 / std::clamp(most, 0.01f, 100.0f);
+            slowest = 1 / std::clamp(props.number("MinFrameRate"), 0.01f, 100.0f);
+        }
     }
-    if (pending * kStepsPerSecond >= 1)
-        pending = 0;
-    return n;
-}
+    int due(float seconds) {
+        if (fastest == 0)
+            return 1;
+        sum += std::max(0.0f, seconds);
+        if (sum < fastest)
+            return 0;
+        if (sum < slowest)
+            sum = 0;
+        else
+            sum -= slowest;
+        return 1;
+    }
+};
 
 // Where something is in a cycle of `speed` 256ths of a turn a step,
 // starting `phase` 256ths in: radians.
@@ -145,9 +159,11 @@ public:
     };
 
     Fire(int w, int h, const PropertyList& props, Palette palette, std::vector<SparkData> sparks)
-        : w_(w), h_(h), palette_(palette), sparks_(std::move(sparks)), random_(uint32_t(w * 7919 + h)) {
+        : w_(w), h_(h), palette_(palette), sparks_(std::move(sparks)), random_(uint32_t(w * 7919 + h)), pace_(props) {
         rising_ = props.boolean("bRising");
         keep_ = props.byte("RenderHeat", 220);
+        for (int i = 0; i < 1024; ++i)
+            cool_[size_t(i)] = uint8_t(std::clamp(float(i) * 0.25f + 1 - float(255 - keep_) * 0.0625f, 0.0f, 255.0f));
         masked_ = props.boolean("bMasked");
         limit_ = size_t(std::clamp<int32_t>(props.integer("SparksLimit", 1024), 16, 4096));
         // DrawMode (dmode in Fire.u): DRAW_Normal, DRAW_Lathe, then
@@ -171,7 +187,7 @@ public:
     const char* kind() const override { return "fire"; }
 
     bool advance(float seconds) override {
-        const int n = dueSteps(pending_, seconds);
+        const int n = pace_.due(seconds);
         for (int i = 0; i < n; ++i)
             tick();
         if (n)
@@ -222,9 +238,9 @@ private:
         }
     }
 
+    // A step: the sparks drawn, then the heat spread (Fire.dll's order).
     void tick() {
         ++step_;
-        spread();
         for (SparkData& s : sparks_)
             spark(s);
         for (Particle& p : particles_) {
@@ -236,26 +252,26 @@ private:
         }
         particles_.erase(std::remove_if(particles_.begin(), particles_.end(), [](const Particle& p) { return p.heat <= 0; }),
                          particles_.end());
+        spread();
     }
 
-    // The heat spreads and cools: rising, each pixel takes the heat below
-    // it; else it blends with its neighbours. Rows past the bottom are cold.
+    // The heat spreads and cools, as Fire.dll does it: each pixel becomes
+    // a quarter of four pixels' sum, plus 1, less (255 - RenderHeat) / 16
+    // (cool_, a table of the 1024 sums in the original). Rising, the four
+    // are below it: the one under and its right, the one two under and its
+    // left; else itself, its right, and the two under it and to their
+    // left. Counted through the picture as one row after another, so the
+    // rows past the bottom are the top ones and a row's left neighbour is
+    // the end of the row above.
     void spread() {
-        for (int y = 0; y < h_; ++y) {
-            const uint8_t* row = &heat_[size_t(y) * size_t(w_)];
-            const uint8_t* up = &heat_[size_t((y + h_ - 1) % h_) * size_t(w_)];
-            const uint8_t* down = &heat_[size_t((y + 1) % h_) * size_t(w_)];
-            const bool hasDown = y + 1 < h_;
-            uint8_t* out = &next_[size_t(y) * size_t(w_)];
-            for (int x = 0; x < w_; ++x) {
-                const int l = x ? x - 1 : w_ - 1, r = x + 1 < w_ ? x + 1 : 0;
-                int sum;
-                if (rising_)
-                    sum = hasDown ? (down[l] + 2 * down[x] + down[r]) * 2 : 0; // out of 8
-                else
-                    sum = row[l] + row[r] + up[x] + down[x] + 4 * row[x];
-                out[x] = uint8_t(sum * keep_ / (8 * 256));
-            }
+        const size_t n = heat_.size(), w = size_t(w_);
+        for (size_t i = 0; i < n; ++i) {
+            int sum;
+            if (rising_)
+                sum = heat_[(i + w) % n] + heat_[(i + w + 1) % n] + heat_[(i + 2 * w - 1) % n] + heat_[(i + 2 * w) % n];
+            else
+                sum = heat_[i] + heat_[(i + 1) % n] + heat_[(i + w - 1) % n] + heat_[(i + w) % n];
+            next_[i] = cool_[size_t(sum)];
         }
         heat_.swap(next_);
     }
@@ -386,10 +402,11 @@ private:
     Random random_;
     bool rising_ = false, masked_ = false;
     int keep_ = 220;
+    std::array<uint8_t, 1024> cool_{}; // the heat four pixels sum to, spread and cooled
     size_t limit_ = 1024;
     int lathe_ = 0; // copies round the middle (1: a ring), 0 for none
     uint32_t step_ = 0;
-    float pending_ = 0;
+    Pace pace_;
 };
 
 // ---------------------------------------------------------------------
@@ -418,7 +435,7 @@ public:
     Water(int w, int h, const PropertyList& props, Palette palette, std::vector<DropData> drops, image::Image source,
           const char* kind)
         : w_(w), h_(h), fw_(std::max(1, w / 2)), fh_(std::max(1, h / 2)), palette_(palette), drops_(std::move(drops)),
-          source_(std::move(source)), kind_(kind), random_(uint32_t(w * 31 + h)) {
+          source_(std::move(source)), kind_(kind), random_(uint32_t(w * 31 + h)), pace_(props) {
         amplitude_ = std::max(1.0f, float(props.byte("WaveAmp", 128))) / 128;
         masked_ = props.boolean("bMasked");
         // A wave texture is lit as a bumpy surface: from BumpMapAngle
@@ -449,7 +466,7 @@ public:
     const char* kind() const override { return kind_; }
 
     bool advance(float seconds) override {
-        const int n = dueSteps(pending_, seconds);
+        const int n = pace_.due(seconds);
         for (int i = 0; i < n; ++i)
             tick();
         if (n)
@@ -604,7 +621,7 @@ private:
     bool bump_ = false; // a wave texture: lit, below
     float lightX_ = 0, lightY_ = 0, phongFrom_ = 0, phong_ = 0;
     uint32_t step_ = 0;
-    float pending_ = 0;
+    Pace pace_;
 };
 
 // ---------------------------------------------------------------------
@@ -640,7 +657,7 @@ public:
     enum Panning : uint8_t { Linear, Circular, Gestation, WavyX, WavyY };
 
     Ice(const PropertyList& props, image::Image source, image::Image glass)
-        : source_(std::move(source)), glass_(std::move(glass)) {
+        : source_(std::move(source)), glass_(std::move(glass)), pace_(props) {
         panning_ = props.byte("PanningStyle");
         hSpeed_ = float(int(props.byte("HorizPanSpeed", 128)) - 128) / 4;
         vSpeed_ = float(int(props.byte("VertPanSpeed", 128)) - 128) / 4;
@@ -660,8 +677,9 @@ public:
     const char* kind() const override { return "ice"; }
 
     bool advance(float seconds) override {
-        const int n = dueSteps(pending_, seconds);
-        time_ += float(n) / kStepsPerSecond;
+        // Its glass slides in real time; drawn when its pace says.
+        time_ += std::max(0.0f, seconds);
+        const int n = pace_.due(seconds);
         if (n)
             render();
         return n > 0;
@@ -705,7 +723,8 @@ private:
     uint8_t panning_ = Linear;
     float hSpeed_ = 0, vSpeed_ = 0, frequency_ = 0, amplitude_ = 0;
     bool moveIce_ = false;
-    float time_ = 0, pending_ = 0;
+    float time_ = 0;
+    Pace pace_;
 };
 
 // ---------------------------------------------------------------------
