@@ -52,8 +52,9 @@ VmObject* ScriptLevel::canvas() {
     return canvas_;
 }
 
-// A frame's HUD: the canvas made ready (Reset, its size and clip the
-// screen's), then the player's PreRender and PostRender with it, which
+// A frame's HUD, as UGameEngine::Draw: the canvas made ready (its Reset,
+// then its size and clip the screen's), then the player's PreRender and
+// PostRender with it (the engine draws the world between them), which
 // hand it to its HUD, then the console's PostRender. What the scripts draw
 // is in hud().
 void ScriptLevel::renderHud(const HudView& view) {
@@ -83,16 +84,12 @@ void ScriptLevel::renderHud(const HudView& view) {
     vm_.callEvent(player_, "PreRender", {Value::objectValue(c)});
     vm_.callEvent(player_, "PostRender", {Value::objectValue(c)});
     // Then the console's (its messages; the UWindow menus while they're
-    // open), on the same canvas, its frame the screen.
+    // open), on the same canvas as the HUD left it (the engine doesn't
+    // reset it in between), its frame the screen.
     if (VmObject* con = console()) {
         for (const auto& [name, size] : {std::pair{"FrameX", view.width}, std::pair{"FrameY", view.height}})
             if (Value* p = prop(con, name))
                 *p = Value::floatValue(float(size));
-        vm_.callEvent(c, "Reset");
-        setFloat("ClipX", float(view.width));
-        setFloat("ClipY", float(view.height));
-        setFloat("OrgX", 0);
-        setFloat("OrgY", 0);
         hudFrame_ = view;
         vm_.callEvent(con, "PostRender", {Value::objectValue(c)});
     }
