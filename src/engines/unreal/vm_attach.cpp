@@ -859,17 +859,13 @@ void registerAttachNatives(Vm& vm) {
         c.vm.level->setIk(c.self, c.i(0), nullptr, &axes, c.f(3));
     });
     // InterpolateRotation(Rotator A, Rotator B, float Alpha): Alpha of the
-    // way from A to B, each of pitch, yaw and roll the shorter way round
-    // (the scripts ease the IK targets' and the head's turns with it).
+    // way from A to B, the shorter way round, as one even turn: Engine.dll
+    // slerps the two as quaternions (the scripts ease the IK targets', the
+    // head's and the camera's turns with it).
     reg("Actor.InterpolateRotation", [](NativeCall& c) {
         const auto a = Vm::rotatorOf(c.args[0]), b = Vm::rotatorOf(c.args[1]);
-        const float t = c.f(2);
-        ScriptLevel::Rot out{};
-        for (size_t k = 0; k < 3; ++k) {
-            const auto d = int32_t(int16_t(uint16_t(uint32_t(b[k] - a[k]) & 0xffff)));
-            out[k] = a[k] + int32_t(std::lround(float(d) * t));
-        }
-        c.result = c.vm.rotatorValue(out[0], out[1], out[2]);
+        const Rotator r = slerpRotators({a[0], a[1], a[2]}, {b[0], b[1], b[2]}, c.f(2));
+        c.result = c.vm.rotatorValue(r.pitch, r.yaw, r.roll);
     });
     reg("Actor.C3DClearIkTarget", [](NativeCall& c) {
         if (c.vm.level && c.self)

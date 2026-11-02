@@ -143,5 +143,10 @@ std::array<Vec3f, 3> rotationAxes(const Rotator& r);
 // The rotation whose axes (X forward, Y right, Z up) those are, as near as
 // they're square to each other.
 Rotator rotatorFromAxes(const std::array<Vec3f, 3>& axes);
+// A fraction t of the way from one rotation to another, the shorter way
+// round, turning evenly (a quaternion slerp, as The Fallen's engine eases
+// rotations: C3DInterpolateRotationX, used by Actor.InterpolateRotation
+// and the splines).
+Rotator slerpRotators(const Rotator& from, const Rotator& to, float t);
 
 } // namespace reluva::unreal

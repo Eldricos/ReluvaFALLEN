@@ -337,4 +337,66 @@ Rotator rotatorFromAxes(const std::array<Vec3f, 3>& a) {
     return {angle(std::asin(sp)), angle(std::atan2(a[0][1], a[0][0])), angle(std::atan2(-a[1][2], a[2][2]))};
 }
 
+namespace {
+
+using Quat = std::array<float, 4>; // x, y, z, w
+
+// The quaternion of a rotation whose matrix has these rows.
+Quat quatOf(const std::array<Vec3f, 3>& m) {
+    const float trace = m[0][0] + m[1][1] + m[2][2];
+    Quat q{};
+    if (trace > 0) {
+        const float s = std::sqrt(trace + 1) * 2;
+        q = {(m[1][2] - m[2][1]) / s, (m[2][0] - m[0][2]) / s, (m[0][1] - m[1][0]) / s, s / 4};
+    } else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) {
+        const float s = std::sqrt(1 + m[0][0] - m[1][1] - m[2][2]) * 2;
+        q = {s / 4, (m[0][1] + m[1][0]) / s, (m[2][0] + m[0][2]) / s, (m[1][2] - m[2][1]) / s};
+    } else if (m[1][1] > m[2][2]) {
+        const float s = std::sqrt(1 + m[1][1] - m[0][0] - m[2][2]) * 2;
+        q = {(m[0][1] + m[1][0]) / s, s / 4, (m[1][2] + m[2][1]) / s, (m[2][0] - m[0][2]) / s};
+    } else {
+        const float s = std::sqrt(1 + m[2][2] - m[0][0] - m[1][1]) * 2;
+        q = {(m[2][0] + m[0][2]) / s, (m[1][2] + m[2][1]) / s, s / 4, (m[0][1] - m[1][0]) / s};
+    }
+    return q;
+}
+
+std::array<Vec3f, 3> rowsOf(const Quat& q) {
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    return {Vec3f{1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w)},
+            Vec3f{2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w)},
+            Vec3f{2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y)}};
+}
+
+} // namespace
+
+Rotator slerpRotators(const Rotator& from, const Rotator& to, float t) {
+    const Quat a = quatOf(rotationAxes(from));
+    Quat b = quatOf(rotationAxes(to));
+    float cosine = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    if (cosine < 0) { // the shorter way round
+        for (float& v : b)
+            v = -v;
+        cosine = -cosine;
+    }
+    float wa = 1 - t, wb = t;
+    if (1 - cosine > 1e-6f) {
+        const float angle = std::acos(std::min(cosine, 1.0f));
+        const float sine = std::sin(angle);
+        wa = std::sin((1 - t) * angle) / sine;
+        wb = std::sin(t * angle) / sine;
+    }
+    Quat q{};
+    float length = 0;
+    for (size_t k = 0; k < 4; ++k) {
+        q[k] = wa * a[k] + wb * b[k];
+        length += q[k] * q[k];
+    }
+    length = std::sqrt(length);
+    if (length > 1e-6f)
+        for (float& v : q)
+            v /= length;
+    return rotatorFromAxes(rowsOf(q));
+}
+
 } // namespace reluva::unreal

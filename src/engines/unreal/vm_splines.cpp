@@ -4,11 +4,10 @@
 // The Fallen's splines (CTVE_Spline, and its camera directors and
 // animated movers): where along its chain a spline is at a time, which
 // its scripts ask of `GetSplineData` each tick to move the camera or an
-// actor. Reluva's reading of what UnrealEd saves with each node (its
-// start time, the time and length of the segment after it, its tangent,
-// the chain's average speeds), not The Fallen's code: see
-// docs/engines/unreal_vm.md.
+// actor. As Engine.dll's ACTVE_Spline::GetData and ComputeRotation do it
+// (read for what they do, written here anew): see docs/engines/unreal_vm.md.
 
+#include "engines/unreal/actors.h"
 #include "engines/unreal/vm_level.h"
 
 #include <algorithm>
@@ -19,105 +18,143 @@ namespace reluva::unreal {
 namespace {
 
 using Vec = std::array<float, 3>;
+using Rot = std::array<int32_t, 3>;
 
 constexpr float kPi = 3.14159265358979f;
-constexpr int kSamples = 16; // per segment, measuring its length
 enum Focus { kFocSpline, kFocDirection, kFocActor, kFocWorld, kFocOrient, kFocActorFollow };
 
 Vec add(const Vec& a, const Vec& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
 Vec sub(const Vec& a, const Vec& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
-Vec scale(const Vec& a, float s) { return {a[0] * s, a[1] * s, a[2] * s}; }
-float length(const Vec& a) { return std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]); }
 
-struct Node {
-    VmObject* obj = nullptr;
-    Vec location{}, tangent{};
-    std::array<int32_t, 3> rotation{};
-    float timeLine = 0, duration = 0, pause = 0, speed = 0;
-    bool linear = false;
-    int focus = kFocDirection;
-};
-
-class Spline {
+// A node's settings, as its properties (and its class's defaults) hold them.
+class Node {
 public:
-    explicit Spline(Vm& vm) : vm_(vm) {}
-
-    float f(VmObject* o, const char* name) {
-        const Value* v = o->find(vm_, name);
+    Node(Vm& vm, VmObject* o) : vm_(vm), obj(o) {}
+    float f(const char* name) const {
+        const Value* v = obj->find(vm_, name);
         return v ? v->asFloat() : 0;
     }
-    Node node(VmObject* o) {
-        Node n;
-        n.obj = o;
-        if (const Value* v = o->find(vm_, "Location"))
-            n.location = Vm::vectorOf(*v);
-        if (const Value* v = o->find(vm_, "Tangent"))
-            n.tangent = Vm::vectorOf(*v);
-        if (const Value* v = o->find(vm_, "Rotation"))
-            n.rotation = Vm::rotatorOf(*v);
-        n.timeLine = f(o, "TimeLine");
-        n.duration = f(o, "Duration");
-        n.pause = f(o, "Pause");
-        n.speed = f(o, "Speed");
-        if (const Value* v = o->find(vm_, "Interpolation"))
-            n.linear = v->asInt() == 1;
-        if (const Value* v = o->find(vm_, "Focus"))
-            n.focus = v->asInt();
-        return n;
+    int i(const char* name) const {
+        const Value* v = obj->find(vm_, name);
+        return v ? v->asInt() : 0;
     }
-    VmObject* next(VmObject* o) {
-        const Value* v = o->find(vm_, "Next");
+    bool b(const char* name) const {
+        const Value* v = obj->find(vm_, name);
+        return v && v->asBool();
+    }
+    Vec vec(const char* name) const {
+        const Value* v = obj->find(vm_, name);
+        return v ? Vm::vectorOf(*v) : Vec{};
+    }
+    Rot rot(const char* name) const {
+        const Value* v = obj->find(vm_, name);
+        return v ? Vm::rotatorOf(*v) : Rot{};
+    }
+    VmObject* next() const {
+        const Value* v = obj->find(vm_, "Next");
         return v ? v->asObject() : nullptr;
     }
 
-private:
     Vm& vm_;
+    VmObject* obj;
 };
 
-// A point on the segment from a to b, `u` 0-1: a cubic through the two
-// nodes leaving and arriving along their tangents, or a straight line.
-Vec curve(const Node& a, const Node& b, float u) {
-    if (a.linear)
-        return add(a.location, scale(sub(b.location, a.location), u));
-    const float u2 = u * u, u3 = u2 * u;
-    const float h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
+// The cubic from p0 to p1 leaving and arriving along t0 and t1, or with
+// Interpolation linear the straight line: `u` 0-1 of the way.
+Vec hermite(bool linear, float u, const Vec& p0, const Vec& p1, const Vec& t0, const Vec& t1) {
     Vec p{};
-    for (int k = 0; k < 3; ++k)
-        p[k] = h00 * a.location[k] + h10 * a.tangent[k] + h01 * b.location[k] + h11 * b.tangent[k];
-    return p;
-}
-
-// The curve's parameter a fraction `s` of the way along it by length.
-float byLength(const Node& a, const Node& b, float s) {
-    if (a.linear || s <= 0 || s >= 1)
-        return std::clamp(s, 0.0f, 1.0f);
-    std::array<float, kSamples + 1> run{};
-    Vec prev = a.location;
-    for (int k = 1; k <= kSamples; ++k) {
-        const Vec p = curve(a, b, float(k) / kSamples);
-        run[size_t(k)] = run[size_t(k - 1)] + length(sub(p, prev));
-        prev = p;
+    if (linear) {
+        for (int k = 0; k < 3; ++k)
+            p[k] = p0[k] + (p1[k] - p0[k]) * u;
+        return p;
     }
-    const float want = s * run[kSamples];
-    for (int k = 1; k <= kSamples; ++k)
-        if (run[size_t(k)] >= want) {
-            const float span = run[size_t(k)] - run[size_t(k - 1)];
-            const float t = span > 0 ? (want - run[size_t(k - 1)]) / span : 0;
-            return (float(k - 1) + t) / kSamples;
-        }
-    return 1;
+    const float u2 = u * u, u3 = u2 * u;
+    const float h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = 3 * u2 - 2 * u3, h11 = u3 - u2;
+    for (int k = 0; k < 3; ++k)
+        p[k] = h00 * p0[k] + h01 * p1[k] + h10 * t0[k] + h11 * t1[k];
+    return p;
 }
 
 int32_t angleOf(float radians) { return int32_t(std::lround(radians * 32768.0f / kPi)); }
 
-std::array<int32_t, 3> facing(const Vec& d) {
+// The way a vector points (FVector::Rotation): yaw and pitch, no roll.
+Rot facing(const Vec& d) {
     return {angleOf(std::atan2(d[2], std::sqrt(d[0] * d[0] + d[1] * d[1]))), angleOf(std::atan2(d[1], d[0])), 0};
 }
 
-// From one angle toward another the shorter way round.
-int32_t turn(int32_t from, int32_t to, float u) {
-    const int32_t diff = int32_t(int16_t(uint16_t((to - from) & 0xffff)));
-    return from + int32_t(std::lround(float(diff) * u));
+// v turned by r: a local offset into the world.
+Vec turned(const Vec& v, const Rot& r) {
+    const auto axes = rotationAxes({r[0], r[1], r[2]});
+    Vec out{};
+    for (int k = 0; k < 3; ++k)
+        for (int j = 0; j < 3; ++j)
+            out[size_t(k)] += v[size_t(j)] * axes[size_t(j)][size_t(k)];
+    return out;
+}
+
+// The node's focal actor: the one it found before if that's still tagged
+// FocusActorTag, else the first actor so tagged (kept in FocalActor).
+VmObject* focalActor(const Node& n) {
+    Vm& vm = n.vm_;
+    Value* kept = n.obj->find(vm, "FocalActor");
+    VmObject* focal = kept ? kept->asObject() : nullptr;
+    const int tag = n.i("FocusActorTag");
+    auto tagOf = [&](VmObject* o) {
+        const Value* t = o ? o->find(vm, "Tag") : nullptr;
+        return t ? t->asInt() : -1;
+    };
+    if (focal && tagOf(focal) == tag)
+        return focal;
+    if (vm.level)
+        for (VmObject* o : vm.level->actors())
+            if (o && tagOf(o) == tag) {
+                if (kept)
+                    *kept = Value::objectValue(o);
+                return o;
+            }
+    return focal;
+}
+
+// Which way a node faces `alpha` of the way along its segment, at `pos`
+// (ComputeRotation), by its Focus; then rolled by RollDegrees, changing
+// evenly to the next node's.
+Rot nodeFacing(const Node& n, float alpha, const Vec& pos) {
+    Vm& vm = n.vm_;
+    VmObject* nextObj = n.next();
+    int roll = 0;
+    Rot r{};
+    bool done = true;
+    switch (n.i("Focus")) {
+    case kFocDirection:
+        r = n.rot("Rotation");
+        roll = r[2];
+        break;
+    case kFocWorld: r = facing(sub(n.vec("FocusOffset"), pos)); break;
+    case kFocOrient: r = facing(n.vec("FocusOffset")); break;
+    case kFocActor:
+    case kFocActorFollow:
+        if (VmObject* focal = focalActor(n)) {
+            const Node a(vm, focal);
+            const Vec target = add(add(a.vec("Location"), turned(n.vec("FocusOffset"), a.rot("Rotation"))), a.vec("PrePivot"));
+            r = facing(sub(target, pos));
+        } else {
+            done = false;
+        }
+        break;
+    default: done = false; break;
+    }
+    if (!done) {
+        // Along the curve: towards a point a hundredth further on (or from
+        // one a hundredth back, past halfway).
+        const Node next(vm, nextObj ? nextObj : n.obj);
+        const Vec p0 = n.vec("Location"), p1 = next.vec("Location"), t0 = n.vec("Tangent"), t1 = next.vec("Tangent");
+        const bool linear = n.i("Interpolation") == 1;
+        r = alpha < 0.5f ? facing(sub(hermite(linear, alpha + 0.01f, p0, p1, t0, t1), pos))
+                         : facing(sub(pos, hermite(linear, alpha - 0.01f, p0, p1, t0, t1)));
+    }
+    const float degrees = n.f("RollDegrees") + (nextObj ? (Node(vm, nextObj).f("RollDegrees") - n.f("RollDegrees")) : 0) * alpha;
+    r[2] = int32_t(float(roll) + degrees * 182.044f);
+    return r;
 }
 
 } // namespace
@@ -128,124 +165,85 @@ void registerSplineNatives(Vm& vm) {
         if (!c.self)
             return;
         Vm& vm = c.vm;
-        Spline sp(vm);
-        // The chain from this node (its head), until it ends or comes back round.
-        std::vector<Node> chain{sp.node(c.self)};
-        bool loops = false;
-        for (VmObject* o = sp.next(c.self); o && chain.size() < 1000; o = sp.next(o)) {
-            if (o == c.self) {
-                loops = true;
-                break;
+        const Node head(vm, c.self);
+
+        // The segment: count off each node's Duration from the head,
+        // following Next (round again on a closed chain), until the time
+        // falls within one or the chain ends. Each node waits its Pause
+        // first; the rest of its Duration is the travel.
+        VmObject* seg = c.self;
+        float alpha = 0;
+        if (head.next()) {
+            float t = c.args[0].asFloat();
+            for (int guard = 0; guard < 100000; ++guard) {
+                const Node n(vm, seg);
+                if (t - n.f("Duration") <= 0 || !n.next())
+                    break;
+                t -= n.f("Duration");
+                seg = n.next();
             }
-            const Value* head = o->find(vm, "bHeadOfChain");
-            if (head && head->asBool())
-                break;
-            chain.push_back(sp.node(o));
-        }
-        const float maxTime = sp.f(c.self, "MaxTime");
-        const float t = std::max(0.0f, c.args[0].asFloat());
-        size_t i = 0;
-        while (i + 1 < chain.size() && chain[i + 1].timeLine <= t)
-            ++i;
-        const bool last = i + 1 >= chain.size();
-        const Node& a = chain[i];
-        const Node* b = last ? (loops && chain.size() > 1 ? &chain[0] : nullptr) : &chain[i + 1];
-
-        // How far along the segment: each node first waits its pause,
-        // then travels, its speed changing evenly from the node's to the
-        // next's (UnrealEd's average speed, saved, is their mean). The
-        // saved duration counts the pause too: CM10_SWK_L3's Sisko waits
-        // 8 seconds at a node whose duration is 10.1, its 178 units at
-        // speed 85 the other 2.1.
-        float s = 0;
-        if (b) {
-            const float end = last ? maxTime : b->timeLine;
-            const float span = std::max(0.0f, end - a.timeLine);
-            const float travel = a.duration > 0 ? std::clamp(a.duration - a.pause, 0.0f, span)
-                                                : std::max(0.0f, span - a.pause);
-            const float wait = span - travel;
-            const float tau = travel > 0 ? std::clamp((t - a.timeLine - wait) / travel, 0.0f, 1.0f) : 1.0f;
-            const float v0 = a.speed, v1 = b->speed;
-            s = v0 + v1 > 0 ? (v0 * tau + (v1 - v0) * tau * tau / 2) / ((v0 + v1) / 2) : tau;
-            s = std::clamp(s, 0.0f, 1.0f);
-        }
-        const float u = b ? byLength(a, *b, s) : 0;
-        const Vec pos = b ? curve(a, *b, u) : a.location;
-
-        // Facing, by the segment's focus.
-        std::array<int32_t, 3> rot = a.rotation;
-        auto alongCurve = [&] {
-            if (!b)
-                return a.rotation;
-            const float e = 0.01f;
-            const Vec d = sub(curve(a, *b, std::min(1.0f, u + e)), curve(a, *b, std::max(0.0f, u - e)));
-            return length(d) > 1e-4f ? facing(d) : a.rotation;
-        };
-        auto between = [&] {
-            if (!b)
-                return a.rotation;
-            return std::array<int32_t, 3>{turn(a.rotation[0], b->rotation[0], s), turn(a.rotation[1], b->rotation[1], s),
-                                          turn(a.rotation[2], b->rotation[2], s)};
-        };
-        VmObject* focal = nullptr;
-        if (const Value* v = a.obj->find(vm, "FocalActor"))
-            focal = v->asObject();
-        switch (a.focus) {
-        case kFocSpline:
-        case kFocOrient:
-            rot = alongCurve();
-            break;
-        case kFocActor:
-        case kFocActorFollow: {
-            // The actor tagged FocusActorTag, found once.
-            const Value* tag = a.obj->find(vm, "FocusActorTag");
-            if (!focal && tag && tag->asInt() != vm.name("None") && vm.level)
-                for (VmObject* o : vm.level->actors()) {
-                    const Value* ot = o ? o->find(vm, "Tag") : nullptr;
-                    if (ot && ot->i == tag->i) {
-                        focal = o;
-                        if (Value* fv = a.obj->find(vm, "FocalActor"))
-                            *fv = Value::objectValue(o);
-                        break;
-                    }
+            const Node n(vm, seg);
+            const float travel = n.f("Duration") - n.f("Pause");
+            t -= n.f("Pause");
+            if (t > 0 && n.next()) {
+                const float v0 = n.f("Speed"), v1 = Node(vm, n.next()).f("Speed");
+                const float ave = n.f("AveSpeed"), length = n.f("Length");
+                if (ave != 0 && ave != v0 && length != 0) {
+                    // The speed changing evenly from this node's to the
+                    // next's (AveSpeed, saved, is Length / the travel time),
+                    // ExtraDuration stretching it out.
+                    const float dist = v0 * t + (v1 - v0) * ave * t * t * 0.5f / length;
+                    alpha = dist * (t / (t + dist / length * n.f("ExtraDuration"))) / length;
+                } else {
+                    alpha = travel != 0 ? t / travel : 1;
                 }
-            if (focal) {
-                Vec target = Vm::vectorOf(*focal->find(vm, "Location"));
-                if (const Value* pp = focal->find(vm, "PrePivot"))
-                    target = add(target, Vm::vectorOf(*pp));
-                if (const Value* off = a.obj->find(vm, "FocusOffset")) {
-                    // The offset turns with the actor (as the scripts' own `>>` does).
-                    const Vec o = Vm::vectorOf(*off);
-                    const float yaw = float(Vm::rotatorOf(*focal->find(vm, "Rotation"))[1]) * kPi / 32768.0f;
-                    target = add(target, {o[0] * std::cos(yaw) - o[1] * std::sin(yaw), o[0] * std::sin(yaw) + o[1] * std::cos(yaw), o[2]});
-                }
-                const Vec d = sub(target, pos);
-                rot = length(d) > 1e-4f ? facing(d) : between();
+                alpha = std::clamp(alpha, 0.0f, 1.0f);
+            }
+        }
+
+        const Node n(vm, seg);
+        VmObject* nextObj = n.next();
+        Vec pos{};
+        if (n.i("Focus") == kFocActorFollow) {
+            // Following an actor: at it, offset by FocusOffset turned with
+            // it, and FocusFollowOffset (turned too with bFocusFollowLocal).
+            if (VmObject* focal = focalActor(n)) {
+                const Node a(vm, focal);
+                const Rot ar = a.rot("Rotation");
+                const Vec follow = n.b("bFocusFollowLocal") ? turned(n.vec("FocusFollowOffset"), ar) : n.vec("FocusFollowOffset");
+                pos = add(add(a.vec("Location"), turned(n.vec("FocusOffset"), ar)), follow);
             } else {
-                rot = between();
+                pos = n.vec("Location");
             }
-            break;
+        } else {
+            const Node next(vm, nextObj ? nextObj : seg);
+            pos = hermite(n.i("Interpolation") == 1, alpha, n.vec("Location"), next.vec("Location"), n.vec("Tangent"),
+                          next.vec("Tangent"));
         }
-        case kFocWorld:
-            if (const Value* off = a.obj->find(vm, "FocusOffset")) {
-                const Vec d = sub(Vm::vectorOf(*off), pos);
-                rot = length(d) > 1e-4f ? facing(d) : between();
-            }
-            break;
-        default: // kFocDirection: the way each node points, turning from one to the next
-            rot = between();
-            break;
-        }
-        if (const Value* local = a.obj->find(vm, "LocalRotation")) {
-            const auto l = Vm::rotatorOf(*local);
-            for (int k = 0; k < 3; ++k)
-                rot[size_t(k)] += l[size_t(k)];
-        }
-        const float roll = sp.f(a.obj, "RollDegrees") + (b ? (sp.f(b->obj, "RollDegrees") - sp.f(a.obj, "RollDegrees")) * s : 0);
-        rot[2] += int32_t(std::lround(roll * 65536.0f / 360.0f));
 
-        c.args[1] = Value::floatValue(s);
-        c.args[2] = Value::objectValue(a.obj);
+        Rot rot = nodeFacing(n, alpha, pos);
+        // Turning smoothly into the next node's facing when it asks
+        // (bSmoothRotate), unless both look along the curve or at the same
+        // actor.
+        if (nextObj) {
+            const Node next(vm, nextObj);
+            const int fa = n.i("Focus"), fb = next.i("Focus");
+            const bool sameActor = fa == kFocActor && fb == kFocActor &&
+                                   n.obj->find(vm, "FocalActor") && next.obj->find(vm, "FocalActor") &&
+                                   n.obj->find(vm, "FocalActor")->asObject() == next.obj->find(vm, "FocalActor")->asObject();
+            if (next.b("bSmoothRotate") && !sameActor && !(fa == kFocSpline && fb == kFocSpline)) {
+                const Rot to = nodeFacing(next, 0, next.vec("Location"));
+                const Rotator r = slerpRotators({rot[0], rot[1], rot[2]}, {to[0], to[1], to[2]}, alpha);
+                rot = {r.pitch, r.yaw, r.roll};
+            }
+        }
+        // The head's LocalRotation on top.
+        const Rot local = head.rot("LocalRotation");
+        for (size_t k = 0; k < 3; ++k)
+            rot[k] += local[k];
+
+        c.args[1] = Value::floatValue(alpha);
+        c.args[2] = Value::objectValue(seg);
         c.args[3] = vm.vectorValue(pos[0], pos[1], pos[2]);
         c.args[4] = vm.rotatorValue(rot[0], rot[1], rot[2]);
     });

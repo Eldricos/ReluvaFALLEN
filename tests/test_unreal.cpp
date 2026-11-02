@@ -1686,6 +1686,16 @@ static void testRotatorFromAxes() {
         const Rotator back = rotatorFromAxes(rotationAxes(r));
         CHECK(std::abs(back.pitch - r.pitch) <= 2 && std::abs(back.yaw - r.yaw) <= 2 && std::abs(back.roll - r.roll) <= 2);
     }
+    // Slerped: the ends, halfway round a quarter turn, and the shorter way
+    // across the 0/65536 seam.
+    const Rotator a{1000, 2000, 3000}, b{-2000, 12000, 0};
+    const Rotator s0 = slerpRotators(a, b, 0), s1 = slerpRotators(a, b, 1);
+    CHECK(std::abs(s0.pitch - a.pitch) <= 2 && std::abs(s0.yaw - a.yaw) <= 2 && std::abs(s0.roll - a.roll) <= 2);
+    CHECK(std::abs(s1.pitch - b.pitch) <= 2 && std::abs(s1.yaw - b.yaw) <= 2 && std::abs(s1.roll - b.roll) <= 2);
+    const Rotator half = slerpRotators({0, 0, 0}, {0, 16384, 0}, 0.5f);
+    CHECK(half.pitch == 0 && std::abs(half.yaw - 8192) <= 2 && half.roll == 0);
+    const Rotator seam = slerpRotators({0, 64536, 0}, {0, 1000, 0}, 0.5f);
+    CHECK(std::abs(seam.yaw) <= 2 || std::abs(seam.yaw - 65536) <= 2);
 }
 
 int main() {
