@@ -1864,17 +1864,22 @@ void registerMovementNatives(Vm& vm) {
     // CheckFOV(Vector Pos, Rotator Rot, Actor Target, float Radius, float CosFOV,
     // out Vector BestHitLocation, optional bool bCheckExtents, optional bool
     // bCalcVisible, optional float LocationZAdjust, optional float HeightAdjust):
-    // how much of Target is seen from Pos looking along Rot. Reluva's reading
-    // of how the scripts use it (thresholds of 0, 0.1, 0.5 and 0.99; a head's
-    // weight for whom to look at multiplied by it):
-    // - 0 if its middle (Location raised by LocationZAdjust) is beyond Radius
-    //   or outside the cone CosFOV is the cosine of;
-    // - the points looked for are its middle and, with bCheckExtents or
-    //   bCalcVisible, its top, bottom and sides (its collision cylinder, its
-    //   height by HeightAdjust more), each seen if nothing in the world is in
-    //   the way;
-    // - with bCalcVisible, the share of them seen; else 1 if any is;
-    // - BestHitLocation the first seen (the middle first), where a turret aims.
+    // how much of Target is seen from Pos looking along Rot, as Engine.dll's
+    // (read for what it does). Its middle is its Location raised by
+    // LocationZAdjust; H its CollisionHeight + HeightAdjust.
+    // - 0 unless the middle is closer than Radius and within the cone
+    //   (the cosine of the angle off Rot's forward axis over CosFOV).
+    // - A point is seen if a line to it (through the world, movers and
+    //   actors, not this one) first meets Target itself.
+    // - Without bCalcVisible, or with H 10 or less and no bCheckExtents,
+    //   the middle first: seen, 1. Else, without bCalcVisible only if H >
+    //   10 or bCheckExtents, the grid below, 1 at the first point seen.
+    // - The grid: rows at +0.9 H and -0.9 H (if H > 10, else the middle's
+    //   height); with bCheckExtents two points a row, 0.9 CollisionRadius
+    //   either side across Rot's forward axis (level, not normalised; the
+    //   lower row a step further over, as the original's loop leaves it).
+    //   With bCalcVisible, the share of its points seen.
+    // - BestHitLocation the first point seen; untouched if none.
     reg("Actor.CheckFOV", [](NativeCall& c) {
         c.result = Value::floatValue(0);
         VmObject* target = c.o(2);
@@ -1883,48 +1888,71 @@ void registerMovementNatives(Vm& vm) {
         using V = std::array<float, 3>;
         const V from = Vm::vectorOf(c.args[0]);
         const auto r = Vm::rotatorOf(c.args[1]);
-        const auto axes = rotationAxes({r[0], r[1], r[2]});
+        const V fwd = rotationAxes({r[0], r[1], r[2]})[0];
         const float radius = c.f(3), cosFov = c.f(4);
         const bool extents = c.b(6), share = c.b(7);
-        const float zAdjust = c.f(8), heightAdjust = c.f(9);
         const Value* loc = target->find(c.vm, "Location");
         if (!loc)
             return;
-        V middle = Vm::vectorOf(*loc);
-        middle[2] += zAdjust;
-        c.args[5] = c.vm.vectorValue(middle[0], middle[1], middle[2]);
-        const V to{middle[0] - from[0], middle[1] - from[1], middle[2] - from[2]};
+        V test = Vm::vectorOf(*loc);
+        test[2] += c.f(8);
+        const Value* hv = target->find(c.vm, "CollisionHeight");
+        const float h = c.f(9) + (hv ? hv->asFloat() : 0);
+        const V to{test[0] - from[0], test[1] - from[1], test[2] - from[2]};
         const float distance = std::sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]);
-        if (distance > radius)
+        if (!(distance < radius) || distance <= 0)
             return;
-        if (distance > 1e-3f &&
-            (to[0] * axes[0][0] + to[1] * axes[0][1] + to[2] * axes[0][2]) / distance < cosFov)
+        if (!((to[0] * fwd[0] + to[1] * fwd[1] + to[2] * fwd[2]) / distance > cosFov))
             return;
-        std::vector<V> points{middle};
-        if (extents || share) {
-            const Value* h = target->find(c.vm, "CollisionHeight");
-            const Value* rad = target->find(c.vm, "CollisionRadius");
-            const float up = 0.9f * ((h ? h->asFloat() : 0) + heightAdjust), side = 0.9f * (rad ? rad->asFloat() : 0);
-            // Across the line of sight, level.
-            V across{-to[1], to[0], 0};
-            const float l = std::sqrt(across[0] * across[0] + across[1] * across[1]);
-            across = l > 1e-3f ? V{across[0] / l, across[1] / l, 0} : V{0, 1, 0};
-            points.push_back({middle[0], middle[1], middle[2] + up});
-            points.push_back({middle[0], middle[1], middle[2] - up});
-            points.push_back({middle[0] + across[0] * side, middle[1] + across[1] * side, middle[2]});
-            points.push_back({middle[0] - across[0] * side, middle[1] - across[1] * side, middle[2]});
-        }
-        int seen = 0;
-        for (const V& p : points) {
+        auto seen = [&](const V& p) {
             V where{}, n{};
-            if (c.vm.level->trace(c.self, from, p, {}, false, where, n))
-                continue;
-            if (seen++ == 0)
-                c.args[5] = c.vm.vectorValue(p[0], p[1], p[2]);
-            if (!share)
-                break;
+            return c.vm.level->trace(c.self, from, p, {}, true, where, n) == target;
+        };
+        if (!share || (h <= 10 && !extents)) {
+            if (seen(test)) {
+                c.args[5] = c.vm.vectorValue(test[0], test[1], test[2]);
+                c.result = Value::floatValue(1);
+                return;
+            }
+            if (!(h > 10 || extents))
+                return;
         }
-        c.result = Value::floatValue(share ? float(seen) / float(points.size()) : seen > 0 ? 1.0f : 0.0f);
+        int rows = 1, across = 1;
+        float zStep = 0;
+        V step{};
+        if (h > 10) {
+            const float s = h * 0.9f;
+            rows = 2;
+            test[2] += s;
+            zStep = 2 * s;
+        }
+        if (extents) {
+            const Value* rv = target->find(c.vm, "CollisionRadius");
+            const float rad = rv ? rv->asFloat() : 0;
+            const V side{fwd[1] * rad * 0.9f, -fwd[0] * rad * 0.9f, 0};
+            across = 2;
+            test = {test[0] + side[0], test[1] + side[1], test[2]};
+            step = {side[0] * 2, side[1] * 2, 0};
+        }
+        float result = 0;
+        bool first = true;
+        for (int row = 0; row < rows; ++row) {
+            for (int k = 0; k < across; ++k) {
+                if (seen(test)) {
+                    if (first)
+                        c.args[5] = c.vm.vectorValue(test[0], test[1], test[2]);
+                    first = false;
+                    if (!share) {
+                        c.result = Value::floatValue(1);
+                        return;
+                    }
+                    result += 1.0f / float(rows * across);
+                }
+                test = {test[0] - step[0], test[1] - step[1], test[2]};
+            }
+            test = {test[0] + step[0], test[1] + step[1], test[2] - zStep};
+        }
+        c.result = Value::floatValue(result);
     });
     reg("Actor.PointCheck", [](NativeCall& c) { // true if there's room there
         const std::array<float, 3> extent = c.given.size() > 1 && c.given[1] ? Vm::vectorOf(c.args[1]) : std::array<float, 3>{};

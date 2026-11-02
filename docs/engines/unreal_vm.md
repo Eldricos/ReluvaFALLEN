@@ -1419,21 +1419,32 @@ Faces are channels:
   bCheckExtents, bCalcVisible, LocationZAdjust, HeightAdjust)` says how
   much of `Target` is seen from `Pos` looking along `Rot`. The AI's sight
   uses it, and so do the turrets, the player's auto-aim and the heads.
-  How it works is Reluva's reading of how the scripts use it: they
-  compare the result against 0, 0.1, 0.3, 0.5 and 0.99, and the heads
-  multiply a weight by it.
-  - It returns 0 when the target's middle is beyond `Radius` or outside
-    the cone `CosFOV` is the cosine of. The middle is its Location raised
-    by `LocationZAdjust`; the heads pass the head's height.
-  - The points it looks for are the middle, and with either flag also
-    the top, bottom and sides of the target's collision cylinder, whose
-    height is grown by `HeightAdjust`. A point is seen if nothing in the
-    world is in the way (as `FastTrace`).
-  - With `bCalcVisible`, it returns the share of the points seen.
-    Otherwise it returns 1 if any is seen, which is why the turrets'
-    check for more than 0.99 can pass with `bCheckExtents`.
-  - `BestHitLocation` is the first point seen, the middle first. The
-    turrets aim there.
+  It works as Engine.dll's does. The scripts compare the result against
+  0, 0.1, 0.3, 0.5 and 0.99, and the heads multiply a weight by it.
+  - **The target's middle** is its Location raised by `LocationZAdjust`
+    (the heads pass the head's height). H is its `CollisionHeight` +
+    `HeightAdjust`.
+  - **It returns 0** unless the middle is closer than `Radius` and the
+    cosine of its angle off `Rot`'s forward axis is over `CosFOV`.
+  - **A point is seen** if a line to it (through the world, movers and
+    actors, but not the looker) meets `Target` first. So another pawn in
+    the way hides it too.
+  - **Without `bCalcVisible`** (or with H 10 or less and no
+    `bCheckExtents`), the middle is tried first: seen gives 1. If it
+    isn't, and H > 10 or `bCheckExtents`, the grid below is tried, and 1
+    comes at the first point seen.
+  - **The grid:**
+    - two rows at ±0.9 H if H > 10, else one at the middle's height;
+    - with `bCheckExtents`, two points a row, 0.9 × `CollisionRadius`
+      either side, across `Rot`'s forward axis (level, and shorter the
+      steeper the look);
+    - the lower row is a step further over, as the original's loop leaves
+      it.
+    
+    With `bCalcVisible` it returns the share of the grid's points seen
+    (quarters or halves; the middle isn't one of them).
+  - **`BestHitLocation`** is the first point seen. The turrets aim there.
+    If none is seen it's left as it was.
 - `C3DUsesC3DMesh` says whether the mesh is in The Fallen's own layout
   (its imported-model block), and `C3DIsBoned` whether it's built on
   bones. `Pawn` sets its face's channels up only if the first is true.
