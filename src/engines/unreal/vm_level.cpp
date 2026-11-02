@@ -902,10 +902,8 @@ void registerEngineNatives(Vm& vm) {
         if (c.vm.level && c.self)
             c.vm.level->makeNoise(c.self, c.f(0));
     });
-    // Not heard: a demo's sounds, a dummy sound. Sounds themselves are
-    // vm_sound.cpp's.
-    for (const char* quiet : {"Actor.DemoPlaySound", "Actor.PlayDummySound"})
-        reg(quiet, [](NativeCall&) {});
+    // Not heard: a demo's sounds. Sounds themselves are vm_sound.cpp's.
+    reg("Actor.DemoPlaySound", [](NativeCall&) {});
     reg("Actor.GetRegion", [](NativeCall& c) { // GetRegion(Vector Point, out PointRegion Region)
         if (c.vm.level)
             c.args[1] = c.vm.level->regionAt(Vm::vectorOf(c.args[0]));

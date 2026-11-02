@@ -406,8 +406,13 @@ public:
         ObjectRef sound;
         int slot = 0;              // ESoundSlot: 0 none, 5 talk...; one sound a slot an actor
         float volume = 1, radius = 0, pitch = 1;
-        bool noOverride = false;   // not played over one already in its slot
-        bool speech = false;       // a voice, at the speech volume
+        bool noOverride = false;   // nothing may play over it in its slot
+        bool speech = false;       // a voice (its name has DIALOG): at the speech volume
+        bool loop = false;         // its name has LOOPING
+        // The actor's sound filter when played (LowPass, HighPass: a
+        // filtered sound is mixed flat, and walls in the way quieten it by
+        // its ObstructionFactor).
+        float lowPass = 0, highPass = 0, obstruction = 0;
     };
     std::vector<SoundRequest>& soundRequests() { return soundRequests_; }
     // The music is the streamed sound the player's CurrentMusic names. One
@@ -541,6 +546,14 @@ public:
     void litActors(std::vector<LitActor>& out);
     // A noise the AI may hear (MakeNoise; weapons' and projectiles' sounds).
     void makeNoise(VmObject* maker, float loudness);
+    // A sound played as a noise the AI hears (PlaySound, PlayDummySound).
+    void soundNoise(VmObject* maker, float radius);
+    // Whether the player hears a sound played by `source` as far as
+    // `radius` (CheckHearSound), its volume lowered through walls.
+    bool hearsSound(VmObject* source, float radius, float& volume);
+    // Where the player hears from: its view target, else its camera.
+    bool listenerAt(Vec& at);
+    static std::string soundName(VmObject* sound);
     struct NoiseStats {
         int made = 0, heard = 0;
     } noise;

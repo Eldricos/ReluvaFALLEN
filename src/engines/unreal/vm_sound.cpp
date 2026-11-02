@@ -62,20 +62,131 @@ bool ScriptLevel::streamedSound(VmObject* sound) {
     return it->second;
 }
 
+// The sound's name (its object's, with its group's), upper case.
+std::string ScriptLevel::soundName(VmObject* sound) {
+    if (!sound || !sound->package || sound->exportIndex < 0)
+        return {};
+    std::string n = sound->package->path(sound->exportIndex + 1);
+    for (char& ch : n)
+        ch = char(std::toupper(static_cast<unsigned char>(ch)));
+    return n;
+}
+
+bool ScriptLevel::listenerAt(Vec& at) {
+    if (!player_ || player_->deleted)
+        return false;
+    VmObject* from = player_;
+    if (const Value* v = prop(player_, "ViewTarget"); v && v->asObject() && !v->asObject()->deleted)
+        from = v->asObject();
+    else if (const Value* c = prop(player_, "Camera"); c && c->asObject() && !c->asObject()->deleted)
+        from = c->asObject();
+    const Value* l = prop(from, "Location");
+    if (!l)
+        return false;
+    at = Vm::vectorOf(*l);
+    return true;
+}
+
+// CheckHearSound: within Radius / sqrt(1.3) of where the player hears from.
+// Through the level's walls (unless from a SpecialEvent or Keypoint) it's
+// at 0.35 of its volume, and, unless the player set it off, heard only
+// within sqrt(0.6) of that.
+bool ScriptLevel::hearsSound(VmObject* source, float radius, float& volume) {
+    Vec ear{};
+    const Value* l = prop(source, "Location");
+    if (!l || !listenerAt(ear))
+        return true; // no one listening: kept for the page to place
+    const Vec at = Vm::vectorOf(*l);
+    const float dx = at[0] - ear[0], dy = at[1] - ear[1], dz = at[2] - ear[2];
+    const float d2 = dx * dx + dy * dy + dz * dz;
+    float r2 = radius * radius / 1.3f;
+    if (d2 >= r2)
+        return false;
+    if (!vm_.isA(source, "SpecialEvent") && !vm_.isA(source, "Keypoint") && worldBetween(ear, at)) {
+        volume *= 0.35f;
+        const Value* i = prop(source, "Instigator");
+        if (!i || i->asObject() != player_) {
+            r2 *= 0.6f;
+            if (d2 >= r2)
+                return false;
+        }
+    }
+    return true;
+}
+
+// A sound as a noise (PlaySound unless bNoHearNoise, PlayDummySound): to
+// each pawn that isn't a player, the sound's actor or its owner, when the
+// actor has an owner and it or its owner is a player, a weapon or a
+// projectile. Heard at 1 - (distance / Radius)^2, less 0.65 through walls,
+// if that's above 0 and above 1 - HearingThreshold. A CTVE_Pawn whose
+// enemy isn't the actor first has its DLG_Command set to FHE.
+void ScriptLevel::soundNoise(VmObject* maker, float radius) {
+    if (!maker || maker->deleted || radius <= 0)
+        return;
+    const Value* ownerValue = prop(maker, "Owner");
+    VmObject* owner = ownerValue ? ownerValue->asObject() : nullptr;
+    if (!owner)
+        return;
+    auto loud = [&](VmObject* a) {
+        return a && (vm_.isA(a, "PlayerPawn") || vm_.isA(a, "Weapon") || vm_.isA(a, "Projectile"));
+    };
+    if (!loud(maker) && !loud(owner))
+        return;
+    const Value* at = prop(maker, "Location");
+    if (!at)
+        return;
+    const Vec from = Vm::vectorOf(*at);
+    const NameId hear = vm_.name("HearNoise");
+    ++noise.made;
+    const std::vector<VmObject*> now = actors_;
+    for (VmObject* p : now) {
+        if (p == maker || p == owner || p->deleted || !vm_.isA(p, "Pawn"))
+            continue;
+        if (const Value* b = prop(p, "bIsPlayer"); b && b->asBool())
+            continue;
+        if (p->disabled.count(hear) || !vm_.findFunction(p, hear))
+            continue;
+        const Value* loc = prop(p, "Location");
+        if (!loc)
+            continue;
+        const Vec to = Vm::vectorOf(*loc);
+        const float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
+        float ratio = (dx * dx + dy * dy + dz * dz) / (radius * radius);
+        const Value* threshold = prop(p, "HearingThreshold");
+        if (ratio >= 1 || ratio >= (threshold ? threshold->asFloat() : 1))
+            continue;
+        if (worldBetween(from, to)) {
+            ratio += 0.65f;
+            if (ratio >= 1)
+                continue;
+        }
+        if (vm_.isA(p, "CTVE_Pawn")) {
+            const Value* e = prop(p, "Enemy");
+            if (!e || e->asObject() != maker)
+                if (Value* c = prop(p, "DLG_Command"))
+                    *c = Value::stringValue("FHE");
+        }
+        ++noise.heard;
+        vm_.callEvent(p, "HearNoise", {Value::floatValue(1 - ratio), Value::objectValue(maker)});
+    }
+}
+
 void registerSoundNatives(Vm& vm) {
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     // PlaySound(Sound, optional ESoundSlot Slot, optional float Volume,
     // optional bool bNoOverride, optional float Radius, optional float
-    // Pitch, optional bool bNoHearNoise): heard from the actor, as far as
-    // Radius. Left out: Volume and Pitch are the actor's TransientSound
-    // ones, Radius its TransientSoundRadius, else 25 x (SoundRadius + 1).
-    // A streamed sound is music: the player's CurrentMusic, started where
-    // the HUD's StartTimeOffset says (a music trigger sets it around the
-    // call). PlayOwnedSound is the same, for the one player.
-    auto play = [](NativeCall& c) {
+    // Pitch, optional bool bNoHearNoise), as Engine.dll's: the slot
+    // SLOT_Misc if left out; Volume and Pitch the actor's TransientSound
+    // ones, Radius its TransientSoundRadius, and a Radius of 0 is 1600.
+    // Heard only if the player hears it (hearsSound); a noise to the AI
+    // unless bNoHearNoise. The actor's LowPass, HighPass and
+    // ObstructionFactor go with it. A sound named MUSIC, or streamed, is
+    // music: the player's CurrentMusic, started where the actor's
+    // StartTimeOffset says. PlayOwnedSound is the same, for the one player.
+    auto play = [](NativeCall& c, bool owned) {
         ScriptLevel* level = c.vm.level;
         VmObject* sound = c.o(0);
-        if (!level || !c.self || !sound || !sound->package || sound->exportIndex < 0)
+        if (!level || !c.self || c.self->deleted || !sound || !sound->package || sound->exportIndex < 0)
             return;
         auto given = [&](size_t k) { return k < c.given.size() && c.given[k]; };
         auto actorFloat = [&](const char* name, float otherwise) {
@@ -85,16 +196,29 @@ void registerSoundNatives(Vm& vm) {
         ScriptLevel::SoundRequest r;
         r.actor = c.self;
         r.sound = {sound->package, sound->exportIndex};
-        r.slot = given(1) ? c.i(1) : 0;
+        r.slot = given(1) ? c.i(1) : 1;
         r.volume = given(2) ? c.f(2) : actorFloat("TransientSoundVolume", 1);
         r.noOverride = given(3) && c.b(3);
         r.radius = given(4) ? c.f(4) : actorFloat("TransientSoundRadius", 0);
-        if (r.radius <= 0)
-            r.radius = 25 * (actorFloat("SoundRadius", 32) + 1);
+        if (r.radius == 0)
+            r.radius = 1600;
         r.pitch = given(5) ? c.f(5) : actorFloat("TransientSoundPitch", 1);
         if (r.pitch <= 0)
             r.pitch = 1;
-        if (level->streamedSound(sound)) {
+        r.lowPass = actorFloat("LowPass", 0);
+        r.highPass = actorFloat("HighPass", 0);
+        r.obstruction = actorFloat("ObstructionFactor", 0);
+        const std::string name = ScriptLevel::soundName(sound);
+        r.speech = name.find("DIALOG") != std::string::npos;
+        r.loop = name.find("LOOPING") != std::string::npos;
+        // A noise the AI hears, unless asked not to be (The Fallen's
+        // weapons pass bNoHearNoise for all their sounds but the empty
+        // click).
+        if (!owned && !(given(6) && c.b(6)))
+            level->soundNoise(c.self, r.radius);
+        if (!level->hearsSound(c.self, r.radius, r.volume))
+            return;
+        if (name.find("MUSIC") != std::string::npos || level->streamedSound(sound)) {
             if (VmObject* player = level->player())
                 if (Value* v = player->find(c.vm, "CurrentMusic"))
                     v->o = sound;
@@ -104,18 +228,20 @@ void registerSoundNatives(Vm& vm) {
             ++m.serial;
             return;
         }
-        // A sound is a noise the AI hears too, as loud as it's played,
-        // unless asked not to be (bNoHearNoise: The Fallen's weapons pass
-        // it for all their sounds but the empty click; footsteps don't).
-        if (!(given(6) && c.b(6)))
-            level->makeNoise(c.self, r.volume);
         auto& requests = level->soundRequests();
         if (requests.size() >= kMostRequests)
             requests.erase(requests.begin());
         requests.push_back(r);
     };
-    reg("Actor.PlaySound", play);
-    reg("Actor.PlayOwnedSound", play);
+    reg("Actor.PlaySound", [play](NativeCall& c) { play(c, false); });
+    reg("Actor.PlayOwnedSound", [play](NativeCall& c) { play(c, true); });
+    // PlayDummySound(Volume, Radius): only the noise.
+    reg("Actor.PlayDummySound", [](NativeCall& c) {
+        if (c.vm.level && c.self) {
+            const float radius = c.f(1);
+            c.vm.level->soundNoise(c.self, radius == 0 ? 1600 : radius);
+        }
+    });
     // GetSoundDuration(Sound): its length in seconds.
     reg("Actor.GetSoundDuration", [](NativeCall& c) {
         VmObject* s = c.o(0);

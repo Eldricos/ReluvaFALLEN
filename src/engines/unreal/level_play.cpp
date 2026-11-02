@@ -223,10 +223,19 @@ bool LevelPlay::locationOf(VmObject* actor, Vec3f& out) {
     return true;
 }
 
-// Each actor with an AmbientSound: heard as far as 25 x (SoundRadius + 1)
-// units, at SoundVolume / 255, its pitch SoundPitch / 64.
+// Each actor with an AmbientSound and a SoundVolume above 0, as the audio
+// driver takes them: heard as far as 25 x (SoundRadius + 1) units, at
+// 2 x SoundVolume x AmbientFactor / 255 (the .ini's, 0.7), a Keypoint's
+// (an AmbientSound actor's) times the level's AmbientBus / 128, a light's
+// times its LightBrightness / 255; its pitch SoundPitch / 64.
 void LevelPlay::ambientSounds(std::vector<Ambient>& out) {
     out.clear();
+    const std::string factorSetting = audioSetting("AmbientFactor");
+    const float factor = factorSetting.empty() ? 0.7f : std::strtof(factorSetting.c_str(), nullptr);
+    float bus = 1;
+    if (VmObject* info = level_->levelInfo())
+        if (const Value* v = info->find(*vm_, "AmbientBus"))
+            bus = float(v->asInt()) / 128;
     for (VmObject* a : level_->actors()) {
         if (a->deleted || !a->cls)
             continue;
@@ -239,17 +248,30 @@ void LevelPlay::ambientSounds(std::vector<Ambient>& out) {
         VmObject* sound = s ? s->asObject() : nullptr;
         if (!sound || !sound->package || sound->exportIndex < 0)
             continue;
-        Ambient am;
-        am.actor = a;
-        am.sound = {sound->package, sound->exportIndex};
-        am.streamed = level_->streamedSound(sound);
-        locationOf(a, am.at);
         auto byte = [&](Field f, int otherwise) {
             const Value* v = at(f);
             return v ? v->asInt() : otherwise;
         };
+        const int volume = byte(SoundVolume, 128);
+        if (volume <= 0)
+            continue;
+        Ambient am;
+        am.actor = a;
+        am.sound = {sound->package, sound->exportIndex};
+        am.streamed = level_->streamedSound(sound);
+        am.music = ScriptLevel::soundName(sound).find("MUSIC") != std::string::npos;
+        locationOf(a, am.at);
         am.radius = 25.0f * float(byte(SoundRadius, 32) + 1);
-        am.volume = float(byte(SoundVolume, 128)) / 255;
+        am.volume = 2 * float(volume) * factor / 255;
+        auto& kinds = ambientKinds_[a->cls];
+        if (!kinds.known) {
+            kinds = {true, vm_->isA(a, "Keypoint")};
+        }
+        if (kinds.keypoint)
+            am.volume *= bus;
+        if (const Value* t = a->find(*vm_, "LightType"); t && t->asInt() != 0)
+            if (const Value* b = a->find(*vm_, "LightBrightness"))
+                am.volume *= float(b->asInt()) / 255;
         am.pitch = float(byte(SoundPitch, 64)) / 64;
         out.push_back(am);
     }

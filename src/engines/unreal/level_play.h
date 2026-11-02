@@ -82,12 +82,14 @@ public:
     struct Ambient {
         VmObject* actor = nullptr;
         ObjectRef sound;
-        bool streamed = false; // one of the MP3s: music
+        bool streamed = false; // one of the MP3s (at the music volume)
+        bool music = false;    // named MUSIC: heard alike everywhere in range, faded in and out
         Vec3f at{};
         float radius = 0, volume = 0, pitch = 1;
     };
     void ambientSounds(std::vector<Ambient>& out);
     VmObject* currentMusic() { return level_->currentMusic(); }
+    bool streamed(VmObject* sound) { return level_->streamedSound(sound); }
     const ScriptLevel::Music& music() { return level_->music(); }
     void musicEnded(VmObject* sound) { level_->musicEnded(sound); }
     // The audio settings (the .ini's AudioDevice: MasterVolume,
@@ -233,6 +235,10 @@ private:
     const std::array<int, FieldCount>& slotsOf(const VmClass* cls);
     int regionZoneField_ = -1; // ZoneNumber's place in PointRegion
     std::unordered_map<const VmClass*, std::array<int, FieldCount>> slots_;
+    struct AmbientKind {
+        bool known = false, keypoint = false;
+    };
+    std::unordered_map<const VmClass*, AmbientKind> ambientKinds_;
     std::array<NameId, FieldCount> names_{};
 
     const PackageSet& packages_;
