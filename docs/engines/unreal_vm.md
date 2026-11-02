@@ -787,11 +787,9 @@ the code is Reluva's own.
     now. So a change while it's far off is never voiced.
   - Over all maps' first 3 seconds the AI says 2 lines, where Reluva's
     own earlier reading (1500 units, its own timers) had 9.
-- Over all maps' first 20 seconds, 36 dialogues start (123 lines said),
-  the AI says 62 lines, and 2 calls find no line: CM11_LabRitual's
-  `START_G11B` (mission 11's table isn't in the game: its voices are, in
-  `m11_Dialogue.uax`, as are `m12_` and `trn_`) and a speech trigger on
-  M04_SiskoL1 with no type.
+- Over all maps' first 20 seconds, 30 dialogues start (66 lines said)
+  and the AI says 11 lines of its own. FindBestDialogLine finds no line
+  130 times: mostly scripts asking whether a pawn has a line to say.
 
 ### The HUD
 
