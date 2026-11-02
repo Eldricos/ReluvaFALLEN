@@ -211,6 +211,27 @@ unit; the 180 that keep only keys or bones are now filled every frame
 from them; the 38 glass and debris fragments in Shared.u have an i32 0
 before their standard fields and otherwise read as standard meshes.
 
+**The face table.** Straight after the vertex keys' runs comes the
+engine's own face table (Engine.dll's `SANS`): `(c, c, 4)`, one entry for
+each of the mesh's clips by index, each an i32 attachment point, `(n, n,
+64)` and n i32 vertices (the packed vertices' numbering), then `(k, k, 5)`
+keys, each an f32 time and `(n, n, 64)` and n x 3 f32: where each listed
+vertex goes, in the attachment point's frame, in the skeleton's units.
+Clips that aren't the face's have empty entries; the shared sets have
+none. 50 meshes have keys there: every character with Blink, Eyebrows
+and Phonemes (Mouth on Morn and ObanakWraith) in PLYR.u and PAWNAI.u, and
+FED.u's wounded ensign. Their point is `FaceAttach` (`FaceAttch` on Morn
+and an ensign): on a triangle, kind 7 (its own turn and offset not used),
+so the frame is the triangle's on the posed mesh: X from its first
+corner to its third, Y the normal (first edge across the second), Z = X x
+Y, from the first corner. They're the clips' face keys again, cut to the
+vertices that move and kept in the head's frame. Checked: Kira's (point
+7, triangle 588; Blink 8 vertices and 2 keys, Eyebrows 12 and 3, Phonemes
+42 and 8) put at their first key on her posed face, the listed vertices
+are where her bones put them, to within 0.001 units. After the table
+come `(1)` and `(n, n, 64)` vertices (the ones whose posed places the
+engine keeps), then the bones.
+
 **Shared sets name their clips too** (Female: BaseReference, FireCrch,
 RunF, WalkF; MaleTwo its 111; Male its 274), so a borrowed sequence must
 also be the clip of its name. Female's own clips are the start of her

@@ -1535,12 +1535,15 @@ animation groups, in the actor's C3D mesh state):
   none made or removed.
 - The face sequences: Blink 2 keys (0, 1/30 s), EyeBrows 3, Phonemes 8 (k/30
   s, a mouth shape each), Mouth (four PAWNAI meshes; no script uses it).
-- **Drawn:** the engine pulls each vertex a face sequence lists to that
-  sequence's keyed place (kept in an attachment point's frame, so it
-  follows the head) by the weight: at the scripts' weight of 1 the face's
-  vertices are the keyed shape. Reluva instead adds the key's difference
-  from the neutral face, turned with the bones; the C3D mesh's own face
-  table (its `SANS` block) isn't read yet.
+- **Drawn** as the engine does it, after the body is posed: each channel's
+  entry in the mesh's face table (the clip of its name, by index; see
+  [mesh.md](../formats/unreal/mesh.md)) at its time, between keys
+  blended, placed in its attachment point's frame (the `FaceAttach`
+  triangle on the posed mesh, so it follows the head), and each vertex it
+  lists pulled there by the channel's weight from where the body put it.
+  At the scripts' weight of 1 those vertices are the keyed shape. A tween
+  cross-fades that from the channel's last time and weight. Channels go
+  in turn, each from the last's result.
 - The engine sends `UpdateHeadAnimation` to each pawn with one of
   The Fallen's meshes every tick. It sets the face's expression and
   blinks, and where the head looks. It returns at once for a pawn not

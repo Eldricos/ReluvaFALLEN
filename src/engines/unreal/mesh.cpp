@@ -794,7 +794,8 @@ struct NamedClip {
     std::vector<std::pair<float, size_t>> keys; // time, file offset of its packed vertices
 };
 
-std::vector<NamedClip> findClipTable(const BoneReader& r, size_t frameVerts) {
+// `keysEnd`: where the vertex keys' runs end (the face table follows).
+std::vector<NamedClip> findClipTable(const BoneReader& r, size_t frameVerts, size_t* keysEnd = nullptr) {
     auto header = [&](size_t at, uint32_t flags, uint32_t& n) {
         uint32_t f = 0;
         return r.header(at, n, f) && f == flags;
@@ -854,8 +855,11 @@ std::vector<NamedClip> findClipTable(const BoneReader& r, size_t frameVerts) {
                     k += 12 + 12 * size_t(m) + 24;
                 }
             }
-            if (runs)
+            if (runs) {
+                if (keysEnd)
+                    *keysEnd = k;
                 return clips;
+            }
         }
         // The names without vertex keys (an animation set's).
         for (NamedClip& clip : clips)
@@ -1660,6 +1664,19 @@ struct LayeredPoser::Impl {
     std::vector<NamedClip> faceClips;
     std::vector<Vec3f> neutral;
     std::vector<Mat43> faceWorlds;
+    // The face table (the engine's): for each of the mesh's clips by
+    // index, the attachment point its keys are in, the vertices it moves,
+    // and its keys (a time, then each vertex's place in the point's frame,
+    // in the skeleton's units).
+    struct FaceEntry {
+        int32_t attach = 0;
+        std::vector<uint32_t> vertices;
+        std::vector<std::pair<float, std::vector<Vec3f>>> keys;
+    };
+    std::vector<FaceEntry> faceTable;
+    std::vector<std::string> clipNames;
+    bool faceFrame(const FaceEntry& e, const std::vector<Vec3f>& bone, Mat43& frame) const;
+    void placeFaces(const std::vector<Face>& faces, std::vector<Vec3f>& out) const;
     // Each vertex's bones and weights.
     std::vector<std::vector<std::pair<uint32_t, float>>> vertexBones;
     // The actor's forward, side and up axes in the skeleton's space.
@@ -1752,10 +1769,55 @@ std::unique_ptr<LayeredPoser> LayeredPoser::open(const Package& package, int ind
         start += poser.clipFrames(c);
     }
     const auto frame = size_t(impl->mesh.frameVerts);
-    const std::vector<NamedClip> clips = findClipTable(r, frame);
-    for (const NamedClip& c : clips)
+    size_t keysEnd = 0;
+    const std::vector<NamedClip> clips = findClipTable(r, frame, &keysEnd);
+    for (const NamedClip& c : clips) {
+        impl->clipNames.push_back(c.name);
         if (!c.keys.empty())
             impl->faceClips.push_back(c);
+    }
+    // The face table, straight after the vertex keys: (c, c, 4), then for
+    // each clip an i32 attachment point, (n, n, 64) and n i32 vertices,
+    // (k, k, 5) and k keys: an f32 time, (m, m, 64) and m x 3 f32.
+    if (keysEnd) {
+        uint32_t c = 0, f = 0;
+        size_t at = keysEnd;
+        bool ok = r.header(at, c, f) && c == clips.size();
+        at += 12;
+        for (uint32_t e = 0; ok && e < c; ++e) {
+            Impl::FaceEntry entry;
+            uint32_t n = 0, k = 0;
+            ok = at + 4 <= r.to;
+            if (!ok)
+                break;
+            entry.attach = int32_t(r.u32(at));
+            at += 4;
+            ok = r.header(at, n, f) && at + 12 + 4 * size_t(n) <= r.to;
+            if (!ok)
+                break;
+            for (uint32_t j = 0; j < n; ++j)
+                entry.vertices.push_back(r.u32(at + 12 + 4 * size_t(j)));
+            at += 12 + 4 * size_t(n);
+            ok = r.header(at, k, f);
+            at += 12;
+            for (uint32_t j = 0; ok && j < k; ++j) {
+                uint32_t m = 0;
+                const float time = r.f32(at);
+                ok = r.header(at + 4, m, f) && m == n && at + 16 + 12 * size_t(m) <= r.to;
+                if (!ok)
+                    break;
+                std::vector<Vec3f> places(m);
+                for (uint32_t q = 0; q < m; ++q)
+                    places[q] = {r.f32(at + 16 + 12 * size_t(q)), r.f32(at + 20 + 12 * size_t(q)),
+                                 r.f32(at + 24 + 12 * size_t(q))};
+                entry.keys.push_back({time, std::move(places)});
+                at += 16 + 12 * size_t(m);
+            }
+            impl->faceTable.push_back(std::move(entry));
+        }
+        if (!ok)
+            impl->faceTable.clear();
+    }
     impl->vertexBones.resize(frame);
     for (size_t i = 0; i < impl->bones.size(); ++i) {
         const BoneRecord& b = impl->bones[i];
@@ -2102,12 +2164,124 @@ bool LayeredPoser::pose(std::string_view base, float fraction, const std::vector
     const auto frame = size_t(m.mesh.frameVerts);
     out.assign(frame, Vec3f{});
     poseVertices(m.reader(), m.bones, frame, m.mesh.scale, m.mesh.origin, out.data(), [&](size_t i) { return local[i]; });
-    if (faces && !faces->empty() && !m.faceClips.empty())
-        m.addFaces(*faces, m.worlds(local), out);
+    if (faces && !faces->empty()) {
+        if (!m.faceTable.empty())
+            m.placeFaces(*faces, out);
+        else if (!m.faceClips.empty())
+            m.addFaces(*faces, m.worlds(local), out);
+    }
     return true;
 }
 
-bool LayeredPoser::hasFace() const { return !impl->faceClips.empty(); }
+bool LayeredPoser::hasFace() const {
+    return !impl->faceClips.empty() ||
+           std::any_of(impl->faceTable.begin(), impl->faceTable.end(), [](const auto& e) { return !e.keys.empty(); });
+}
+
+// A face entry's frame, as the engine builds it: its attachment point's
+// own turn and offset (none at all when its kind has 7; only the offset
+// with 6), then, for a point on a triangle, the triangle's frame on the
+// posed mesh: X from its first corner to its third, Y the normal (the
+// first edge across the second), Z = X x Y, from its first corner.
+// `bone`: the posed vertices in the skeleton's units.
+bool LayeredPoser::Impl::faceFrame(const FaceEntry& e, const std::vector<Vec3f>& bone, Mat43& frame) const {
+    if (e.attach < 0 || size_t(e.attach) >= mesh.attachPoints.size())
+        return false;
+    const MeshAttachPoint& p = mesh.attachPoints[size_t(e.attach)];
+    Mat43 own{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+    if ((p.kind & 7) != 7) {
+        if ((p.kind & 6) != 6)
+            for (size_t k = 0; k < 3; ++k)
+                setRow(own, k, p.axes[k]);
+        own[9] = p.offset[0], own[10] = p.offset[1], own[11] = p.offset[2];
+    }
+    if (p.type != 1) {
+        frame = own;
+        return true;
+    }
+    if (p.triangle < 0 || size_t(p.triangle) >= mesh.tris.size())
+        return false;
+    const MeshTri& t = mesh.tris[size_t(p.triangle)];
+    Vec3f c[3];
+    for (size_t k = 0; k < 3; ++k) {
+        if (size_t(t.vertex[k]) >= bone.size())
+            return false;
+        c[k] = bone[size_t(t.vertex[k])];
+    }
+    const Vec3f e1 = vsub(c[1], c[0]), e2 = vsub(c[2], c[0]);
+    auto unit = [](Vec3f v) {
+        const float l = std::sqrt(vdot(v, v));
+        return l > 0 ? vmul(v, 1 / l) : v;
+    };
+    auto cross = [](const Vec3f& a, const Vec3f& b) {
+        return Vec3f{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+    };
+    const Vec3f x = unit(e2), y = unit(cross(e1, e2)), z = cross(x, y);
+    Mat43 tri{};
+    setRow(tri, 0, x);
+    setRow(tri, 1, y);
+    setRow(tri, 2, z);
+    tri[9] = c[0][0], tri[10] = c[0][1], tri[11] = c[0][2];
+    frame = then(own, tri);
+    return true;
+}
+
+// The face, as the engine poses it: each channel's entry (the clip of its
+// name, by index) at its time, between keys blended, placed by its
+// frame; each vertex it lists pulled there by the channel's weight, from
+// where the body put it (a tween cross-faded from its last time and
+// weight). Channels go in turn, each from the last's result.
+void LayeredPoser::Impl::placeFaces(const std::vector<Face>& faces, std::vector<Vec3f>& out) const {
+    const Vec3f& scale = mesh.scale;
+    const Vec3f& origin = mesh.origin;
+    auto toBone = [&](const Vec3f& v) {
+        return Vec3f{(v[0] - origin[0]) * scale[0], (v[1] - origin[1]) * scale[1], (v[2] - origin[2]) * scale[2]};
+    };
+    std::vector<Vec3f> posed(out.size());
+    for (size_t v = 0; v < out.size(); ++v)
+        posed[v] = toBone(out[v]);
+    for (const Face& f : faces) {
+        const std::string wanted = fs::toLower(f.anim);
+        size_t clip = SIZE_MAX;
+        for (size_t c = 0; c < clipNames.size(); ++c)
+            if (fs::toLower(clipNames[c]) == wanted)
+                clip = c;
+        if (clip >= faceTable.size() || faceTable[clip].keys.empty())
+            continue;
+        const FaceEntry& e = faceTable[clip];
+        Mat43 frame{};
+        if (!faceFrame(e, posed, frame))
+            continue;
+        auto keyed = [&](float t, size_t j) {
+            const auto& keys = e.keys;
+            if (t <= keys.front().first || keys.size() == 1)
+                return keys.front().second[j];
+            if (t >= keys.back().first)
+                return keys.back().second[j];
+            size_t i = 1;
+            while (keys[i].first <= t)
+                ++i;
+            const float span = keys[i].first - keys[i - 1].first;
+            const float b = span > 0 ? (t - keys[i - 1].first) / span : 1;
+            return vadd(vmul(keys[i - 1].second[j], 1 - b), vmul(keys[i].second[j], b));
+        };
+        for (size_t j = 0; j < e.vertices.size(); ++j) {
+            const uint32_t v = e.vertices[j];
+            if (v >= out.size())
+                continue;
+            const Vec3f now = toBone(out[v]);
+            const Vec3f to = times(frame, keyed(f.seconds, j));
+            Vec3f place = vadd(vmul(to, f.weight), vmul(now, 1 - f.weight));
+            if (f.mix < 1) {
+                const Vec3f from = times(frame, keyed(f.fromSeconds, j));
+                const Vec3f was = vadd(vmul(from, f.fromWeight), vmul(now, 1 - f.fromWeight));
+                place = vadd(vmul(place, f.mix), vmul(was, 1 - f.mix));
+            }
+            for (size_t c = 0; c < 3; ++c)
+                out[v][c] = scale[c] != 0 ? place[c] / scale[c] + origin[c] : out[v][c];
+        }
+    }
+}
 
 // The face: each channel's key at its time (between two, blended) less
 // the neutral face, by its weight; each vertex's share turned as its bones
