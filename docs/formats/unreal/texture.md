@@ -105,39 +105,80 @@ that sees through colour 0 does so in every frame.
 
 ### Fire (FireTexture)
 
-A heat value (0-255) per pixel, shown through the palette. After the
-mipmaps: a compact count, then 8 bytes a spark: type (`ESpark`), heat,
-X, Y (pixels) and four bytes A-D whose use depends on the type. Each
-step the sparks add their heat (a spark sets its pixel to at least its
-heat), then the heat spreads and cools (Fire.dll's order):
+As Fire.dll does it. Its routines were run in an x86 emulator against a
+model of them, byte for byte (the heat, the sparks and the random index
+after every step, every spark type), and Reluva's code against that
+model on the game's own textures (fx.fire01's 803 sparks and the
+1,500 moving ones they make, over 60 steps).
 
-- Spreading: each pixel becomes a quarter of four pixels' sum, plus 1,
-  less (255 - `RenderHeat`) / 16, kept to 0-255. With `bRising` the four
-  are below it: the one under and the one to its right, the one two
-  under and the one to its left, so flames climb; without, itself, the
-  one to its right, and the one under and to its left. The picture is
-  counted as one row after another, wrapping at the end: the rows past
-  the bottom are the top ones, and a pixel's left neighbour at the left
-  edge is the end of the row above. A low `RenderHeat` leaves only the
-  sparks' own pixels, a high one long trails.
-- Sparks: Burn a random heat at its spot; Sparkle flashes near it (A
-  how often, B how far); Pulse and Signal rise and fall or switch on and
-  off (D the speed, A the phase); Blaze, Cone, OzHasSpoken,
-  BlazeLeft/Right, Emit, Fountain and Sprinkler send out moving sparks
-  that cool as they go (Emit and Fountain along A, B as signed speeds in
-  32nds of a pixel a step, Fountain falling back); Cylinder, Lissajous,
-  Jugglers and Wheel move round paths (B the size, C the speed); the
-  organic ones (Flocks, Eels, Organic, WanderOrganic, Gametes) wander;
-  the clouds and Stars dot heat at random near the spot; the lightnings
-  draw jagged lines (Line and Ramp to the point A, B; Sphere outwards).
-  At most `SparksLimit` moving sparks at once.
-- `DrawMode` (`dmode` in Fire.u: DRAW_Normal, DRAW_Lathe, DRAW_Lathe_2
-  to DRAW_Lathe_4): a lathe turns the sparks round the texture's
-  middle, each spark's heat put again at its copies turned 1/2, 1/3 or
-  1/4 of the way round for Lathe_2 to Lathe_4, and right round, a pixel
-  apart, for DRAW_Lathe. Only the Cardassian phaser's `pulsecap` (in
-  CARD.u and DS9.u) uses one, Lathe_4: its sparks, a glow round the
-  middle already, become four-fold.
+A heat value (0-255) per pixel, shown through the palette. After the
+mipmaps: a compact count, then 8 bytes a spark: type (`ESpark`), Heat,
+X, Y (pixels) and four bytes A-D whose use depends on the type. A
+texture starts cold. Each step (none if it's under 8 pixels either way):
+
+1. Each spark in the list in turn draws itself. A spark's pixel is set
+   to its value outright (not added to, nor the larger kept).
+2. The heat spreads and cools.
+3. The Stars look again.
+
+**Spreading:** each pixel becomes a quarter of four pixels' sum, plus 1,
+less (255 − `RenderHeat`) / 16, kept to 0-255.
+- With `bRising` the four are below it: the one under and the one to
+  its right, the one two under and the one to its left, so flames climb.
+- Without, it's itself, the one to its right, and the one under and to
+  its left.
+- The picture is counted as one row after another, wrapping at the end:
+  the rows past the bottom are the top ones, and a pixel's left
+  neighbour at the left edge is the end of the row above.
+- A low `RenderHeat` leaves only the sparks' own pixels, a high one long
+  trails.
+
+**Random numbers:** one stream for every fire and water texture: a table
+of 512 bytes read and stirred four bytes at a time. Fire.dll fills it
+from `rand()` when it loads; Reluva does the same with MSVC's `rand()`
+from seed 1, which is an assumption.
+
+**Moving sparks:** emitters add them to the same list, after the placed
+ones, while the list holds fewer than `SparksLimit`, placed sparks
+included.
+- A new spark is drawn and moved on the step it's made.
+- One that dies is replaced by the last in the list, which then waits
+  until the next step.
+- A moving spark steps one pixel along each axis with a chance of
+  |v| / 128 a step (v a signed byte; −128 always moves).
+- On loading, sparks off the texture are dropped. `SparksLimit` is kept
+  to 4-8192 only if the texture holds more sparks than it.
+
+**What each spark type does each step** (all byte arithmetic wraps;
+"random" is a byte from the stream; Sin is a turn in 256 steps, 0-255):
+
+| Type | Each step |
+|---|---|
+| Burn | its pixel a random heat (not its Heat) |
+| Sparkle | Heat at (X + A·random/256, Y + B·random/256): a box A × B to the right of and below it |
+| Pulse | Heat at its pixel, then Heat += D (a sawtooth) |
+| Signal | Heat at its pixel if Heat > C; then Heat += D, and once it wraps a random Heat |
+| Cylinder, Cylinder3D | Sin(A+64) + Heat at X + Sin(A)·B/256; A += D (3D only on the near half) |
+| Jugglers | the same up and down |
+| Lissajous | Sin(A+64)+32 at (X + Sin(A)·Heat/256, Y + Sin(B)·Heat/256); A += C, B += D |
+| Blaze | half the time a spark that cools by 5 a step, moving at random A, B |
+| OzHasSpoken | half the time a spark rising (B −127), drifting −63..64, cooling by 2 |
+| Cone | a quarter of the time a spark drifting −63..64 then falling (B += 3), for 49 steps |
+| BlazeRight, BlazeLeft | the same, flung right or left, for C steps |
+| Emit, Fountain | a quarter of the time a spark moving along A, B, cooling by D; a Fountain's falls back (every other step B += 3) and goes out at 50 |
+| Organic, WanderOrganic | sparks that rise 2 pixels a step from 252 down to 192, drifting; WanderOrganic's anywhere in 32 pixels, the spark itself wandering 7 pixels at random |
+| RandomCloud | the same, warming from 4 to 248 |
+| CustomCloud, LocalCloud | sparks warming from D by 4 to 248, moving along A, B; Custom's spot wanders |
+| Eels, Gametes | one step in 13 a spark living C steps at Heat, moving at random (a Gamete's along a swaying angle) |
+| Flocks, Wheel | a spark each step, living C steps, heading B (A advancing by D/16) |
+| Sprinkler | a spark each step swept by Sin(A), A += D |
+| Stars | B at its pixel; after the spread, B becomes the pixel's heat, and if that's under 38, A is put there |
+| Line, RampLightning | while C counts down, a jagged flash from the spot along A, B (bit 0: the negative way), Heat to Heat (Ramp: to Heat/8); then, when a random ≥ D, C anew (0, 1, 4 or 5) |
+| SphereLightning | when a random ≥ D, a flash a random way, C long, Heat to Heat/4 |
+
+`DrawMode` (`dmode`: DRAW_Normal, DRAW_Lathe, DRAW_Lathe_2 to _4) is
+only the editor's: placing a spark with a lathe adds its copies to the
+list (turned by 128, 85 or 64 in A). The game draws nothing more for it.
 
 The 108 fire textures hold 26,859 sparks; Sparkle (9,403), Jugglers,
 Burn, Emit, Signal and Blaze are most of them. Many textures are

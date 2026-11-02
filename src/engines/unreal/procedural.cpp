@@ -11,27 +11,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 
 namespace reluva::unreal {
 
 namespace {
 
 constexpr float kPi = 3.14159265358979f;
-
-// A small repeatable random number generator (xorshift).
-struct Random {
-    uint32_t state;
-    explicit Random(uint32_t seed) : state(seed ? seed : 0x12345678u) {}
-    uint32_t next() {
-        state ^= state << 13;
-        state ^= state >> 17;
-        state ^= state << 5;
-        return state;
-    }
-    int below(int n) { return n > 0 ? int(next() % uint32_t(n)) : 0; }
-    int between(int lo, int hi) { return lo + below(hi - lo + 1); } // inclusive
-    float unit() { return float(next() & 0xffffff) / float(0x1000000); }
-};
 
 // A texture's properties and where its class's own data starts, after its
 // mipmaps (one list, or two with bHasComp; see texture.md).
@@ -131,56 +117,107 @@ struct Pace {
     }
 };
 
-// Where something is in a cycle of `speed` 256ths of a turn a step,
-// starting `phase` 256ths in: radians.
-float turn(uint32_t step, float speed, uint8_t phase) {
-    return 2 * kPi * (float(phase) / 256 + float(step) * speed / 256);
+// Fire.dll's sine table: a turn in 256 steps, 0-255 (127 or 128 at 0).
+const std::array<uint8_t, 256>& sineTable() {
+    static const std::array<uint8_t, 256> table = [] {
+        std::array<uint8_t, 256> t{};
+        for (int i = 0; i < 256; ++i)
+            t[size_t(i)] = uint8_t(std::nearbyint(std::sin(float(i) / 256 * 2 * kPi) * 127.5f + 127.45f));
+        return t;
+    }();
+    return table;
+}
+
+// Fire.dll's random numbers, one stream for all its textures: a table of
+// 512 bytes (filled when it loads, here from MSVC's rand() as it starts),
+// read and stirred four bytes at a time.
+class FractalRandom {
+public:
+    FractalRandom() {
+        uint32_t seed = 1;
+        for (uint8_t& b : table_) {
+            seed = seed * 214013u + 2531011u;
+            b = uint8_t((seed >> 16) & 0x7fff);
+        }
+    }
+    uint32_t next() {
+        uint32_t r, v;
+        std::memcpy(&r, &table_[(index_ + 0x80) & 0xfc], 4);
+        index_ = (index_ + 4) & 0xfc;
+        std::memcpy(&v, &table_[index_], 4);
+        v ^= r;
+        std::memcpy(&table_[index_], &v, 4);
+        return r;
+    }
+    uint8_t byte() { return uint8_t(next()); }
+
+private:
+    std::array<uint8_t, 512> table_{};
+    uint32_t index_ = 0;
+};
+FractalRandom& fractalRandom() {
+    static FractalRandom random;
+    return random;
 }
 
 // ---------------------------------------------------------------------
-// Fire: a heat value per pixel, shown through the palette. Each step the
-// heat spreads (upwards when bRising) and cools by RenderHeat / 256, then
-// the sparks add theirs. Each spark is 8 bytes after the mipmaps (a
-// compact count first): type, heat, X, Y and four bytes whose use depends
-// on the type (ESparkType in Fire.u); what each type does is Reluva's
-// reading of its name and its bytes in The Fallen's textures.
+// Fire: a heat value per pixel, shown through the palette, as Fire.dll
+// does it (read for what it does, its sparks checked against it running
+// in an emulator; see docs/formats/unreal/texture.md). Each spark is 8
+// bytes after the mipmaps (a compact count first): type, heat, X, Y and
+// the bytes A-D. Each step every spark in turn draws itself (writing its
+// pixels' heat outright) and the emitters add moving sparks to the same
+// list; then the heat spreads and cools; then the Stars look again.
 
 enum Spark : uint8_t {
     Burn, Sparkle, Pulse, Signal, Blaze, OzHasSpoken, Cone, BlazeRight, BlazeLeft, Cylinder, Cylinder3D,
     Lissajous, Jugglers, Emit, Fountain, Flocks, Eels, Organic, WanderOrganic, RandomCloud, CustomCloud,
     LocalCloud, Stars, LineLightning, RampLightning, SphereLightning, Wheel, Gametes, Sprinkler,
+    LissajousX, LissajousY, // the editor's halves of a Lissajous
+    // The moving sparks the emitters make, by what makes them.
+    Dead = 31, BlazeSpark, EmitSpark, ConeSpark, OrganicSpark, CloudSpark, CustomSpark, EelSpark, FlockSpark,
+    SprinklerSpark, CoolingSpark, FountainSpark, GameteSpark,
 };
+
+int8_t s8(uint8_t v) { return int8_t(v); }
 
 class Fire : public AnimatedTexture {
 public:
     struct SparkData {
         uint8_t type = 0, heat = 0, x = 0, y = 0, a = 0, b = 0, c = 0, d = 0;
-        float px = 0, py = 0; // where a wandering spark has got to
     };
 
     Fire(int w, int h, const PropertyList& props, Palette palette, std::vector<SparkData> sparks)
-        : w_(w), h_(h), palette_(palette), sparks_(std::move(sparks)), random_(uint32_t(w * 7919 + h)), pace_(props) {
+        : w_(w), h_(h), palette_(palette), pace_(props) {
+        ubits_ = 0;
+        while ((1 << (ubits_ + 1)) <= w_)
+            ++ubits_;
+        um_ = uint8_t(w_ - 1), vm_ = uint8_t(h_ - 1);
         rising_ = props.boolean("bRising");
         keep_ = props.byte("RenderHeat", 220);
         for (int i = 0; i < 1024; ++i)
             cool_[size_t(i)] = uint8_t(std::clamp(float(i) * 0.25f + 1 - float(255 - keep_) * 0.0625f, 0.0f, 255.0f));
         masked_ = props.boolean("bMasked");
-        limit_ = size_t(std::clamp<int32_t>(props.integer("SparksLimit", 1024), 16, 4096));
-        // DrawMode (dmode in Fire.u): DRAW_Normal, DRAW_Lathe, then
-        // DRAW_Lathe_2 to _4, the sparks repeated 2 to 4 times round.
-        const uint8_t mode = props.byte("DrawMode");
-        lathe_ = mode == 1 ? 1 : mode >= 2 && mode <= 4 ? mode : 0;
+        // As loaded: sparks off the texture dropped; the list as long as
+        // SparksLimit (only if it held more than that is the limit kept to
+        // 4-8192 and the list cut).
+        sparks.erase(std::remove_if(sparks.begin(), sparks.end(),
+                                    [&](const SparkData& s) { return s.x > um_ || s.y > vm_; }),
+                     sparks.end());
+        int32_t limit = props.integer("SparksLimit");
+        if (size_t(std::max(0, limit)) < sparks.size()) {
+            limit = std::clamp<int32_t>(limit, 4, 8192);
+            if (sparks.size() > size_t(limit))
+                sparks.resize(size_t(limit));
+        }
+        count_ = sparks.size();
+        sparks.resize(std::max<size_t>(count_, size_t(limit)));
+        sparks_ = std::move(sparks);
+        limit_ = sparks_.size();
         heat_.assign(size_t(w) * size_t(h), 0);
         next_.assign(heat_.size(), 0);
-        for (SparkData& s : sparks_) {
-            s.px = s.x;
-            s.py = s.y;
-        }
         image_.w = w;
         image_.h = h;
-        // Under way, as it is by the time anyone sees it.
-        for (int i = 0; i < 60; ++i)
-            tick();
         toRgba(heat_, palette_, masked_, image_);
     }
 
@@ -196,63 +233,351 @@ public:
     }
 
 private:
-    struct Particle {
-        float x, y, vx, vy, gravity;
-        float heat, fade; // heat lost a step
-    };
-
-    uint8_t& at(int x, int y) {
-        x = ((x % w_) + w_) % w_;
-        y = ((y % h_) + h_) % h_;
-        return heat_[size_t(y) * size_t(w_) + size_t(x)];
+    uint8_t r() { return fractalRandom().byte(); }
+    void put(int x, int y, uint8_t v) {
+        const size_t i = (size_t(y) << ubits_) + size_t(x);
+        if (i < heat_.size())
+            heat_[i] = v;
     }
-    void put(int x, int y, float heat) {
-        const auto h = uint8_t(std::clamp(heat, 0.0f, 255.0f));
-        uint8_t& v = at(x, y);
-        v = std::max(v, h);
-        if (!lathe_)
-            return;
-        // Turned round the middle: as many copies as the lathe has, or
-        // with DRAW_Lathe one a pixel all the way round.
-        const float dx = float(x) + 0.5f - float(w_) / 2, dy = float(y) + 0.5f - float(h_) / 2;
-        const int copies = lathe_ > 1 ? lathe_ : std::clamp(int(std::ceil(2 * kPi * std::hypot(dx, dy))), 1, 1024);
-        for (int k = 1; k < copies; ++k) {
-            const float a = 2 * kPi * float(k) / float(copies), c = std::cos(a), sn = std::sin(a);
-            uint8_t& u = at(int(std::floor(float(w_) / 2 + dx * c - dy * sn)), int(std::floor(float(h_) / 2 + dx * sn + dy * c)));
-            u = std::max(u, h);
-        }
+    // One pixel's chance of a step along an axis: |v| / 128, its sign the
+    // way; one random drawn whatever v is.
+    void step(uint8_t& coord, uint8_t v, uint8_t mask) {
+        const int sv = s8(v), roll = int(fractalRandom().next() & 127);
+        if (sv < 0 ? roll < -sv : roll < sv)
+            coord = uint8_t((coord + (sv < 0 ? -1 : 1)) & mask);
     }
-    void emit(float x, float y, float vx, float vy, float heat, int life, float gravity = 0) {
-        if (particles_.size() < limit_)
-            particles_.push_back({x, y, vx, vy, gravity, heat, heat / float(std::max(life, 1))});
+    void move(SparkData& s, uint8_t dx, uint8_t dy) {
+        step(s.x, dx, um_);
+        step(s.y, dy, vm_);
     }
-    // A jagged line from one point to another.
-    void lightning(float x0, float y0, float x1, float y1, float heat, bool ramp) {
-        const int n = std::max(1, int(std::max(std::fabs(x1 - x0), std::fabs(y1 - y0))));
-        float jx = 0, jy = 0;
-        for (int i = 0; i <= n; ++i) {
-            const float t = float(i) / float(n);
-            jx = std::clamp(jx + float(random_.between(-1, 1)), -4.0f, 4.0f);
-            jy = std::clamp(jy + float(random_.between(-1, 1)), -4.0f, 4.0f);
-            put(int(x0 + (x1 - x0) * t + jx), int(y0 + (y1 - y0) * t + jy), ramp ? heat * (1 - t) : heat);
-        }
+    SparkData* child() { return count_ < limit_ ? &sparks_[count_++] : nullptr; }
+    uint8_t near31(uint8_t v, uint8_t mask) { return uint8_t(((fractalRandom().next() & 31) + v) & mask); }
+    void wander15(SparkData& s) {
+        if (fractalRandom().next() & 1)
+            s.x = uint8_t(((fractalRandom().next() & 15) + s.x - 7) & um_);
+        if (fractalRandom().next() & 1)
+            s.y = uint8_t(((fractalRandom().next() & 15) + s.y - 7) & vm_);
+    }
+    void wander7(SparkData& s) {
+        uint8_t a = r(), b = r();
+        s.x = uint8_t((s.x + (a & 7) - (b & 7)) & um_);
+        a = r(), b = r();
+        s.y = uint8_t((s.y + (a & 7) - (b & 7)) & vm_);
     }
 
-    // A step: the sparks drawn, then the heat spread (Fire.dll's order).
+    // A flash: a jagged line from (x0, y0) of lengths lx, ly (bit 0 of
+    // each: the negative way), its heat ramping from c1 to c2.
+    void flash(uint8_t x0, uint8_t y0, int lx, int ly, int c1, int c2) {
+        if (((ly & 1) && 2 * ly >= lx) || ((lx & 1) && 2 * ly < lx)) {
+            x0 = uint8_t(x0 + ((lx & 1) ? -lx : lx));
+            y0 = uint8_t(y0 + ((ly & 1) ? -ly : ly));
+            lx ^= 1, ly ^= 1;
+            std::swap(c1, c2);
+        }
+        const int n = std::max(lx, ly) | 1;
+        std::vector<int> jitter(static_cast<size_t>(n));
+        int total = 0;
+        for (int& j : jitter)
+            total += (j = r());
+        const int64_t span = int64_t(c2 - c1) * (1 << 23);
+        const int64_t colourStep = span / n; // rounded towards 0
+        int64_t colour = int64_t(c1) << 23;
+        const bool xMajor = lx >= ly;
+        const int across = xMajor ? ((ly & 1) ? -ly : ly) : ((lx & 1) ? -lx : lx);
+        const int perStep = (across * 64 - total) / n; // rounded towards 0
+        int acc = (xMajor ? y0 : x0) * 64;
+        const int length = xMajor ? lx : ly, along = ((xMajor ? lx : ly) & 1) ? -1 : 1;
+        uint8_t major = xMajor ? x0 : y0;
+        for (int i = 0; i < length; ++i) {
+            acc += jitter[size_t(i)] + perStep;
+            colour += colourStep;
+            const int minor = acc >> 6;
+            if (xMajor)
+                put(major & um_, minor & vm_, uint8_t(colour >> 23));
+            else
+                put(minor & um_, major & vm_, uint8_t(colour >> 23));
+            major = uint8_t(major + along);
+        }
+    }
+
     void tick() {
-        ++step_;
-        for (SparkData& s : sparks_)
-            spark(s);
-        for (Particle& p : particles_) {
-            p.x += p.vx;
-            p.y += p.vy;
-            p.vy += p.gravity;
-            p.heat -= p.fade;
-            put(int(std::floor(p.x)), int(std::floor(p.y)), p.heat);
-        }
-        particles_.erase(std::remove_if(particles_.begin(), particles_.end(), [](const Particle& p) { return p.heat <= 0; }),
-                         particles_.end());
+        ++phase_;
+        for (size_t i = 0; i < count_; ++i)
+            if (spark(sparks_[i])) {
+                sparks_[i] = sparks_[--count_]; // the last moves here (and is next looked at next step)
+            }
         spread();
+        if (starsOn_) {
+            bool any = false;
+            for (size_t i = 0; i < count_; ++i) {
+                SparkData& s = sparks_[i];
+                if (s.type != Stars)
+                    continue;
+                any = true;
+                const size_t at = (size_t(s.y) << ubits_) + s.x;
+                if (at >= heat_.size())
+                    continue;
+                s.b = heat_[at];
+                if (s.b < 0x26)
+                    heat_[at] = s.a;
+            }
+            starsOn_ = any;
+        }
+    }
+
+    // One spark's step; true when it dies.
+    bool spark(SparkData& s) {
+        const auto& sine = sineTable();
+        auto sin32 = [&](uint8_t i) { return uint8_t(std::min(255, sine[i] + 32)); };
+        const bool room = count_ < limit_;
+        switch (s.type) {
+        case Burn: put(s.x, s.y, r()); break;
+        case Sparkle: {
+            const int x = s.x + ((s.a * r()) >> 8);
+            const int y = s.y + ((s.b * r()) >> 8);
+            put(x & um_, y & vm_, s.heat);
+            break;
+        }
+        case Pulse:
+            put(s.x, s.y, s.heat);
+            s.heat = uint8_t(s.heat + s.d);
+            break;
+        case Signal:
+            if (s.heat > s.c)
+                put(s.x, s.y, s.heat);
+            s.heat = uint8_t(s.heat + s.d);
+            if (s.heat < s.d)
+                s.heat = r();
+            break;
+        case Cylinder:
+        case Cylinder3D:
+        case Jugglers: {
+            const uint8_t v = uint8_t(std::min(255, sine[uint8_t(s.a + 64)] + s.heat));
+            const uint8_t off = uint8_t((sine[s.a] * s.b) >> 8);
+            if (s.type == Jugglers)
+                put(s.x, uint8_t(s.y + off) & vm_, v);
+            else if (s.type == Cylinder || uint8_t(s.a + 64) < 128)
+                put(uint8_t(s.x + off) & um_, s.y, v);
+            s.a = uint8_t(s.a + s.d);
+            break;
+        }
+        case Lissajous:
+        case LissajousX:
+        case LissajousY: {
+            const uint8_t x = s.type == LissajousY ? s.x : uint8_t(s.x + ((sine[s.a] * s.heat) >> 8)) & um_;
+            const uint8_t y = s.type == LissajousX ? s.y : uint8_t(s.y + ((sine[s.b] * s.heat) >> 8)) & vm_;
+            put(x, y, sin32(uint8_t((s.type == LissajousY ? s.b : s.a) + 64)));
+            if (s.type != LissajousY)
+                s.a = uint8_t(s.a + s.c);
+            if (s.type != LissajousX)
+                s.b = uint8_t(s.b + s.d);
+            break;
+        }
+        case Blaze:
+        case OzHasSpoken:
+        case Cone:
+        case BlazeRight:
+        case BlazeLeft:
+        case Emit:
+        case Fountain:
+        case Organic: {
+            if (!room)
+                break;
+            const bool often = s.type == Blaze || s.type == OzHasSpoken || s.type == Organic;
+            if (r() >= (often ? 0x80 : 0x40))
+                break;
+            SparkData& c = *child();
+            if (s.type == Organic) {
+                c.type = OrganicSpark;
+                c.x = uint8_t((s.x + ((r() * s.c) >> 8)) & um_);
+                c.y = uint8_t((s.y + ((r() * s.c) >> 8)) & vm_);
+                c.a = uint8_t(fractalRandom().next() - 0x7f), c.b = 0x81, c.c = 0xff;
+                break;
+            }
+            c.heat = s.heat, c.x = s.x, c.y = s.y;
+            switch (s.type) {
+            case Blaze:
+                c.type = BlazeSpark, c.a = r(), c.b = r(), c.c = s.c, c.d = s.d;
+                break;
+            case OzHasSpoken:
+                c.type = EmitSpark, c.a = uint8_t((fractalRandom().next() & 0x7f) - 0x3f), c.b = 0x81, c.d = 2;
+                break;
+            case Cone:
+                c.type = ConeSpark, c.a = uint8_t((fractalRandom().next() & 0x7f) - 0x3f), c.b = 0, c.c = 0x32;
+                break;
+            case BlazeRight:
+            case BlazeLeft:
+                c.type = ConeSpark;
+                c.a = uint8_t((fractalRandom().next() & 0x3f) + (s.type == BlazeRight ? 0x3f : 0x80));
+                c.b = 0xe3, c.c = s.c;
+                break;
+            default: // Emit, Fountain
+                c.type = s.type == Emit ? EmitSpark : FountainSpark, c.a = s.a, c.b = s.b, c.d = s.d;
+                break;
+            }
+            break;
+        }
+        case WanderOrganic:
+        case RandomCloud:
+            if (SparkData* c = child()) {
+                c->type = s.type == WanderOrganic ? OrganicSpark : CloudSpark;
+                c->x = near31(s.x, um_), c->y = near31(s.y, vm_);
+                if (s.type == WanderOrganic)
+                    c->a = uint8_t(fractalRandom().next() - 0x7f), c->b = 0x81, c->c = 0xff;
+                else
+                    c->a = uint8_t((fractalRandom().next() & 31) - 15), c->b = 0x81, c->c = 0;
+            }
+            wander15(s);
+            break;
+        case Eels:
+        case Gametes:
+            if (r() < 0x14 && room) {
+                SparkData& c = *child();
+                c.type = s.type == Eels ? EelSpark : GameteSpark, c.heat = s.heat;
+                c.x = near31(s.x, um_), c.y = near31(s.y, vm_);
+                c.a = r();
+                if (s.type == Eels)
+                    c.b = r(), c.c = s.c;
+                else
+                    c.c = s.c, c.d = r();
+            }
+            wander15(s);
+            break;
+        case CustomCloud:
+        case LocalCloud:
+            if (SparkData* c = child()) {
+                c->type = CustomSpark;
+                if (s.type == CustomCloud) {
+                    c->x = near31(s.x, um_), c->y = near31(s.y, vm_);
+                } else {
+                    c->x = uint8_t((s.x + ((r() * s.c) >> 8)) & um_);
+                    c->y = uint8_t((s.y + ((r() * s.c) >> 8)) & vm_);
+                }
+                c->a = s.a, c->b = s.b, c->c = s.d;
+            }
+            if (s.type == CustomCloud)
+                wander7(s);
+            break;
+        case Flocks:
+            if (SparkData* c = child()) {
+                c->type = FlockSpark, c->heat = s.heat;
+                c->x = near31(s.x, um_), c->y = near31(s.y, vm_);
+                c->a = 0, c->b = s.a, c->c = s.b, c->d = s.d;
+                s.a = uint8_t(s.a + s.c);
+            }
+            wander7(s);
+            break;
+        case Wheel:
+            if (SparkData* c = child())
+                *c = {FlockSpark, s.heat, s.x, s.y, 0, s.a, s.b, s.d};
+            s.a = uint8_t(s.a + s.c);
+            break;
+        case Sprinkler:
+            if (SparkData* c = child())
+                *c = {SprinklerSpark, s.heat, s.x, s.y, s.a, s.b, s.c, 2};
+            s.a = uint8_t(s.a + s.d);
+            break;
+        case Stars: put(s.x, s.y, s.b); break;
+        case LineLightning:
+        case RampLightning:
+            if (!s.heat)
+                break;
+            if (s.c > 0) {
+                --s.c;
+                flash(s.x, s.y, s.a, s.b, s.heat, s.type == LineLightning ? s.heat : s.heat >> 3);
+            } else if (r() >= s.d) {
+                s.c = uint8_t((r() + 1) & 5);
+            }
+            break;
+        case SphereLightning:
+            if (r() >= s.d) {
+                const uint8_t angle = r();
+                const int half = s.c >> 1;
+                const int dx = ((sine[angle] * s.c) >> 8) - half, dy = ((sine[uint8_t(angle + 64)] * s.c) >> 8) - half;
+                auto length = [](int v) { return (v > 0 ? (v & ~1) : ((-v) | 1)) & 255; };
+                flash(s.x, s.y, length(dx), length(dy), s.heat, s.heat >> 2);
+            }
+            break;
+        // The moving sparks.
+        case BlazeSpark:
+            s.heat = uint8_t(s.heat - 5);
+            if (s.heat >= 0xfb)
+                return true;
+            put(s.x, s.y, s.heat);
+            move(s, s.a, s.b);
+            break;
+        case EmitSpark:
+        case FountainSpark:
+            s.heat = uint8_t(s.heat - s.d);
+            if (s.heat <= (s.type == EmitSpark ? s.d : 0x32))
+                return true;
+            put(s.x, s.y, s.heat);
+            move(s, s.a, s.b);
+            if (s.type == FountainSpark && (phase_ & 1) && s8(s.b) < 0x7c)
+                s.b = uint8_t(s.b + 3); // falling back
+            break;
+        case CoolingSpark:
+            s.heat = uint8_t(s.heat - s.c);
+            if (s.heat >= 0xfa)
+                return true;
+            put(s.x, s.y, s.heat);
+            move(s, s.a, s.b);
+            break;
+        case ConeSpark:
+            if (--s.c == 0)
+                return true;
+            put(s.x, s.y, s.heat);
+            move(s, s.a, s.b);
+            if (s8(s.b) < 0x7a)
+                s.b = uint8_t(s.b + 3);
+            break;
+        case OrganicSpark:
+        case CloudSpark:
+            s.c = uint8_t(s.c + (s.type == OrganicSpark ? 0xfd : 4));
+            if (s.type == OrganicSpark ? s.c <= 0xbe : s.c >= 0xfa)
+                return true;
+            put(s.x, s.y, s.c);
+            step(s.x, s.a, um_);
+            s.y = uint8_t((s.y - 2) & vm_); // rising
+            break;
+        case CustomSpark:
+            s.c = uint8_t(s.c + 4);
+            if (s.c >= 0xfa)
+                return true;
+            put(s.x, s.y, s.c);
+            move(s, s.a, s.b);
+            break;
+        case EelSpark:
+        case FlockSpark:
+        case SprinklerSpark:
+        case GameteSpark: {
+            if (--s.c == 0xff)
+                return true;
+            put(s.x, s.y, s.heat);
+            if (s.type == EelSpark) {
+                move(s, s.a, s.b);
+            } else if (s.type == GameteSpark) {
+                s.a = uint8_t(s.a + 7);
+                int t = s.a & 0x7f;
+                if (t > 0x3f)
+                    t = 0x7f - t;
+                const uint8_t angle = uint8_t(s.d + t);
+                move(s, uint8_t(sine[angle] - 127), uint8_t(sine[uint8_t(angle + 64)] - 127));
+            } else if (s.type == FlockSpark) {
+                const uint8_t dy = uint8_t(sine[s.b] + 128), dx = uint8_t(sine[uint8_t(s.b + 64)] + 128);
+                const uint16_t w = uint16_t(((s.b << 8) | s.a) + (s.d << 4));
+                s.a = uint8_t(w), s.b = uint8_t(w >> 8);
+                move(s, dx, dy);
+            } else {
+                const uint8_t dx = uint8_t(sine[uint8_t(s.a + 64)] + 0x80);
+                s.a = uint8_t(s.a + s.d);
+                move(s, dx, s.b);
+            }
+            break;
+        }
+        default: break;
+        }
+        return false;
     }
 
     // The heat spreads and cools, as Fire.dll does it: each pixel becomes
@@ -276,136 +601,17 @@ private:
         heat_.swap(next_);
     }
 
-    void spark(SparkData& s) {
-        const float heat = s.heat;
-        const int x = s.x, y = s.y;
-        // The usual speed byte; 0 counts as a moderate 16.
-        auto speed = [](uint8_t v) { return float(v ? v : 16); };
-        switch (s.type) {
-        case Burn:
-            put(x, y, float(random_.below(int(heat) + 1)));
-            break;
-        case Sparkle:
-            if (random_.below(256) <= std::max<int>(s.a, 32)) {
-                const int r = 1 + s.b / 32;
-                put(x + random_.between(-r, r), y + random_.between(-r, r), heat);
-            }
-            break;
-        case Pulse:
-            put(x, y, heat * (0.5f + 0.5f * std::sin(turn(step_, speed(s.d), s.a))));
-            break;
-        case Signal:
-            if (std::sin(turn(step_, speed(s.d), s.a)) > 0)
-                put(x, y, heat);
-            break;
-        case Blaze: {
-            const float angle = random_.unit() * 2 * kPi, v = 0.4f + random_.unit();
-            emit(float(x), float(y), std::cos(angle) * v, std::sin(angle) * v, heat, 8 + random_.below(24));
-            break;
-        }
-        case OzHasSpoken:
-            emit(float(x), float(y), (random_.unit() - 0.5f) * 0.6f, -1 - random_.unit(), heat, 16 + random_.below(16));
-            break;
-        case Cone:
-            emit(float(x), float(y), (random_.unit() - 0.5f) * 1.4f, -1 - random_.unit() * 0.5f, heat, 12 + random_.below(16));
-            break;
-        case BlazeRight:
-        case BlazeLeft:
-            emit(float(x), float(y), (s.type == BlazeRight ? 1.0f : -1.0f) * (0.6f + random_.unit()),
-                 (random_.unit() - 0.5f) * 0.6f, heat, 12 + random_.below(16));
-            break;
-        case Cylinder:
-        case Cylinder3D: {
-            const float angle = turn(step_, speed(s.c) / 4, s.a), r = float(std::max<uint8_t>(s.b, 8)) / 8;
-            const float shade = s.type == Cylinder3D ? 0.6f + 0.4f * std::cos(angle) : 1.0f;
-            put(int(float(x) + r * std::sin(angle)), y, heat * shade);
-            break;
-        }
-        case Lissajous:
-            put(int(float(x) + 8 * std::sin(turn(step_, speed(s.c) / 4, s.a))),
-                int(float(y) + 8 * std::sin(turn(step_, speed(s.d) / 4, s.b))), heat);
-            break;
-        case Jugglers: {
-            const float r = float(std::max<uint8_t>(s.b, 16)) / 8;
-            put(x, int(float(y) - r * std::fabs(std::sin(turn(step_, speed(s.d) * 2, s.a)))), heat);
-            break;
-        }
-        case Emit:
-        case Fountain:
-            emit(float(x), float(y), float(int8_t(s.a)) / 32, float(int8_t(s.b)) / 32, heat, 24,
-                 s.type == Fountain ? 0.08f : 0.0f);
-            break;
-        case Sprinkler: {
-            const float angle = turn(step_, speed(s.c) / 4, s.a);
-            emit(float(x), float(y), std::cos(angle), std::sin(angle), heat, 24);
-            break;
-        }
-        case Flocks:
-        case Eels:
-        case Organic:
-        case WanderOrganic:
-        case Gametes: {
-            // Wandering: free, or kept near where it started.
-            s.px += (random_.unit() - 0.5f) * 1.5f;
-            s.py += (random_.unit() - 0.5f) * 1.5f;
-            const float r = float(4 + s.b / 8);
-            if (s.type != WanderOrganic) {
-                s.px = std::clamp(s.px, float(x) - r, float(x) + r);
-                s.py = std::clamp(s.py, float(y) - r, float(y) + r);
-            }
-            put(int(s.px), int(s.py), heat);
-            if (s.type == Gametes) // in pairs
-                put(int(s.px) + 1, int(s.py), heat);
-            break;
-        }
-        case RandomCloud:
-        case CustomCloud:
-        case LocalCloud: {
-            if (random_.below(256) > std::max<int>(s.a, 64))
-                break;
-            const int r = std::max(1, (s.type == RandomCloud ? s.a : s.c) / 2);
-            put(x + random_.between(-r, r), y + random_.between(-r, r), heat);
-            break;
-        }
-        case Stars:
-            if (random_.below(8) == 0)
-                put(x, y, heat);
-            break;
-        case LineLightning:
-        case RampLightning:
-            if (random_.below(4) == 0)
-                lightning(float(x), float(y), float(s.a), float(s.b), heat, s.type == RampLightning);
-            break;
-        case SphereLightning:
-            if (random_.below(4) == 0) {
-                const float angle = random_.unit() * 2 * kPi, len = float(4 + s.b / 4);
-                lightning(float(x), float(y), float(x) + std::cos(angle) * len, float(y) + std::sin(angle) * len, heat,
-                          true);
-            }
-            break;
-        case Wheel: {
-            const float angle = turn(step_, speed(s.c) / 4, s.a), r = float(s.b) / 4;
-            put(int(float(x) + r * std::cos(angle)), int(float(y) + r * std::sin(angle)), heat);
-            break;
-        }
-        default:
-            put(x, y, heat);
-            break;
-        }
-    }
-
     int w_, h_;
+    int ubits_ = 0;
+    uint8_t um_ = 0, vm_ = 0;
     Palette palette_;
-    std::vector<SparkData> sparks_;
-    std::vector<Particle> particles_;
+    std::vector<SparkData> sparks_; // the placed ones first, then the moving ones they made
+    size_t count_ = 0, limit_ = 0;
     std::vector<uint8_t> heat_, next_;
-    Random random_;
-    bool rising_ = false, masked_ = false;
+    bool rising_ = false, masked_ = false, starsOn_ = true;
     int keep_ = 220;
     std::array<uint8_t, 1024> cool_{}; // the heat four pixels sum to, spread and cooled
-    size_t limit_ = 1024;
-    int lathe_ = 0; // copies round the middle (1: a ring), 0 for none
-    uint32_t step_ = 0;
+    uint32_t phase_ = 0; // GlobalPhase
     Pace pace_;
 };
 
@@ -437,17 +643,6 @@ enum Drop : uint8_t {
     DiagonalOsc2, RainDrops, AreaClamp, LeakyTap, DrippyTap,
 };
 
-// Fire.dll's sine table: a turn in 256 steps, 0-255 (127 or 128 at 0).
-const std::array<uint8_t, 256>& waterSine() {
-    static const std::array<uint8_t, 256> table = [] {
-        std::array<uint8_t, 256> t{};
-        for (int i = 0; i < 256; ++i)
-            t[size_t(i)] = uint8_t(std::nearbyint(std::sin(float(i) / 256 * 2 * kPi) * 127.5f + 127.45f));
-        return t;
-    }();
-    return table;
-}
-
 class Water : public AnimatedTexture {
 public:
     struct DropData {
@@ -459,7 +654,7 @@ public:
     Water(int w, int h, const PropertyList& props, Palette palette, std::vector<DropData> drops, image::Image source,
           const char* kind)
         : w_(w), h_(std::max(2, h & ~1)), fw_(std::max(1, w / 2)), palette_(palette), drops_(std::move(drops)),
-          source_(std::move(source)), kind_(kind), random_(uint32_t(w * 31 + h)), pace_(props) {
+          source_(std::move(source)), kind_(kind), pace_(props) {
         masked_ = props.boolean("bMasked");
         const int amp = props.byte("WaveAmp", 128);
         if (!source_.rgba.empty()) {
@@ -515,10 +710,10 @@ private:
         field_[size_t(2 * y + 1) * size_t(fw_) + size_t(x)] = second;
     }
     void set(int x, int y, uint8_t v) { set(x, y, v, v); }
-    uint8_t randomByte() { return uint8_t(random_.below(256)); }
+    uint8_t randomByte() { return fractalRandom().byte(); }
 
     void drop(DropData& d) {
-        const auto& sine = waterSine();
+        const auto& sine = sineTable();
         const int x = d.x, y = d.y, n = d.d / 2;
         switch (d.type) {
         case FixedDepth: set(x, y, d.d); break;
@@ -656,7 +851,6 @@ private:
     std::vector<DropData> drops_;
     image::Image source_;
     const char* kind_;
-    Random random_;
     std::vector<uint8_t> field_;
     std::array<uint8_t, 1024> table_{}; // the slope + 512: a wave's palette index, a wet's shift (signed)
     uint8_t parity_ = 0;

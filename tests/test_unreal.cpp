@@ -788,7 +788,7 @@ static void testAnimatedTextures() {
     endProps(fb, w);
     mips(fb, 8, 8);
     fb.index(1);
-    for (int b : {99, 200, 3, 4, 0, 0, 0, 0}) // a spark type that just heats its spot
+    for (int b : {2, 200, 3, 4, 0, 0, 0, 0}) // a Pulse with D 0: 200 at its spot each step
         fb.u8(b);
     w.addExport(fire, 0, "Flame", fb.b);
     Bytes wb;
@@ -837,14 +837,22 @@ static void testAnimatedTextures() {
     CHECK(flame != nullptr);
     if (flame) {
         CHECK(std::string(flame->kind()) == "fire");
-        // The spark's heat spread (four pixels averaged, a little taken
-        // off) after it's drawn, as Fire.dll steps: warm round its spot,
-        // nowhere hotter than it.
-        const uint8_t at = flame->image().pixel(3, 4)[0];
-        CHECK(at > 0 && at <= 200);
+        // Cold until it steps (no warm-up, as the original).
+        int warm = 0;
         for (int y = 0; y < 8; ++y)
             for (int x = 0; x < 8; ++x)
+                warm += flame->image().pixel(x, y)[0] > 0;
+        CHECK(warm == 0);
+        // The spark's heat spread (four pixels averaged, a little taken
+        // off) after it's drawn, as Fire.dll steps: warm near its spot,
+        // nowhere hotter than it.
+        CHECK(flame->advance(0.1f));
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x) {
+                warm += flame->image().pixel(x, y)[0] > 0;
                 CHECK(flame->image().pixel(x, y)[0] <= 200);
+            }
+        CHECK(warm > 0);
     }
     auto pool = openAnimatedTexture(set, *p, 2, &err);
     CHECK(pool != nullptr);
