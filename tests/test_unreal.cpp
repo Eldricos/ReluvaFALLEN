@@ -850,7 +850,12 @@ static void testAnimatedTextures() {
     CHECK(pool != nullptr);
     if (pool) {
         CHECK(std::string(pool->kind()) == "water" && pool->image().w == 8);
+        // Flat until it first steps (Fire.dll starts the field at 128).
         std::vector<uint8_t> before = pool->image().rgba;
+        bool flat = true;
+        for (size_t i = 4; i < before.size(); ++i)
+            flat = flat && before[i] == before[i % 4];
+        CHECK(flat);
         CHECK(pool->advance(0.1f) && pool->image().rgba != before);
     }
     auto frost = openAnimatedTexture(set, *p, 3, &err);

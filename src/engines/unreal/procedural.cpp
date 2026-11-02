@@ -410,12 +410,26 @@ private:
 };
 
 // ---------------------------------------------------------------------
-// Water: a height field at half the texture's size, rippling: each step a
-// cell becomes half its four neighbours' sum less what it was the step
-// before, a little damped. Drops (the Drops properties, NumDrops of them:
-// type, depth, X and Y in the field's cells, and four bytes) disturb it.
-// A water or wave texture shows the slope through its palette; a wet
-// texture shows its SourceTexture shifted by the slope.
+// Water: wave and wet textures (WaterTexture itself is abstract), as
+// Fire.dll does them, worked out by running its routines on test fields
+// and reading its tables' set-up code.
+//
+// The height field is a byte a cell (128 flat), half the texture wide and
+// as tall, its rows staggered: row r's cell c sits over pixel column
+// 2c + 1 + (r & 1). Each step updates every other row, alternately the
+// odd and the even ones: a cell becomes half the sum of its four diagonal
+// neighbours (the rows above and below, the two cells either side of it)
+// less its own value, the rounding taking it a little back towards flat;
+// the edges wrap. The rows not updated are drawn: each pixel from the
+// slope across it, the difference between the cells to its right and to
+// its left, and on the rows between those, from the two either side added.
+// A wave texture looks that slope up in a table lighting a bumpy surface;
+// a wet texture shifts its SourceTexture along the row by it.
+//
+// Drops (the Drops properties, NumDrops of them: type, depth, X, Y and the
+// bytes A-D) set cells each step before the ripple, X and Y in cells of
+// both rows of a pair (Y counts row pairs), wrapping. For several the byte
+// named depth is a phase, and D a height or speed.
 
 enum Drop : uint8_t {
     FixedDepth, PhaseSpot, ShallowSpot, HalfAmpl, RandomMover, FixedRandomSpot, WhirlyThing, BigWhirly,
@@ -423,43 +437,60 @@ enum Drop : uint8_t {
     DiagonalOsc2, RainDrops, AreaClamp, LeakyTap, DrippyTap,
 };
 
+// Fire.dll's sine table: a turn in 256 steps, 0-255 (127 or 128 at 0).
+const std::array<uint8_t, 256>& waterSine() {
+    static const std::array<uint8_t, 256> table = [] {
+        std::array<uint8_t, 256> t{};
+        for (int i = 0; i < 256; ++i)
+            t[size_t(i)] = uint8_t(std::nearbyint(std::sin(float(i) / 256 * 2 * kPi) * 127.5f + 127.45f));
+        return t;
+    }();
+    return table;
+}
+
 class Water : public AnimatedTexture {
 public:
     struct DropData {
         uint8_t type = 0, depth = 0, x = 0, y = 0, a = 0, b = 0, c = 0, d = 0;
-        float px = 0, py = 0; // a moving drop's place
     };
 
     // `source`: a wet texture's source picture, already the texture's size;
-    // empty for water and wave textures (drawn through `palette`).
+    // empty for a wave texture (drawn through `palette`).
     Water(int w, int h, const PropertyList& props, Palette palette, std::vector<DropData> drops, image::Image source,
           const char* kind)
-        : w_(w), h_(h), fw_(std::max(1, w / 2)), fh_(std::max(1, h / 2)), palette_(palette), drops_(std::move(drops)),
+        : w_(w), h_(std::max(2, h & ~1)), fw_(std::max(1, w / 2)), palette_(palette), drops_(std::move(drops)),
           source_(std::move(source)), kind_(kind), random_(uint32_t(w * 31 + h)), pace_(props) {
-        amplitude_ = std::max(1.0f, float(props.byte("WaveAmp", 128))) / 128;
         masked_ = props.boolean("bMasked");
-        // A wave texture is lit as a bumpy surface: from BumpMapAngle
-        // round (256 a turn), BumpMapLight strong, slopes facing the light
-        // past what PhongSize leaves (the larger, the sooner) shining by
-        // PhongRange.
-        if (std::string_view(kind) == "wave") {
-            const float angle = 2 * kPi * float(props.byte("BumpMapAngle")) / 256;
-            lightX_ = std::cos(angle) * float(props.byte("BumpMapLight", 32)) / 128;
-            lightY_ = std::sin(angle) * float(props.byte("BumpMapLight", 32)) / 128;
-            phongFrom_ = float(255 - props.byte("PhongSize")) / 4;
-            phong_ = float(props.byte("PhongRange")) / 64;
-            bump_ = true;
+        const int amp = props.byte("WaveAmp", 128);
+        if (!source_.rgba.empty()) {
+            // SetRefractionTable: a pixel's shift along its row, the slope
+            // + 1 times WaveAmp / 512, rounded towards 0.
+            for (int i = 0; i < 1024; ++i)
+                table_[size_t(i)] = uint8_t(int8_t(std::clamp(int(float(i - 511) * (float(amp) / 512)), -128, 127)));
+        } else {
+            // SetWaveLight: the slope bends the surface's normal, theta
+            // from pi/2 flat towards 0 or pi; lit from the angle
+            // BumpMapLight * pi / 255 by (256 - PhongRange / 2) * cos, and
+            // where the reflection 2 theta - light - BumpMapAngle * pi / 255
+            // is within PhongSize / 512 of straight back, a highlight of up
+            // to 2 * PhongRange.
+            const float light = float(props.byte("BumpMapLight")) * (kPi / 255);
+            const float view = float(props.byte("BumpMapAngle")) * (kPi / 255);
+            const int range = props.byte("PhongRange");
+            const float size = float(props.byte("PhongSize")) / 512;
+            for (int i = 0; i < 1024; ++i) {
+                const float s = float(amp) / 255 * float(512 - i) / 196;
+                const float theta = 1.57075f * s / (1 + std::abs(s)) + kPi / 2;
+                int v = int(float(256 - range / 2) * std::cos(theta - light));
+                const float r = 2 * theta - light - view;
+                if (r * r < size * size)
+                    v += int((size - std::abs(r)) * float(2 * range) / size);
+                table_[size_t(i)] = uint8_t(std::clamp(v, 0, 255));
+            }
         }
-        height_.assign(size_t(fw_) * size_t(fh_), 0);
-        before_ = next_ = height_;
-        for (DropData& d : drops_) {
-            d.px = d.x;
-            d.py = d.y;
-        }
+        field_.assign(size_t(fw_) * size_t(h_), 128);
         image_.w = w;
         image_.h = h;
-        for (int i = 0; i < 60; ++i)
-            tick();
         render();
     }
 
@@ -475,132 +506,144 @@ public:
     }
 
 private:
-    float& cell(int x, int y) {
+    // Cell x of the row pair y: its two rows, wrapping.
+    void set(int x, int y, uint8_t first, uint8_t second) {
         x = ((x % fw_) + fw_) % fw_;
-        y = ((y % fh_) + fh_) % fh_;
-        return height_[size_t(y) * size_t(fw_) + size_t(x)];
+        const int pairs = h_ / 2;
+        y = ((y % pairs) + pairs) % pairs;
+        field_[size_t(2 * y) * size_t(fw_) + size_t(x)] = first;
+        field_[size_t(2 * y + 1) * size_t(fw_) + size_t(x)] = second;
     }
+    void set(int x, int y, uint8_t v) { set(x, y, v, v); }
+    uint8_t randomByte() { return uint8_t(random_.below(256)); }
 
     void drop(DropData& d) {
-        const float depth = d.depth;
-        const int x = d.x, y = d.y;
-        auto speed = [](uint8_t v) { return float(v ? v : 8); };
-        const float wave = std::sin(turn(step_, speed(d.d), 0));
+        const auto& sine = waterSine();
+        const int x = d.x, y = d.y, n = d.d / 2;
         switch (d.type) {
-        case FixedDepth: cell(x, y) = depth; break;
-        case PhaseSpot: cell(x, y) = depth * wave; break;
-        case ShallowSpot: cell(x, y) = depth / 2 * wave; break;
-        case HalfAmpl: cell(x, y) = depth * (0.5f + 0.5f * wave); break;
+        case FixedDepth: set(x, y, d.d); break;
+        case PhaseSpot: set(x, y, sine[d.depth += d.d]); break;
+        case ShallowSpot: set(x, y, uint8_t(sine[d.depth += d.d] / 2 + 64)); break;
+        case HalfAmpl: set(x, y, std::max<uint8_t>(sine[d.depth += d.d], 128)); break;
         case RandomMover:
-            d.px += (random_.unit() - 0.5f) * 2;
-            d.py += (random_.unit() - 0.5f) * 2;
-            cell(int(d.px), int(d.py)) = depth;
+            set(x, y, 185, 71);
+            d.x = uint8_t(d.x + (randomByte() & 3) - (randomByte() & 3));
+            d.y = uint8_t(d.y + (randomByte() & 3) - (randomByte() & 3));
             break;
-        case FixedRandomSpot: cell(x, y) = depth * (random_.unit() * 2 - 1); break;
+        case FixedRandomSpot: {
+            const uint8_t first = randomByte();
+            set(x, y, first, randomByte());
+            break;
+        }
         case WhirlyThing:
         case BigWhirly: {
-            const float r = float(1 + d.c / 16) * (d.type == BigWhirly ? 2.0f : 1.0f);
-            const float angle = turn(step_, float(int8_t(d.b)), d.a);
-            cell(int(float(x) + r * std::cos(angle)), int(float(y) + r * std::sin(angle))) = depth;
+            // A 16-bit phase in B:A, moving by D:C a step; round a circle
+            // of 8 cells (16 for BigWhirly) from (X, Y) + that.
+            const uint16_t phase = uint16_t(((d.b << 8) | d.a) + ((d.d << 8) | d.c));
+            d.a = uint8_t(phase), d.b = uint8_t(phase >> 8);
+            const int shift = d.type == BigWhirly ? 3 : 4;
+            set(x + (sine[d.b] >> shift), y + (sine[uint8_t(d.b + 64)] >> shift), d.depth);
             break;
         }
         case HorizontalLine:
         case VerticalLine:
         case DiagonalLine1:
-        case DiagonalLine2: {
-            const int half = std::max(1, d.c / 4);
-            const float v = depth * std::sin(turn(step_, speed(d.d) / 4, 0));
-            for (int k = -half; k <= half; ++k) {
-                const int dx = d.type == VerticalLine ? 0 : k;
-                const int dy = d.type == HorizontalLine ? 0 : d.type == DiagonalLine2 ? -k : k;
-                cell(x + dx, y + dy) = v;
-            }
-            break;
-        }
+        case DiagonalLine2:
         case HorizontalOsc:
         case VerticalOsc:
         case DiagonalOsc1:
         case DiagonalOsc2: {
-            const float off = float(std::max(2, d.d / 4)) * std::sin(turn(step_, speed(d.c), 0));
-            const float dx = d.type == VerticalOsc ? 0 : off;
-            const float dy = d.type == HorizontalOsc ? 0 : d.type == DiagonalOsc2 ? -off : off;
-            cell(int(float(x) + dx), int(float(y) + dy)) = depth;
+            // D / 2 + 1 cells from (X, Y): the lines at the depth, the
+            // oscillators rising and falling, their phase the depth byte
+            // moving by C a step.
+            const bool osc = d.type >= HorizontalOsc;
+            const int kind = d.type - (osc ? HorizontalOsc : HorizontalLine);
+            const uint8_t v = osc ? sine[d.depth += d.c] : d.depth;
+            for (int k = 0; k <= n; ++k)
+                set(x + (kind == 1 ? 0 : kind == 2 ? -k : k), y + (kind == 0 ? 0 : k), v);
             break;
         }
         case RainDrops:
-            if (random_.below(4) == 0)
-                cell(random_.below(fw_), random_.below(fh_)) = depth;
+            // One step in 16, a cell at random in the D x D square from (X, Y).
+            if ((randomByte() & 15) == 0) {
+                const int dy = randomByte() * d.d >> 8;
+                const int dx = randomByte() * d.d >> 8;
+                set(x + dx, y + dy, d.depth, uint8_t(~d.depth));
+            }
             break;
-        case AreaClamp: {
-            const int r = std::max(1, d.c / 8);
-            for (int dy = -r; dy <= r; ++dy)
-                for (int dx = -r; dx <= r; ++dx)
-                    cell(x + dx, y + dy) = 0;
+        case AreaClamp:
+            // The D / 2 square from (X, Y) held at the depth.
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i)
+                    set(x + i, y + j, d.depth);
             break;
-        }
         case LeakyTap:
         case DrippyTap:
-            if (step_ % uint32_t(d.type == LeakyTap ? 16 + d.d : 8 + d.d / 2) == 0)
-                cell(x, y) = depth;
+            // A counts up by D; each time it passes 255, a drip (and a
+            // DrippyTap's next is a random while off).
+            d.a = uint8_t(d.a + d.d);
+            if (d.a <= d.d) {
+                if (d.type == DrippyTap)
+                    d.a = randomByte();
+                set(x, y, d.depth, uint8_t(~d.depth));
+            }
             break;
         default: break;
         }
     }
 
+    uint8_t& at(int r, int c) {
+        r = ((r % h_) + h_) % h_;
+        c = ((c % fw_) + fw_) % fw_;
+        return field_[size_t(r) * size_t(fw_) + size_t(c)];
+    }
+
     void tick() {
-        ++step_;
         for (DropData& d : drops_)
             drop(d);
-        for (int y = 0; y < fh_; ++y) {
-            const float* row = &height_[size_t(y) * size_t(fw_)];
-            const float* up = &height_[size_t((y + fh_ - 1) % fh_) * size_t(fw_)];
-            const float* down = &height_[size_t((y + 1) % fh_) * size_t(fw_)];
-            const float* old = &before_[size_t(y) * size_t(fw_)];
-            float* out = &next_[size_t(y) * size_t(fw_)];
-            for (int x = 0; x < fw_; ++x) {
-                const int l = x ? x - 1 : fw_ - 1, r = x + 1 < fw_ ? x + 1 : 0;
-                out[x] = ((row[l] + row[r] + up[x] + down[x]) / 2 - old[x]) * 0.96f;
+        ++parity_;
+        // The rows of this step's parity: half their diagonal neighbours'
+        // sum less their own value, rounded down, and up by one below flat.
+        for (int r = parity_ & 1; r < h_; r += 2) {
+            const int left = r & 1 ? 0 : -1; // the neighbours' first cell, from c
+            for (int c = 0; c < fw_; ++c) {
+                const int sum = at(r - 1, c + left) + at(r - 1, c + left + 1) + at(r + 1, c + left) +
+                                at(r + 1, c + left + 1);
+                const int i = sum - 2 * at(r, c) + 512; // 2-1532
+                at(r, c) = uint8_t(std::clamp(i / 2 + (i < 768 ? 1 : 0) - 256, 0, 255));
             }
         }
-        before_.swap(height_);
-        height_.swap(next_);
+    }
+
+    // The slope at each pixel of pixel row y: field row y + 1 if it's one
+    // drawn this step, else the two either side of it added; per cell, the
+    // difference across it (even); between cells, the two either side's mean.
+    void slopes(int y, std::vector<int>& out) {
+        const int r = y + 1;
+        const bool drawn = (r & 1) != (parity_ & 1);
+        const int first = drawn ? r : r - 1; // the row whose cells' columns these are
+        auto sum = [&](int c) { return drawn ? 2 * at(r, c) : at(r - 1, c) + at(r + 1, c); };
+        auto across = [&](int c) { return 2 * ((sum(c + 1) - sum(c - 1)) >> 1); };
+        const int offset = 1 + (((first % h_) + h_) % h_ & 1);
+        out.resize(size_t(w_));
+        for (int x = 0; x < w_; ++x) {
+            const int k = (((x - offset) % w_) + w_) % w_;
+            out[size_t(x)] = k % 2 == 0 ? across(k / 2) : (across(k / 2) + across(k / 2 + 1)) / 2;
+        }
     }
 
     void render() {
-        image_.rgba.resize(size_t(w_) * size_t(h_) * 4);
-        // The slope across each cell, then each pixel from its cell's.
-        slopeX_.resize(height_.size());
-        slopeY_.resize(height_.size());
-        for (int y = 0; y < fh_; ++y) {
-            const float* row = &height_[size_t(y) * size_t(fw_)];
-            const float* up = &height_[size_t((y + fh_ - 1) % fh_) * size_t(fw_)];
-            const float* down = &height_[size_t((y + 1) % fh_) * size_t(fw_)];
-            for (int x = 0; x < fw_; ++x) {
-                const int l = x ? x - 1 : fw_ - 1, r = x + 1 < fw_ ? x + 1 : 0;
-                slopeX_[size_t(y) * size_t(fw_) + size_t(x)] = (row[r] - row[l]) * amplitude_;
-                slopeY_[size_t(y) * size_t(fw_) + size_t(x)] = (down[x] - up[x]) * amplitude_;
-            }
-        }
-        for (int y = 0; y < h_; ++y) {
-            const size_t cellRow = size_t(y * fh_ / h_) * size_t(fw_);
+        image_.rgba.resize(size_t(w_) * size_t(image_.h) * 4);
+        std::vector<int> slope;
+        for (int y = 0; y < image_.h; ++y) {
+            slopes(y % h_, slope);
             uint8_t* p = image_.pixel(0, y);
             for (int x = 0; x < w_; ++x, p += 4) {
-                const size_t c = cellRow + size_t(x * fw_ / w_);
-                const float sx = slopeX_[c], sy = slopeY_[c];
+                const uint8_t v = table_[size_t(std::clamp(512 + slope[size_t(x)], 0, 1023))];
                 if (!source_.rgba.empty()) {
-                    const int ox = std::clamp(int(sx / 16), -16, 16), oy = std::clamp(int(sy / 16), -16, 16);
-                    int ux = x + ox, uy = y + oy;
-                    ux = ux < 0 ? ux + w_ : ux >= w_ ? ux - w_ : ux;
-                    uy = uy < 0 ? uy + h_ : uy >= h_ ? uy - h_ : uy;
-                    std::copy_n(source_.pixel(ux, uy), 4, p);
-                } else if (bump_) {
-                    const float shade = (sx * lightX_ + sy * lightY_) / amplitude_;
-                    const float shine = shade > phongFrom_ ? (shade - phongFrom_) * phong_ : 0;
-                    const int v = std::clamp(128 + int(shade + shine), 0, 255);
-                    std::copy_n(palette_.rgba.data() + size_t(v) * 4, 3, p);
-                    p[3] = masked_ && v == 0 ? 0 : 255;
+                    const int ux = (((x + int8_t(v)) % w_) + w_) % w_;
+                    std::copy_n(source_.pixel(ux, y), 4, p);
                 } else {
-                    const int v = std::clamp(128 + int((sx + sy) / 4), 0, 255);
                     std::copy_n(palette_.rgba.data() + size_t(v) * 4, 3, p);
                     p[3] = masked_ && v == 0 ? 0 : 255;
                 }
@@ -608,19 +651,16 @@ private:
         }
     }
 
-    int w_, h_, fw_, fh_;
+    int w_, h_, fw_;
     Palette palette_;
     std::vector<DropData> drops_;
     image::Image source_;
     const char* kind_;
     Random random_;
-    std::vector<float> height_, before_, next_;
-    std::vector<float> slopeX_, slopeY_;
-    float amplitude_ = 1;
+    std::vector<uint8_t> field_;
+    std::array<uint8_t, 1024> table_{}; // the slope + 512: a wave's palette index, a wet's shift (signed)
+    uint8_t parity_ = 0;
     bool masked_ = false;
-    bool bump_ = false; // a wave texture: lit, below
-    float lightX_ = 0, lightY_ = 0, phongFrom_ = 0, phong_ = 0;
-    uint32_t step_ = 0;
     Pace pace_;
 };
 

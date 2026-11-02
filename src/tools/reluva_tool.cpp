@@ -106,7 +106,7 @@
 //                                                     its frames drawn in software and saved as PPM files
 //   reluva-tool ue-run <game folder> <map | -all> [seconds]  run a level's scripts: start-up events,
 //                                                  then ticks; report errors and natives missing
-//   reluva-tool ue-extract <game folder> <package> <export>  write a texture as .tga (one that plays a second in), a sound or music
+//   reluva-tool ue-extract <game folder> <package> <export> [steps]  write a texture as .tga (one that plays a second in, or after [steps] frames), a sound or music
 //   reluva-tool ue-points <game folder>  check attachment points against the meshes' precomputed places
 //                                                  as the file it holds
 
@@ -5326,8 +5326,9 @@ int cmdUePoints(int argc, char** argv) {
 }
 
 int cmdUeExtract(int argc, char** argv) {
-    if (argc != 5) {
-        std::fprintf(stderr, "usage: reluva-tool ue-extract <game folder> <package name> <export> (writes <export>.tga or .wav...)\n");
+    if (argc != 5 && argc != 6) {
+        std::fprintf(stderr, "usage: reluva-tool ue-extract <game folder> <package name> <export> [steps] (writes <export>.tga or .wav...;\n"
+                             "  a fire or water texture as it is after [steps] frames at 35 a second, a second in by default)\n");
         return 2;
     }
     using namespace reluva::unreal;
@@ -5354,10 +5355,15 @@ int cmdUeExtract(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", err.message.c_str());
             return 1;
         }
-        // One that plays (fire, water...): as it is a second in.
+        // One that plays (fire, water...): as it is a second in, or after
+        // the frames asked for.
         if (isAnimatedTextureClass(cls))
             if (auto anim = openAnimatedTexture(set, *pkg, index)) {
-                anim->advance(1);
+                if (argc == 6)
+                    for (int i = std::atoi(argv[5]); i > 0; --i)
+                        anim->advance(1.0f / 35);
+                else
+                    anim->advance(1);
                 img = anim->image();
             }
         // An uncompressed 32-bit TGA, rows top to bottom.
@@ -5912,7 +5918,7 @@ int main(int argc, char** argv) {
                  "  reluva-tool ue-info <package>\n"
                  "  reluva-tool ue-exports <package> [filter]\n"
                  "  reluva-tool ue-props <package> <export>\n"
-                 "  reluva-tool ue-extract <game folder> <package name> <export>\n"
+                 "  reluva-tool ue-extract <game folder> <package name> <export> [steps]\n"
                  "  reluva-tool ue-points <game folder>\n"
                  "  reluva-tool ue-probe <package | game folder> <export> [-all | -at <offset> <bytes>]\n"
                  "  reluva-tool ue-script <game folder> <class | Class.Function | -all <dir>>\n"

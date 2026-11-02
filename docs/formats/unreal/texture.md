@@ -145,31 +145,61 @@ pictures painted in sparks (a force field's 1,024 Sparkles).
 
 ### Water, wave and wet (WaterTexture and its subclasses)
 
-A height field at half the texture's size (the drops' X and Y are in
-its cells: a 64x64 texture's run to about 32), rippling: each step a
-cell becomes half its four neighbours' sum less its value the step
-before, damped by 0.96; the edges wrap. The drops are the `Drops`
-properties (`ADrop`: type, depth, X, Y, A-D), the first `NumDrops` of
-them (the rest are left over from editing). Each step a drop sets its
-cell: FixedDepth to its depth; PhaseSpot rising and falling by its depth
-(D the speed: the texture's `FX_Frequency` when it was placed);
-ShallowSpot by half; HalfAmpl between 0 and its depth; RandomMover and
-the whirlies moving (round a circle of C / 16 cells, B a signed speed,
-A the phase); the lines a row of cells of C / 2 rising and falling; the
-oscillators a spot swinging along a line; RainDrops at random cells;
-AreaClamp holding cells flat; the taps now and then.
+As Fire.dll does them: its routines were run in an x86 emulator on test
+fields and on `FX.Lripple04_a`, and Reluva's output is the same byte for
+byte (the field, the lighting table and every pixel, after 1 to 300
+steps). WaterTexture itself is abstract; the game has wave and wet ones.
 
-A wet texture shows its `SourceTexture` with each pixel moved by the
-slope there (times `WaveAmp` / 128, up to 16 pixels); water and wave
-textures show the slope through their palette (128 flat). A wave
-texture is lit instead, as a bumpy surface (its slope, without
-`WaveAmp`'s scaling, which is the wet textures' distortion): from the
-direction `BumpMapAngle` (256 a turn), slopes facing the light brighter
-and those facing away darker by `BumpMapLight` / 128; past a slope of
-(255 - `PhongSize`) / 4 towards it, a highlight adds `PhongRange` / 64
-times as much again. The four wave textures (`FX.Lripple04_a` and the
-disruptor's ring, hit and MyTex4) have palettes dark at 128 and bright
-above, so it's their crests that show.
+The height field is a byte a cell, 128 flat, half the texture wide and
+as tall, and starts flat. Its rows are staggered: row r's cell c sits
+over pixel column 2c + 1 + (r & 1). Each step updates every other row,
+the odd ones and the even ones in turn: a cell becomes half the sum of
+its four diagonal neighbours (in the rows above and below, the cells
+either side of its column) less its own value, through a table that
+rounds down, and up by one below 128, so ripples die away by rounding
+alone; values stay 0-255 and the edges wrap.
+
+The rows not updated that step are drawn. Pixel row y shows field row
+y + 1; on the others, the rows either side of it added. Over a cell the
+slope is the difference between the cells either side (made even);
+between two cells it's the mean of theirs. The slope + 512 (0-1023)
+looks up the texture's table:
+
+- Wave: a lit bumpy surface. The slope s = −slope · `WaveAmp` / (255 ·
+  196) tilts the normal to θ = π/2 + (π/2) · s / (1 + |s|); the light
+  comes from `BumpMapLight` · π/255 and gives (256 − `PhongRange` / 2)
+  · cos(θ − light); where 2θ − light − `BumpMapAngle` · π/255 is within
+  `PhongSize` / 512 of 0, a highlight adds up to 2 · `PhongRange`,
+  falling off linearly. Rounded towards 0, kept to 0-255, a palette
+  index. (The names read as if `BumpMapAngle` were the light's angle; in
+  the code it's the second angle in the highlight.) `FX.Lripple04_a`'s
+  flat water is index 93.
+- Wet: (slope + 1) · `WaveAmp` / 512, rounded towards 0 and kept to
+  -128..127, is how far along its row each pixel takes its
+  `SourceTexture`'s, wrapping.
+
+The drops are the `Drops` properties (`ADrop`: type, depth, X, Y, A-D),
+the first `NumDrops` of them, applied in order before each step. A drop
+sets a cell in both rows of the pair Y (rows 2Y and 2Y + 1), column X;
+the moving ones wrap within the field. For several the byte the scripts
+call depth is a phase, and D a height or a speed. Sin is a table of a
+turn in 256 steps, 0-255.
+
+| Type | Each step |
+|---|---|
+| FixedDepth | the cell at D |
+| PhaseSpot | depth += D; the cell at Sin(depth) |
+| ShallowSpot | as PhaseSpot at Sin / 2 + 64 |
+| HalfAmpl | as PhaseSpot, but no lower than 128 |
+| RandomMover | the cell 185 in the first row and 71 in the second, then X and Y each move by a random −3..3 |
+| FixedRandomSpot | the cell random |
+| WhirlyThing, BigWhirly | a 16-bit phase in B:A moves by D:C; the cell (X, Y) + (Sin, Cos of B's angle) / 16 (/ 8 for BigWhirly) at depth: round a circle of 8 (16) cells |
+| Horizontal, Vertical, DiagonalLine1 and 2 | D / 2 + 1 cells from (X, Y) at depth: right, down, down-left, down-right |
+| Horizontal, Vertical, DiagonalOsc1 and 2 | the same lines, depth += C a step and the cells at Sin(depth) |
+| RainDrops | one step in 16, a random cell in the D × D square from (X, Y): depth in the first row, 255 − depth in the second |
+| AreaClamp | the D / 2 square from (X, Y) at depth |
+| LeakyTap | A += D; when it wraps past 255, the cell as RainDrops does |
+| DrippyTap | as LeakyTap, A set to a random value each drip, so the drips come unevenly |
 
 ### Ice (IceTexture)
 
@@ -187,10 +217,10 @@ glass. The glass slides, or with `MoveIce` the source does, as
 | 2 Gestation | to and fro on both axes, at slightly different rates |
 | 3 WavyX, 4 WavyY | linear, with a wobble across |
 
-`TimeMethod` (frame-rate synced or real time) isn't used: it always runs
-in real time, 30 steps a second. With no ice textures in The Fallen,
-this is Reluva's reading of the property names, tried only on the
-tests' made-up texture.
+`TimeMethod` (frame-rate synced or real time) isn't used: it slides in
+real time, drawn as the frame rates above pace it. With no ice textures
+in The Fallen, this is Reluva's reading of the property names, tried
+only on the tests' made-up texture, and not checked against Fire.dll.
 
 ### Scripted (ScriptedTexture)
 
