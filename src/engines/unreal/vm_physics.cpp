@@ -308,24 +308,6 @@ bool ScriptLevel::findSpot(const Vec& e, Vec& at) {
         if (fits(spot, e))
             return done();
     }
-    // Reluva's own allowance: its box test is stricter than the engine's
-    // where sloped faces meet (M07_SiskoL1A's player start, by a ramp,
-    // found nowhere above), so a wider search before giving up: raised as
-    // far as its height, then nudged sideways, and both.
-    for (float d = 2; d <= 2 * e[2]; d += 2) {
-        spot = add(at, Vec{0, 0, d});
-        if (fits(spot, e))
-            return done();
-    }
-    for (int step = 1; step <= 16; ++step) {
-        const float d = float(step) * 2;
-        const Vec tries[] = {{d, 0, 0}, {-d, 0, 0}, {0, d, 0}, {0, -d, 0}, {d, d, d}, {-d, -d, d}, {d, -d, d}, {-d, d, d}, {0, 0, -d}};
-        for (const Vec& t : tries) {
-            spot = add(at, t);
-            if (fits(spot, e))
-                return done();
-        }
-    }
     return false;
 }
 

@@ -3,14 +3,16 @@
 
 #pragma once
 
-// Collision against a level's geometry: its BSP says which space is solid
-// (the brushes the level was carved from) and which open. Points are
-// classified down the tree; boxes and lines are swept through it, each
-// plane widened by the box's reach along its normal (without the bevel
-// planes UE1 keeps in its leaf hulls, so a box can stop a little early
-// at sharp outside corners). See docs/formats/unreal/collision.md.
+// Collision against a level's geometry, as Engine.dll's UModel PointCheck
+// and LineCheck do it: the BSP walked with each plane widened by the box's
+// reach (times 1.1) to the solid leaves it touches, and each of those
+// tested against the convex hull stored for its node, its planes, its
+// bounding box and bevels along its edges, at the box's true size. Lines
+// and points: the BSP alone. See docs/formats/unreal/collision.md.
 
 #include "engines/unreal/model.h"
+
+#include <vector>
 
 namespace reluva::unreal {
 
@@ -36,8 +38,23 @@ public:
 
 private:
     struct Sweep;
+    struct Plane {
+        Vec3f n{};
+        float w = 0;
+        int32_t node = -1; // the node it came from, -1 for the box's faces and bevels
+    };
     void sweep(Sweep& s, int32_t node, float f0, float f1, bool outside, int entry) const;
     bool overlaps(int32_t node, const Vec3f& c, const Vec3f& e, bool outside) const;
+    bool csg(const BspNode& n) const;
+    bool hullOverlaps(int32_t node, const Vec3f& c, const Vec3f& e) const;
+    void clipHull(Sweep& s, int32_t node) const;
+    // A node's collision hull: its planes, its bounding box's faces (0.1
+    // out) and the bevels along its edges; false if it has none.
+    bool hull(int32_t node, std::vector<Plane>& planes) const;
+    // Each node's hull, built once when first asked for.
+    const std::vector<Plane>* hullOf(int32_t node) const;
+    mutable std::vector<std::vector<Plane>> hulls_;
+    mutable std::vector<uint8_t> hullState_; // 0 not built, 1 built, 2 none
 
     const Model& model_;
 };

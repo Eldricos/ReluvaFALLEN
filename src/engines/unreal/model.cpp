@@ -79,7 +79,12 @@ void readLighting(Reader& r, Model& out) {
     r.skip(n * 25); // bounds: boxes
     if (!r.ok() || !arrayCount(r, 4, n))
         return fail("bounds run past the end");
-    r.skip(n * 4); // leaf hulls: planes' node indices
+    // Leaf hulls: for each node with one (its collisionBound), the planes'
+    // node indices (0x40000000 set: the plane flipped) to -1, then the
+    // hull's bounding box, 6 floats (min, max) stored as their bits.
+    out.leafHulls.resize(n);
+    for (int32_t& h : out.leafHulls)
+        h = r.i32();
     if (!r.ok() || !arrayCount(r, 11, n))
         return fail("leaf hulls run past the end");
     out.leaves.resize(n);

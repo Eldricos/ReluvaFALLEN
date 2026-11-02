@@ -2,10 +2,10 @@
 
 How Reluva tells solid from open space in a level, and sweeps points and
 boxes through it (`engines/unreal/collision.h`). It reads only what the
-level's model already holds ([model.md](model.md)): its BSP nodes and
-the "root outside" flag. Clean room like the rest of the engine: this is
-Reluva's reading of the data, checked against The Fallen's maps, not
-Epic's code.
+level's model already holds ([model.md](model.md)): its BSP nodes, its
+leaf hulls and the "root outside" flag. The boxes follow Engine.dll's
+`UModel::PointCheck` and `LineCheck`, read for what they do and written
+here anew.
 
 ## Solid and open
 
@@ -18,9 +18,9 @@ polygon planes. Walking from the root to a point:
   in every map The Fallen has.
 - At a node, the point is in front (distance ≥ 0) or behind. A node from
   a solid (CSG) brush decides the space: in front is open, behind is
-  solid. A node with flag **0x01** comes from a non-solid brush
-  (semisolid or non-solid, which are drawn but carve nothing), and leaves
-  it as it was. As a rule, with *outside* carried down the tree:
+  solid. A node with no vertices, or with flag **0x01** (from a
+  non-solid brush: semisolid or non-solid, drawn but carving nothing) or
+  **0x20**, leaves it as it was, as the engine's checks have it. As a rule, with *outside* carried down the tree:
   front: `outside || csg`; back: `outside && !csg`.
 - Where the walk leaves the tree (a child index ≤ 0), *outside* says
   whether the point is open.
@@ -32,42 +32,63 @@ open, and a line down from each finds a floor.
 ## Boxes
 
 Actors collide as boxes: half sizes radius × radius × height (UE1's
-cylinders, as boxes for the world). A box is on a node's side if any of
-it is: its centre within the box's **reach** along the node's normal,
-`|nx|·ex + |ny|·ey + |nz|·ez`, of that side. A box can be on both sides,
-and then both are walked. It overlaps solid if any leaf it reaches is.
+cylinders, as boxes for the world). Reach along a normal is
+`|nx|·ex + |ny|·ey + |nz|·ez`.
 
-The planes are only widened, without the extra "bevel" planes UE1 adds
-around sharp outside corners (the model's leaf hulls, which Reluva reads
-but doesn't use). So near a corner that sticks out, a box is stopped a
-little early, and widened planes cross to make thin slivers of solid
-just outside the corner. Two things keep these slivers from trapping an
-actor:
+- **The walk.** Down the BSP with the box made 1.1 times bigger: it's on
+  a node's side if its centre is within that reach of it, and may be on
+  both. A box that reaches a solid leaf (the outside rule above) has only
+  found a hull to test.
+- **The hull.** Each node with a `collisionBound` has a convex hull in
+  the model's leaf hulls, an array of i32 starting there:
+  - node indices, each one's plane a face of the hull, facing out (bit
+    0x40000000 set: the plane flipped), up to −1;
+  - then six floats stored as their bits: the hull's bounding box, min
+    then max.
+  
+  A solid leaf counts only if the box, at its true size, overlaps its
+  node's hull. A node with no hull has nothing to hit.
+- **What the hull is tested against.** Each plane in turn, and the box
+  is clear if any one has its centre at least its reach in front:
+  - the hull's planes;
+  - the bounding box's six faces, 0.1 out;
+  - bevels: for two of its planes that face opposite ways along an axis
+    (X, Y or Z) but agree across it ((axis × n1) · (axis × n2) > 0.001),
+    the plane through the line where they meet, square to that axis,
+    facing as the first.
 
-- **Touching isn't overlapping.** A box only counts as across a plane
-  once it is 0.03 units past its widened position. A box resting against
-  a wall then slides along it without float rounding putting it in.
-- **Stopping short of the plane.** A sweep that hits stops 0.1 units
-  from the plane it hit, measured along the plane's normal, not along
-  the move. Coming in at a grazing angle, backing off 0.1 units along the
-  move would hardly move it away from the plane.
+  These bevels and box faces are what keep a box from stopping early at
+  an outside corner, where planes only widened would cross in front of
+  it. Before this, M07_SiskoL1A's player start (by a ramp) fit nowhere,
+  and a box stuck in such a sliver on M04_SiskoL1 kept landing in place.
 
 ## Sweeps
 
 `trace(start, end, extent)` sweeps a box (or a line: extent 0) and
-returns the first time it enters solid space. It walks the tree with the
-part of the move, `[f0, f1]` (fractions 0–1), that's on each side of each
-node's widened plane. Along the move the distance changes linearly, so
-each side's part is where `d0 + f·(d1 − d0)` stays on that side. The
-first solid leaf reached gives the time. The plane where that leaf's part
-began is the surface hit, with its normal facing back along the move. A
-sweep that starts in a solid leaf says so (`startSolid`) and goes
-nowhere.
+returns the first time it enters solid space.
+- **The walk.** The tree is walked with the part of the move,
+  `[f0, f1]` (fractions 0–1), on each side of each node's widened plane
+  (times 1.1 for a box). Along the move the distance changes linearly.
+- **A line** stops at the first solid leaf it reaches. The plane where
+  that leaf's part began is the surface hit, with its normal facing back
+  along the move. A line that starts in a solid leaf says so
+  (`startSolid`).
+- **A box** clips the whole move against the hull of each solid leaf's
+  node. For each plane, the box's entry time is the latest time it
+  crosses a plane moving in (one it starts within its reach of counts as
+  0). Its exit time is the earliest time it crosses one moving out. If
+  it runs alongside a plane, outside it, the hull isn't hit. It's a hit
+  if it enters (after −1) before it leaves, and the plane it entered
+  last is the one hit. A hull it starts inside without crossing into
+  isn't hit, so a box overlapping the world can move out.
+- **Stopping short.** A sweep that hits stops 0.1 units from the plane
+  it hit, measured along the plane's normal, not along the move. Coming
+  in at a grazing angle, backing off 0.1 units along the move would
+  hardly move it away from the plane.
 
 On The Fallen, a box the player's size (17 × 17 × 39) traced down from a
 navigation point stops 39 units above where the line down does, and
-along X and Y 17 units before it. That's what widening by reach should
-give.
+along X and Y 17 units before it.
 
 ## How movement uses it
 

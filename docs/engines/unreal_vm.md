@@ -389,14 +389,11 @@ movement, built from what the scripts set and expect.
   where the last one left it. Then, if all that moved it less than
   √1.5 × the extent's length and it fits, it stays there. Else it is
   raised from the spot 20, 40 and 60 units.
-  Reluva's box test is stricter than the engine's where sloped faces
-  meet (M07_SiskoL1A's player start, by a ramp, fits nowhere above), so
-  before giving up Reluva also tries it raised by up to twice its height,
-  and nudged up to 32 units sideways and diagonally. As SpawnActor
-  does, an actor that fits nowhere isn't spawned (`Spawn` returns None,
-  and the log says so). Over all maps' first 3 seconds, that's 3 times:
-  a Cardassian hypospray 60 units wide where nothing that wide fits.
-  Before, it was left at the world's origin. Starts are placed for the
+  As SpawnActor does, an actor that fits nowhere isn't spawned (`Spawn`
+  returns None, and the log says so). Over all maps' first 3 seconds,
+  that's 4 times: a Cardassian hypospray 60 units wide where nothing that
+  wide fits, and the like. Before, it was left at the world's origin.
+  Starts are placed for the
   default pawn height (40), and The Fallen's characters are taller (Worf
   is 52), so a player starting on a lift begins a little into its floor
   and is lifted onto it.

@@ -1598,8 +1598,22 @@ static void testCollision() {
     BspNode floor;
     floor.plane = {0, 0, 1, 0};
     floor.front = floor.back = -1;
+    floor.vertexCount = 4; // a CSG node needs its polygon
+    floor.collisionBound = 0;
     m.nodes.push_back(floor);
     m.rootOutside = false;
+    // Its collision hull: its own plane, then a bounding box (as float bits).
+    auto bits = [](float f) {
+        int32_t i;
+        std::memcpy(&i, &f, 4);
+        return i;
+    };
+    auto setHull = [&](std::array<float, 6> box) {
+        m.leafHulls = {0, -1};
+        for (float f : box)
+            m.leafHulls.push_back(bits(f));
+    };
+    setHull({-1000, -1000, -1000, 1000, 1000, 0});
     LevelCollision c(m);
     CHECK(c.solid(Vec3f{0, 0, -1}) && !c.solid(Vec3f{5, 5, 1}));
     CHECK(c.solid(Vec3f{0, 0, 5}, Vec3f{4, 4, 10}) && !c.solid(Vec3f{0, 0, 11}, Vec3f{4, 4, 10}));
@@ -1625,15 +1639,17 @@ static void testCollision() {
     const float s = std::sqrt(0.5f);
     m.nodes[0].plane = {-s, -s, 0, -100};
     m.nodes[0].flags = 0;
+    setHull({-1000, -1000, -1000, 1000, 1000, 1000});
     m.rootOutside = false;
+    const LevelCollision fresh(m); // its hulls are built once, so a new one for the new model
     const Vec3f box{17, 17, 47};
     for (const Vec3f& to : {Vec3f{200, 0, 0}, Vec3f{400, -280, 0}}) {
-        h = c.trace({0, 0, 0}, to, box);
-        CHECK(h.hit() && !h.startSolid && std::abs(h.normal[0] + s) < 1e-3f && !c.solid(h.location, box));
+        h = fresh.trace({0, 0, 0}, to, box);
+        CHECK(h.hit() && !h.startSolid && std::abs(h.normal[0] + s) < 1e-3f && !fresh.solid(h.location, box));
     }
-    h = c.trace({0, 0, 0}, {200, 0, 0}, box);
+    h = fresh.trace({0, 0, 0}, {200, 0, 0}, box);
     const Vec3f along{h.location[0] + 50, h.location[1] - 50, h.location[2]};
-    CHECK(!c.trace(h.location, along, box).hit() && !c.solid(along, box));
+    CHECK(!fresh.trace(h.location, along, box).hit() && !fresh.solid(along, box));
 }
 
 static void testAnimationPose() {

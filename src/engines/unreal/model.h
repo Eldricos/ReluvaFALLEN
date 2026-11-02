@@ -80,6 +80,7 @@ struct Model {
     int32_t polys = 0; // object reference
     std::vector<LightMapIndex> lightMaps;
     std::vector<uint8_t> lightBits;
+    std::vector<int32_t> leafHulls; // collision hulls (collision.md)
     std::vector<Leaf> leaves;
     std::vector<int32_t> lights; // object references: light actors, lists ending in 0
     bool rootOutside = true;     // whether what's beyond the BSP's root is open space
