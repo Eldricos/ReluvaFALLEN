@@ -298,12 +298,17 @@ void SdlGpuRenderer::clearDepth() {
     if (pass_ && viewport_.w > 0 && viewport_.h > 0)
         SDL_SetGPUViewport(pass_, &viewport_);
     if (pass_)
-        SDL_SetGPUStencilReference(pass_, 1);
+        SDL_SetGPUStencilReference(pass_, stencilRef_);
 }
 
-void SdlGpuRenderer::setStencilMode(StencilMode mode) {
-    if (hasStencil_)
-        stencilMode_ = mode;
+void SdlGpuRenderer::setStencilMode(StencilMode mode, uint8_t level) {
+    if (!hasStencil_)
+        return;
+    stencilMode_ = mode;
+    // Mark compares with level - 1 and raises it; Inside and Unmark with level.
+    stencilRef_ = mode == StencilMode::Mark ? uint8_t(level - 1) : mode == StencilMode::Once ? uint8_t(1) : level;
+    if (pass_)
+        SDL_SetGPUStencilReference(pass_, stencilRef_);
 }
 
 bool SdlGpuRenderer::upload(const void* data, uint32_t size, SDL_GPUBuffer* buffer, bool cycle) {
@@ -607,14 +612,16 @@ SDL_GPUGraphicsPipeline* SdlGpuRenderer::pipeline(const gfx::DrawState& state) {
     info.depth_stencil_state.enable_depth_write = state.depthWrite;
     info.depth_stencil_state.compare_op = state.depthEqual ? SDL_GPU_COMPAREOP_EQUAL : SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
     if (stencilMode_ != StencilMode::None) {
-        // Mark: 1 wherever drawn; Inside: drawn only where it's 1.
+        // Mark: where it's the reference (level - 1), raised by one; Inside:
+        // drawn only where it's the reference; Unmark: lowered by one there;
+        // Once: where it isn't 1, set to 1.
         SDL_GPUStencilOpState op{};
         op.fail_op = op.depth_fail_op = SDL_GPU_STENCILOP_KEEP;
-        const bool marks = stencilMode_ == StencilMode::Mark || stencilMode_ == StencilMode::Once;
-        op.pass_op = marks ? SDL_GPU_STENCILOP_REPLACE : SDL_GPU_STENCILOP_KEEP;
-        op.compare_op = stencilMode_ == StencilMode::Mark   ? SDL_GPU_COMPAREOP_ALWAYS
-                        : stencilMode_ == StencilMode::Once ? SDL_GPU_COMPAREOP_NOT_EQUAL
-                                                            : SDL_GPU_COMPAREOP_EQUAL;
+        op.pass_op = stencilMode_ == StencilMode::Mark     ? SDL_GPU_STENCILOP_INCREMENT_AND_CLAMP
+                     : stencilMode_ == StencilMode::Unmark ? SDL_GPU_STENCILOP_DECREMENT_AND_CLAMP
+                     : stencilMode_ == StencilMode::Once   ? SDL_GPU_STENCILOP_REPLACE
+                                                           : SDL_GPU_STENCILOP_KEEP;
+        op.compare_op = stencilMode_ == StencilMode::Once ? SDL_GPU_COMPAREOP_NOT_EQUAL : SDL_GPU_COMPAREOP_EQUAL;
         info.depth_stencil_state.enable_stencil_test = true;
         info.depth_stencil_state.front_stencil_state = info.depth_stencil_state.back_stencil_state = op;
         info.depth_stencil_state.compare_mask = info.depth_stencil_state.write_mask = 0xff;

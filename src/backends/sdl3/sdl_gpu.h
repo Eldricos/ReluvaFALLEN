@@ -56,7 +56,8 @@ public:
     void clearDepthAndStencil() override;
     bool clearStencil_ = false; // clearDepth clears the marks too
     bool hasStencil() const override { return hasStencil_; }
-    void setStencilMode(StencilMode mode) override;
+    void setStencilMode(StencilMode mode, uint8_t level = 1) override;
+    uint8_t stencilRef_ = 1; // the reference the mode compares with
     void setMirrored(bool mirrored) override { mirrored_ = mirrored; }
     void setGamma(float gamma) override { gamma_ = gamma > 0.05f ? gamma : 1.0f; }
     void setView(const gfx::Mat4& viewProj, const gfx::Vec3& eye) override {

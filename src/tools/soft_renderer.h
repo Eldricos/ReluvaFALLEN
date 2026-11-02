@@ -53,7 +53,11 @@ public:
     void clearDepth() override;
     void clearDepthAndStencil() override;
     bool hasStencil() const override { return true; }
-    void setStencilMode(StencilMode mode) override { stencilMode_ = mode; }
+    void setStencilMode(StencilMode mode, uint8_t level = 1) override {
+        stencilMode_ = mode;
+        stencilLevel_ = level;
+    }
+    uint8_t stencilLevel_ = 1;
     void setMirrored(bool) override {}
     void setGamma(float gamma) override { gamma_ = gamma; }
     void endFrame(const Surface* overlay) override;

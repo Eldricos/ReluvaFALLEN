@@ -1194,7 +1194,16 @@ void MapViewer::update(uint64_t nowMs) {
         renderer_->beginFrame(viewProj, pos_, {20, 24, 40});
     }
     seeZonesFrom(pos_, viewProj);
-    drawMirrors(proj, gfx::lookAlong(pos_, forward, {0, 0, 1}), viewProj);
+    if (animate_)
+        animTime_ += dt;
+    if (play_)
+        coronaDt_ = dt;
+    // The last frame's posed meshes, drawn by now.
+    for (const GpuMesh& g : posedMeshes_)
+        if (g.mesh)
+            renderer_->destroyMesh(g.mesh);
+    posedMeshes_.clear();
+    drawMirrors(proj, gfx::lookAlong(pos_, forward, {0, 0, 1}), viewProj, pos_, forward, right, 0, nullptr);
     // Backdrop surfaces: with the sky, only their depth, hiding what's
     // behind them; without it, a plain colour.
     for (const Batch& b : batches_) {
@@ -1212,39 +1221,9 @@ void MapViewer::update(uint64_t nowMs) {
         }
         renderer_->draw(call);
     }
-    drawBatches(levelBatches(), mesh_, gfx::identity(), true);
-    drawSurfaceSwaps();
-    drawVolumes(pos_);
-    for (size_t i = 0; i < movers_.size(); ++i) {
-        const MoverDraw& m = movers_[i];
-        VmObject* live = play_ && i < moverActors_.size() ? moverActors_[i] : nullptr;
-        LevelPlay::Look look;
-        // Lit where it is now, by the lights as they are now.
-        if (live && play_->look(live, look)) {
-            const MeshLight light = moverLightAt(look.location, m.reach);
-            drawBatches(m.batches, moverMesh_, moverPlacement(m.mover, look.location, look.rotation), false, false,
-                        &light);
-        } else {
-            const gfx::Mat4 place = moverTransform(m);
-            const MeshLight light = moverLightAt(Vec3f{place[12], -place[13], place[14]}, m.reach);
-            drawBatches(m.batches, moverMesh_, place, false, false, &light);
-        }
-    }
-    if (animate_)
-        animTime_ += dt;
-    if (play_) {
-        coronaDt_ = dt;
-        drawLiveActors(forward, right);
+    drawWorld(forward, right, pos_);
+    if (play_)
         drawScreenFlash(forward, right);
-    } else {
-        for (const MeshDraw& d : meshActors_) {
-            const Mesh& mesh = meshes_[d.mesh];
-            const MeshAnimSeq* anim = d.anim >= 0 ? &mesh.anims[size_t(d.anim)] : nullptr;
-            drawMesh(*renderer_, gpuMeshes_[d.mesh], d.placement, poseAt(mesh, anim, animTime_, d.startFraction),
-                     textured_ ? d.textures : std::vector<gfx::TextureId>{}, d.light, kExposure);
-        }
-        drawSprites(sprites_, forward, right);
-    }
     if (play_ && !freeCam_)
         drawGameHud();
     drawOverlay(nowMs);
@@ -1675,14 +1654,14 @@ void MapViewer::drawBatches(const std::vector<Batch>& batches, gfx::MeshId mesh,
     for (const Batch& b : batches) {
         if ((b.polyFlags & polyflag::FakeBackdrop) || !(b.zones & zonesSeen_))
             continue;
-        if ((b.polyFlags & polyflag::Mirrored) && mirrorPass_)
+        if (&b == mirrorThrough_) // the mirror the view is through
             continue;
         gfx::DrawCall call;
         call.mesh = mesh;
         call.model = model;
         call.firstIndex = b.firstIndex;
         call.indexCount = b.indexCount;
-        if ((b.polyFlags & polyflag::Mirrored) && !blended(b.polyFlags) && mirrorsDrawn_) {
+        if ((b.polyFlags & polyflag::Mirrored) && !blended(b.polyFlags) && mirrorLevel_ < 3 && renderer_->hasStencil()) {
             // An opaque mirror shows only what it reflects: its depth, to
             // hide what's behind it.
             call.state.src = gfx::Blend::Zero;
@@ -2032,28 +2011,67 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at, const LevelPlay::Look* actor) 
     return light;
 }
 
+// The world as seen: the level's surfaces, the volume lights over them,
+// the movers and the actors (or, not playing, the placed meshes and
+// sprites), from `eye` looking along `forward`.
+void MapViewer::drawWorld(const gfx::Vec3& forward, const gfx::Vec3& right, const gfx::Vec3& eye) {
+    drawBatches(levelBatches(), mesh_, gfx::identity(), true);
+    drawSurfaceSwaps();
+    drawVolumes(eye);
+    for (size_t i = 0; i < movers_.size(); ++i) {
+        const MoverDraw& m = movers_[i];
+        VmObject* live = play_ && i < moverActors_.size() ? moverActors_[i] : nullptr;
+        LevelPlay::Look look;
+        // Lit where it is now, by the lights as they are now.
+        if (live && play_->look(live, look)) {
+            const MeshLight light = moverLightAt(look.location, m.reach);
+            drawBatches(m.batches, moverMesh_, moverPlacement(m.mover, look.location, look.rotation), false, false,
+                        &light);
+        } else {
+            const gfx::Mat4 place = moverTransform(m);
+            const MeshLight light = moverLightAt(Vec3f{place[12], -place[13], place[14]}, m.reach);
+            drawBatches(m.batches, moverMesh_, place, false, false, &light);
+        }
+    }
+    if (play_) {
+        drawLiveActors(forward, right);
+    } else {
+        for (const MeshDraw& d : meshActors_) {
+            const Mesh& mesh = meshes_[d.mesh];
+            const MeshAnimSeq* anim = d.anim >= 0 ? &mesh.anims[size_t(d.anim)] : nullptr;
+            drawMesh(*renderer_, gpuMeshes_[d.mesh], d.placement, poseAt(mesh, anim, animTime_, d.startFraction),
+                     textured_ ? d.textures : std::vector<gfx::TextureId>{}, d.light, kExposure);
+        }
+        drawSprites(sprites_, forward, right);
+    }
+}
+
 // Mirrors (surfaces flagged Mirrored: Sisko's desk in Ops, the glass
 // panes of M01_SiskoL1B): as the original's OccludeBsp does, each seen
-// shows the scene reflected in its plane, drawn where the mirror is (the
-// stencil's marks), nothing behind its plane (the projection's near plane
-// moved onto it); then the mirror's own texture over it if it's
-// translucent or modulated, else only its depth. Reluva draws the level's
-// surfaces and movers in the reflection, not its actors; one reflection
-// deep (the original goes three).
-void MapViewer::drawMirrors(const gfx::Mat4& proj, const gfx::Mat4& view, const gfx::Mat4& viewProj) {
-    mirrorsDrawn_ = false;
-    if (!renderer_->hasStencil())
+// from its front shows the world reflected in its plane, mirrors in it
+// too, up to three reflections deep. Each is drawn where the mirror is
+// (the stencil raised a level there), nothing behind its plane (the
+// projection's near plane moved onto it), its actors, movers and
+// sprites too (not their shadows or coronas); then the mark lowered again
+// and the depth cleared, for the view it's in to draw its own world over
+// it: the mirror's own texture if it's translucent or modulated, else only
+// its depth, and whatever stands before it. Called before the view's own
+// world, with that view (`level` reflections deep, through `through`).
+void MapViewer::drawMirrors(const gfx::Mat4& proj, const gfx::Mat4& view, const gfx::Mat4& viewProj,
+                            const gfx::Vec3& eye, const gfx::Vec3& forward, const gfx::Vec3& right, int level,
+                            const Batch* through) {
+    if (!renderer_->hasStencil() || level >= 3)
         return;
     int drawn = 0;
     for (const Batch& m : levelBatches()) {
-        if (!(m.polyFlags & polyflag::Mirrored) || !(m.zones & zonesSeen_) || drawn >= 4)
+        if (!(m.polyFlags & polyflag::Mirrored) || &m == through || !(m.zones & zonesSeen_) || drawn >= 4)
             continue;
         const gfx::Vec3 n = m.mirrorNormal;
-        const float side = n[0] * pos_[0] + n[1] * pos_[1] + n[2] * pos_[2] - m.mirrorD;
+        const float side = n[0] * eye[0] + n[1] * eye[1] + n[2] * eye[2] - m.mirrorD;
         if (side <= 0) // seen from behind
             continue;
         ++drawn;
-        // Where the mirror is: marked.
+        // Where the mirror is: marked a level up.
         gfx::DrawCall mark;
         mark.mesh = mesh_;
         mark.firstIndex = m.firstIndex;
@@ -2062,7 +2080,7 @@ void MapViewer::drawMirrors(const gfx::Mat4& proj, const gfx::Mat4& view, const 
         mark.state.dst = gfx::Blend::One;
         mark.state.depthWrite = false;
         mark.state.cull = gfx::Cull::None;
-        renderer_->setStencilMode(gfx::Renderer3D::StencilMode::Mark);
+        renderer_->setStencilMode(gfx::Renderer3D::StencilMode::Mark, uint8_t(level + 1));
         renderer_->draw(mark);
         // The world reflected in the plane: x - 2 (n.x - d) n.
         gfx::Mat4 reflect = gfx::identity();
@@ -2088,17 +2106,37 @@ void MapViewer::drawMirrors(const gfx::Mat4& proj, const gfx::Mat4& view, const 
         if (std::fabs(cq) > 1e-9f)
             for (size_t k = 0; k < 4; ++k)
                 p[k * 4 + 2] = c[k] / cq;
-        renderer_->setView(gfx::multiply(p, mirrorView), gfx::transformPoint(reflect, pos_));
-        renderer_->setMirrored(true);
-        renderer_->setStencilMode(gfx::Renderer3D::StencilMode::Inside);
-        mirrorPass_ = true;
-        drawBatches(levelBatches(), mesh_, gfx::identity(), true);
-        mirrorPass_ = false;
-        renderer_->setMirrored(false);
-        renderer_->setStencilMode(gfx::Renderer3D::StencilMode::None);
-        renderer_->clearDepthAndStencil();
-        renderer_->setView(viewProj, pos_);
-        mirrorsDrawn_ = true;
+        const gfx::Mat4 mirrorViewProj = gfx::multiply(p, mirrorView);
+        const gfx::Vec3 mirrorEye = gfx::transformPoint(reflect, eye);
+        auto turn = [&](const gfx::Vec3& v) { // a direction reflected
+            const float k = 2 * (n[0] * v[0] + n[1] * v[1] + n[2] * v[2]);
+            return gfx::Vec3{v[0] - k * n[0], v[1] - k * n[1], v[2] - k * n[2]};
+        };
+        const gfx::Vec3 mirrorForward = turn(forward), mirrorRight = turn(right);
+        renderer_->setView(mirrorViewProj, mirrorEye);
+        renderer_->setMirrored((level + 1) % 2 == 1);
+        const int saved = mirrorLevel_;
+        const Batch* savedThrough = mirrorThrough_;
+        mirrorLevel_ = level + 1;
+        mirrorThrough_ = &m;
+        // The mirrors seen in it first, then its world, only where it is.
+        drawMirrors(proj, mirrorView, mirrorViewProj, mirrorEye, mirrorForward, mirrorRight, level + 1, &m);
+        renderer_->setStencilMode(gfx::Renderer3D::StencilMode::Inside, uint8_t(level + 1));
+        drawWorld(mirrorForward, mirrorRight, mirrorEye);
+        mirrorLevel_ = saved;
+        mirrorThrough_ = savedThrough;
+        // Back to the view it's in: the mark lowered where the mirror is,
+        // whatever's in front of it, and the depth forgotten.
+        renderer_->setMirrored(level % 2 == 1);
+        renderer_->setView(viewProj, eye);
+        mark.state.depthTest = false;
+        renderer_->setStencilMode(gfx::Renderer3D::StencilMode::Unmark, uint8_t(level + 1));
+        renderer_->draw(mark);
+        renderer_->clearDepth();
+        if (level > 0)
+            renderer_->setStencilMode(gfx::Renderer3D::StencilMode::Inside, uint8_t(level));
+        else
+            renderer_->setStencilMode(gfx::Renderer3D::StencilMode::None);
     }
 }
 
@@ -2421,10 +2459,6 @@ int MapViewer::liveMesh(const ObjectRef& ref, const std::string& anim) {
 // The level's actors as they are now: meshes posed where their animation
 // is (AnimFrame), and sprites.
 void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right) {
-    for (const GpuMesh& g : posedMeshes_) // the last frame's, drawn by now
-        if (g.mesh)
-            renderer_->destroyMesh(g.mesh);
-    posedMeshes_.clear();
     std::vector<SpriteDraw> sprites;
     // Only those that may be seen: not hidden, in a zone seen (the rest
     // aren't drawn, so their scripts aren't asked to get them ready).
@@ -2432,7 +2466,8 @@ void MapViewer::drawLiveActors(const gfx::Vec3& forward, const gfx::Vec3& right)
         if (play_->mayBeSeen(a, zonesSeen_))
             drawLiveActor(a, sprites);
     addDecals(sprites);
-    addCoronas(sprites, forward, coronaDt_);
+    if (mirrorLevel_ == 0) // not in a mirror: their fading goes by the camera's view
+        addCoronas(sprites, forward, coronaDt_);
     drawSprites(sprites, forward, right);
 }
 
@@ -2544,6 +2579,8 @@ void MapViewer::addCoronas(std::vector<SpriteDraw>& sprites, const gfx::Vec3& fo
 // one light onto the floor under it, darkest close to its feet, its
 // strength easing in and out as it moves between lights.
 void MapViewer::drawShadow(VmObject* a, const Vec3f& at) {
+    if (mirrorLevel_ > 0) // in a mirror: the stencil is the mirror's
+        return;
     Vm& vm = play_->vm();
     const Value* casts = a->find(vm, "bProjectsShadows");
     if (!casts || !casts->asBool())

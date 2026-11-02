@@ -278,15 +278,17 @@ public:
     // The depth and the stencil's marks both cleared (after a mirror's pass).
     virtual void clearDepthAndStencil() = 0;
     // A per-pixel mark (stencil) for drawing one view inside part of
-    // another, as a mirror: Mark marks where the draws that follow land
-    // (whatever their depth); Inside draws only where marked; Once draws
-    // only where not marked yet, marking it (overlapping shadows darkening
-    // once); None (the default, again each frame) neither. The marks are
-    // cleared each frame and kept by clearDepth(). Without a stencil
-    // buffer, false and no marks.
-    enum class StencilMode : uint8_t { None, Mark, Inside, Once };
+    // another, as a mirror, at `level` (views inside views: a mirror seen
+    // in a mirror): Mark raises the mark from level - 1 to level where the
+    // draws that follow land (and pass the depth test); Inside draws only
+    // where it's level; Unmark lowers it from level to level - 1; Once (at
+    // level 1 only) draws only where not marked yet, marking it
+    // (overlapping shadows darkening once); None (the default, again each
+    // frame) neither. The marks are cleared each frame and kept by
+    // clearDepth(). Without a stencil buffer, false and no marks.
+    enum class StencilMode : uint8_t { None, Mark, Inside, Once, Unmark };
     virtual bool hasStencil() const = 0;
-    virtual void setStencilMode(StencilMode mode) = 0;
+    virtual void setStencilMode(StencilMode mode, uint8_t level = 1) = 0;
     // A mirrored view: the draws that follow have their faces' winding
     // the other way round, so culling keeps the same faces (until set
     // back, and each frame).

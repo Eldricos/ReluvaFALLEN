@@ -340,8 +340,11 @@ private:
         gfx::Vec3 mirrorNormal{}; // a mirror's plane: normal . x = mirrorD (the renderer's axes)
         float mirrorD = 0;
     };
-    void drawMirrors(const gfx::Mat4& proj, const gfx::Mat4& view, const gfx::Mat4& viewProj);
-    bool mirrorPass_ = false, mirrorsDrawn_ = false;
+    void drawMirrors(const gfx::Mat4& proj, const gfx::Mat4& view, const gfx::Mat4& viewProj, const gfx::Vec3& eye,
+                     const gfx::Vec3& forward, const gfx::Vec3& right, int level, const Batch* through);
+    void drawWorld(const gfx::Vec3& forward, const gfx::Vec3& right, const gfx::Vec3& eye);
+    int mirrorLevel_ = 0;                 // how many reflections deep the view drawn is
+    const Batch* mirrorThrough_ = nullptr; // the mirror it's seen through
     // A translucent surface the level's lights light (The Fallen's logos,
     // flagged translucent and special-lit): drawn in one pass, so its
     // light is a tint, the average over points of it (each polygon's

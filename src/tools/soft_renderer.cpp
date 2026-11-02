@@ -373,7 +373,10 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                     if (call.state.depthTest && (call.state.depthEqual ? std::fabs(z - d) > 1e-5f : z > d))
                         continue;
                     uint8_t& mark = stencil_[size_t(y) * size_t(w_) + size_t(x)];
-                    if ((stencilMode_ == StencilMode::Inside && !mark) || (stencilMode_ == StencilMode::Once && mark))
+                    if ((stencilMode_ == StencilMode::Inside && mark != stencilLevel_) ||
+                        (stencilMode_ == StencilMode::Mark && mark != stencilLevel_ - 1) ||
+                        (stencilMode_ == StencilMode::Unmark && mark != stencilLevel_) ||
+                        (stencilMode_ == StencilMode::Once && mark))
                         continue;
                     const float iw = b0 * v0->invW + b1 * v1->invW + b2 * v2->invW;
                     auto attr = [&](float ClipVertex::*f) {
@@ -456,7 +459,11 @@ void SoftRenderer3D::draw(const gfx::DrawCall& call) {
                     }
                     if (call.state.depthWrite)
                         d = z;
-                    if (stencilMode_ == StencilMode::Mark || stencilMode_ == StencilMode::Once)
+                    if (stencilMode_ == StencilMode::Mark)
+                        mark = stencilLevel_;
+                    else if (stencilMode_ == StencilMode::Unmark)
+                        mark = uint8_t(stencilLevel_ - 1);
+                    else if (stencilMode_ == StencilMode::Once)
                         mark = 1;
                 }
             }

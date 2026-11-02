@@ -482,8 +482,14 @@ usual). Reluva:
 - then draws the view as usual, a translucent or modulated mirror's own
   texture over the reflection, an opaque one only as depth (it shows
   just what it reflects);
-- one reflection deep, at most four mirrors a frame, and the level's
-  surfaces only in the reflection (not its actors or movers).
+- in the reflection the whole world: the level's surfaces, movers,
+  actors and sprites (not characters' shadows, which use the stencil
+  too, nor coronas), and the mirrors seen in it, up to three reflections
+  deep as the original, each a stencil level up from the view it's in;
+  at most four mirrors a view. After each the mark goes back down a
+  level and the depth is cleared, so the view it's in draws what stands
+  before the mirror over the reflection (Sisko before M01_SiskoL1B's
+  mirror, his reflection in it).
 
 ## Coronas
 
