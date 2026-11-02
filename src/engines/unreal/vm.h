@@ -280,7 +280,7 @@ public:
     void gotoState(VmObject* self, NameId state, NameId label = 0);
     // Runs an object's state code until it waits or stops, its timer, and
     // (unless disabled) its Tick event.
-    void tick(VmObject* self, float seconds);
+    void tick(VmObject* self, float seconds, bool sendTick = true);
 
     // A class the engine defines in C++ only, with no script (Viewport):
     // made up under its parent so scripts can cast to it and objects of it
@@ -342,6 +342,9 @@ public:
 
     // The level running, for the natives that need the world.
     ScriptLevel* level = nullptr;
+    // Events aren't passed to scripts while set: the engine's are dropped
+    // until the level has begun play (LevelInfo.bBegunPlay).
+    bool holdEvents = false;
     void reportError(const std::string& what);
     // Where scripts are running: " in Class.Function", for natives' errors.
     std::string where() const;

@@ -610,6 +610,10 @@ private:
                 std::array<float, 3> delta, const MoveHit& hit);
     int physicsOf(VmObject* a);
     void setBase(VmObject* a, VmObject* base);
+    void startZone(VmObject* a);
+    void startBase(VmObject* a);
+    void startAsSpawned(VmObject* a);
+    std::string options_; // the URL's options, for InitGame and Login
     void walkPlayer(VmObject* a, float dt);
     void walkPawn(VmObject* a, float dt, int maxIterations);
     void landed(VmObject* a, const std::array<float, 3>& n, VmObject* on, float remaining);

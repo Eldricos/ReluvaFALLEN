@@ -158,25 +158,58 @@ shared code: the menu's arrows never reached the HUD.
 `ScriptLevel` makes a map's actors from the level's actor list (the
 Level object's: a count, then compact references; the first is the
 LevelInfo), each with its class's defaults then its saved properties,
-their `Level`, `XLevel` and `Outer` set. Then `beginPlay`:
+their `Level`, `XLevel` and `Outer` set. Then `beginPlay`, in
+`UGameEngine::LoadMap`'s order as read from Engine.dll (the code is
+Reluva's own):
 
-1. The game type (the LevelInfo's `DefaultGameType`, else the .ini's
-   `[Engine.Engine] DefaultGame`: `DS9.DS9_GameInfo`) is spawned and
-   `InitGame` sent.
-2. Every actor: `PreBeginPlay`, `BeginPlay`; then every actor
-   `PostBeginPlay`; then every actor `SetInitialState` (which puts it in
-   its initial or auto state). The LevelInfo's `bStartup` is true
-   meanwhile, and `bBegunPlay` true after: The Fallen's splines do nothing
-   on a tick before it is, so without it no opening sequence ever ends.
-3. Spawned actors get `Spawned`, `PreBeginPlay`, `BeginPlay`,
-   `PostBeginPlay`, `SetInitialState` as they're made; destroyed ones
-   `Destroyed` (and their owner `LostChild`); `bStatic` and `bNoDelete`
-   actors refuse to go.
-4. Each tick an actor's `LifeSpan`, if it has one, counts down. At 0 it
-   gets `Expired` and is destroyed. The Fallen's generators (sparks, the
-   Jerrado bug swarm: one every 5 ms, each to live 0.4 s) count on it.
-   Without it, M03_KiraL2's swarm had made 17,500 actors by 20 seconds
-   in.
+1. **No events yet.** The engine passes an actor's events to its
+   script only once `LevelInfo.bBegunPlay` is set (`AActor::ProcessEvent`),
+   so what happens before that is heard by no script (`Vm::holdEvents`).
+2. `bHighDetailMode` set. The game type (the LevelInfo's
+   `DefaultGameType`, else the .ini's `[Engine.Engine] DefaultGame`:
+   `DS9.DS9_GameInfo`) spawned: in silence, so it never gets `Spawned`.
+   `TimeSeconds` and `NoPauseTimeSeconds` 0.
+3. **The ghosts set aside** before anything starts: each actor placed
+   with The Fallen's `bIsGhost` (a guard who arrives later, an effect for
+   a scene) goes to the ghost list. Every actor's `Touching` cleared.
+4. `bBegunPlay` and `bStartup` set, then the game type's `InitGame`.
+5. **Six passes** over every actor, the GameInfo and LevelInfo too,
+   each reaching actors spawned during it: `SetInitialState` (its
+   initial or auto state); `PreBeginPlay`; `BeginPlay`; its zone (the
+   one it's in: `ZoneChange` if that's a ZoneInfo's, nothing to the
+   zones); `PostBeginPlay`; its base (with an `AttachTag`, the last actor
+   so tagged; else a decoration, item or pawn colliding with the world,
+   standing still and with none, takes what's 8 units under it).
+6. `bStartup` cleared.
+
+Spawned actors get `SetInitialState`, `Spawned`, `PreBeginPlay`,
+`BeginPlay`, their zone, then `PostBeginPlay` (and `bHasBegunPlay`).
+Destroyed ones get `Destroyed` (and their owner `LostChild`); `bStatic`
+and `bNoDelete` actors refuse to go.
+
+**Ghosts** (`MakeGhost`, `GhostActors`): made a ghost, an actor leaves
+the level as if destroyed, without being destroyed: `EndState`, no base
+and nothing based on it, what it owns without an owner, `UnTouch` both
+ways, its owner's `LostChild`. Brought back, one placed as a ghost
+starts then, as if spawned; one that had begun play only gets its zone
+and base again. `GhostActors` with no tag, asked to bring them back,
+does nothing (the engine refuses to revive a whole class at once).
+
+**A tick** (`ULevel::Tick`, `AActor::Tick`): the time scaled by
+`TimeDilation` and counted (`TimeSeconds` unless paused,
+`NoPauseTimeSeconds` always), then held within 0.005 to 0.4 seconds as
+the actors' `DeltaTime`. Each actor that isn't static, in the level's
+order (those spawned during the tick too): its animation (`AnimEnd`,
+notifications); the player its input, `PlayerInput` and `PlayerTick`
+(no `Tick`), any other its `Tick`; its state code; its timer (at most
+once a tick); its `LifeSpan` (at 0, `Expired` and gone, with no
+physics); its physics; a player's `UpdateEyeHeight`. Paused, the player
+only reads its input (`PlayerInput`, its axes 0) and only `bAlwaysTick`
+actors tick; the dialogue goes on. The Fallen's generators (sparks, the
+Jerrado bug swarm: one every 5 ms, each to live 0.4 s) count on the life
+span: without it, M03_KiraL2's swarm had made 17,500 actors by 20
+seconds in. Not done: the owner ticked before what it owns, the pain
+timer, and The Fallen's sleep for actors in zones unseen for 5 seconds.
 
 UnrealEd keeps its viewports' cameras in the level as `Camera` actors
 (292 of them over The Fallen's maps). `Camera` is a `PlayerPawn`, and in
@@ -225,24 +258,24 @@ UE1's own rule isn't in the scripts; this is Reluva's.
 ### The player logging in
 
 After `beginPlay`, `login` does the engine's side of a player joining,
-in this order (Reluva's reading of the public UnrealScript documentation
-and of what the scripts expect):
+as `ULevel::SpawnPlayActor` does:
 
-1. The start: the game type's own `FindPlayerStart`.
-2. The character: The Fallen's starts (`CTVE_PlayerStart`) name it in
-   their `Player` property (M01_KiraL1A's: `PLYR.DS9_Kira`), which no
-   script reads, so the game's engine must spawn it; otherwise the .ini's
-   `[URL] Class` (`PLYR.DS9_Sisko`), else the game type's
-   `DefaultPlayerClass`.
-3. The game type's `Login` with options `?Name=Player?Class=...`: it
-   spawns the pawn at the start (whose `PreBeginPlay` sets The Fallen's
-   `Level.Player`).
-4. The engine's own objects for it: a viewport (`Viewport` has no script
+1. The character: The Fallen's starts (`CTVE_PlayerStart`) name it in
+   their `Player` property (M01_KiraL1A's: `PLYR.DS9_Kira`). Of the
+   starts that name one, enabled or tagged as the portal arrived by:
+   with no portal the first, with one the one so tagged, else the last.
+   Else the URL's class, else `PLYR.DS9_Sisko`. (The engine doesn't ask
+   `FindPlayerStart` for this.)
+2. The game type's `Login` with options `?Name=Player?Class=...`: it
+   finds the start itself and spawns the pawn there (whose
+   `PreBeginPlay` sets The Fallen's `Level.Player`).
+3. The engine's own objects for it: a viewport (`Viewport` has no script
    class, it's C++ only: made up as a kind of `Player`, `Vm::defineIntrinsic`,
    so `Viewport(Player)` casts work) holding the .ini's console
    (`UMenu.DS9_Console`).
-5. `Possess`, the game type's `AcceptInventory`, `TravelPostAccept`,
-   the game type's `PostLogin`.
+4. `Possess`; `bAdmin` (playing alone); `TravelPreAccept`; the game
+   type's `AcceptInventory`; `TravelPostAccept`; the game type's
+   `PostLogin`. Travelling inventory isn't done (a level starts afresh).
 
 On M01_KiraL1A this plays the opening as the scripts have it: Kira's
 `InitPlayerStart` gives her the start's weapons and items, spawns her

@@ -1791,7 +1791,7 @@ Value Vm::invoke(VmFunction* f, VmObject* self, std::vector<Value> args, std::ve
 }
 
 Value Vm::callEvent(VmObject* self, std::string_view function, std::vector<Value> args) {
-    if (!self || self->deleted)
+    if (!self || self->deleted || holdEvents)
         return Value();
     const NameId n = name(function);
     if (self->disabled.count(n))
@@ -1862,27 +1862,26 @@ void Vm::gotoState(VmObject* self, NameId stateName, NameId label) {
     }
 }
 
-void Vm::tick(VmObject* self, float seconds) {
+// An actor's script side of a tick, in the engine's order: its Tick event
+// (unless `sendTick` is off: the player gets PlayerTick instead), its state
+// code, then its timer, which goes off at most once a tick (what's left
+// over a whole number of rates is kept).
+void Vm::tick(VmObject* self, float seconds, bool sendTick) {
     if (!self || self->deleted || !self->cls)
         return;
-    if (self->timerRate > 0) {
-        self->timerCount += seconds;
-        if (self->timerCount >= self->timerRate) {
-            if (self->timerLoop)
-                self->timerCount -= self->timerRate;
-            else
-                self->timerRate = 0;
-            callEvent(self, "Timer");
-        }
-    }
-    callEvent(self, "Tick", {Value::floatValue(seconds)});
+    if (sendTick)
+        callEvent(self, "Tick", {Value::floatValue(seconds)});
+    if (self->deleted)
+        return;
+    bool run = true;
     if (self->latent) {
         self->sleeping -= seconds;
         if (self->sleeping > 0)
-            return;
-        self->latent = false;
+            run = false;
+        else
+            self->latent = false;
     }
-    for (int restarts = 0; restarts < 16 && self->codeState && self->codeAt >= 0 && !self->deleted; ++restarts) {
+    for (int restarts = 0; run && restarts < 16 && self->codeState && self->codeAt >= 0 && !self->deleted; ++restarts) {
         Interpreter in(*this);
         Interpreter::Frame f;
         f.owner = self->codeState;
@@ -1894,6 +1893,16 @@ void Vm::tick(VmObject* self, float seconds) {
             continue; // it changed state: run the new state's code
         self->codeAt = flow == Interpreter::Flow::Wait ? pc : -1;
         break;
+    }
+    if (!self->deleted && self->timerRate > 0) {
+        self->timerCount += seconds;
+        if (self->timerCount >= self->timerRate) {
+            if (self->timerLoop)
+                self->timerCount = std::fmod(self->timerCount, self->timerRate);
+            else
+                self->timerRate = 0;
+            callEvent(self, "Timer");
+        }
     }
 }
 

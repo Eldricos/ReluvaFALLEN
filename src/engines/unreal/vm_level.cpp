@@ -175,19 +175,17 @@ void ScriptLevel::init(VmObject* a) {
         v->o = levelObject_;
 }
 
+// The level's start, as UGameEngine::LoadMap: the game type spawned (while
+// the level hasn't begun play, so it hears none of its events: the engine
+// passes an actor's events to its script only once LevelInfo.bBegunPlay),
+// the ghosts set aside, then bBegunPlay and bStartup, InitGame, and six
+// passes over every actor (the GameInfo and LevelInfo too), each reaching
+// those spawned on the way: SetInitialState, PreBeginPlay, BeginPlay, its
+// zone (ZoneChange if it's in a ZoneInfo's), PostBeginPlay, its base.
 void ScriptLevel::beginPlay(const std::string& defaultGame) {
-    // While the level starts, bStartup; once it has, bBegunPlay (which
-    // scripts check before acting on ticks: CTVE_Spline's).
-    if (Value* v = levelInfo_->find(vm_, "bStartup"))
+    vm_.holdEvents = true;
+    if (Value* v = levelInfo_->find(vm_, "bHighDetailMode"))
         *v = Value::boolValue(true);
-    // High detail, as the engine sets it from the client's settings
-    // (LowDetailTextures off, as Default.ini has it): the effects in full
-    // (an arc's 25 segments, not 5). Reluva's reading of which setting.
-    if (Value* v = levelInfo_->find(vm_, "bHighDetailMode")) {
-        const std::string* client = vm_.configSetting("Engine.Engine", "ViewportManager");
-        const std::string* low = client ? vm_.configSetting(*client, "LowDetailTextures") : nullptr;
-        *v = Value::boolValue(!low || lowerText(*low) != "true");
-    }
     // The game type: the level's own, else the default.
     VmClass* gameClass = nullptr;
     if (Value* v = levelInfo_->find(vm_, "DefaultGameType"); v && v->asObject() && v->o->asClass)
@@ -198,41 +196,93 @@ void ScriptLevel::beginPlay(const std::string& defaultGame) {
         game_ = spawn(gameClass, nullptr, 0, nullptr, nullptr);
         if (Value* v = levelInfo_->find(vm_, "Game"))
             v->o = game_;
-        if (game_) {
-            Value error = Value::stringValue("");
-            if (VmFunction* f = vm_.findFunction(game_, vm_.name("InitGame")))
-                vm_.invoke(f, game_, {Value::stringValue(""), error}, {nullptr, &error});
-        }
     } else {
         vm_.reportError("no game type " + defaultGame);
     }
-    // The level's own actors, in order (spawned ones got theirs already).
-    const std::vector<VmObject*> start = actors_;
-    for (VmObject* a : start) {
-        if (a == game_)
-            continue;
-        vm_.callEvent(a, "PreBeginPlay");
-        vm_.callEvent(a, "BeginPlay");
-    }
-    for (VmObject* a : start)
-        if (a != game_)
-            vm_.callEvent(a, "PostBeginPlay");
-    for (VmObject* a : start)
-        if (a != game_)
-            vm_.callEvent(a, "SetInitialState");
+    for (const char* field : {"TimeSeconds", "NoPauseTimeSeconds"})
+        if (Value* v = levelInfo_->find(vm_, field))
+            v->f = 0;
     // Those placed as ghosts (The Fallen's bIsGhost: a guard who arrives
-    // later, an effect for a scene) set aside once started, until an event
-    // brings them back (GhostActors, which a trigger's event goes through
-    // too). Left in the level, they played from the start.
-    for (VmObject* a : start)
-        if (const Value* ghost = a != game_ && !a->deleted ? prop(a, "bIsGhost") : nullptr; ghost && ghost->asBool()) {
-            makeGhost(a, true);
-            ++placedGhosts_;
-        }
-    if (Value* v = levelInfo_->find(vm_, "bStartup"))
-        *v = Value::boolValue(false);
+    // later, an effect for a scene) set aside before anything starts, until
+    // an event brings them back (GhostActors, MakeGhost), when they start
+    // as if spawned.
+    {
+        const std::vector<VmObject*> placed = actors_;
+        for (VmObject* a : placed)
+            if (const Value* ghost = a != game_ ? prop(a, "bIsGhost") : nullptr; ghost && ghost->asBool()) {
+                makeGhost(a, true);
+                ++placedGhosts_;
+            }
+    }
+    for (VmObject* a : actors_)
+        if (Value* v = prop(a, "Touching"))
+            for (size_t k = 0; k < 4; ++k)
+                v[k] = Value::objectValue(nullptr);
     if (Value* v = levelInfo_->find(vm_, "bBegunPlay"))
         *v = Value::boolValue(true);
+    if (Value* v = levelInfo_->find(vm_, "bStartup"))
+        *v = Value::boolValue(true);
+    vm_.holdEvents = false;
+    if (game_) {
+        Value error = Value::stringValue("");
+        if (VmFunction* f = vm_.findFunction(game_, vm_.name("InitGame")))
+            vm_.invoke(f, game_, {Value::stringValue(options_), error}, {nullptr, &error});
+    }
+    auto pass = [&](auto&& each) {
+        for (size_t i = 0; i < actors_.size(); ++i)
+            if (VmObject* a = actors_[i]; !a->deleted)
+                each(a);
+    };
+    pass([&](VmObject* a) { vm_.callEvent(a, "SetInitialState"); });
+    pass([&](VmObject* a) { vm_.callEvent(a, "PreBeginPlay"); });
+    pass([&](VmObject* a) { vm_.callEvent(a, "BeginPlay"); });
+    pass([&](VmObject* a) { startZone(a); });
+    pass([&](VmObject* a) { vm_.callEvent(a, "PostBeginPlay"); });
+    pass([&](VmObject* a) { startBase(a); });
+    if (Value* v = levelInfo_->find(vm_, "bStartup"))
+        *v = Value::boolValue(false);
+}
+
+// Its zone at the start: the level's, then the one it's in; in a ZoneInfo's,
+// ZoneChange (and nothing to the zones). Its body's parts too, quietly.
+void ScriptLevel::startZone(VmObject* a) {
+    Value* region = prop(a, "Region");
+    const Value* location = prop(a, "Location");
+    if (!region || !location || !hasModel_)
+        return;
+    vm_.assign(*region, regionAt(Vm::vectorOf(*location)));
+    VmObject* zone = !region->fields.empty() ? region->fields[0].asObject() : nullptr;
+    if (zone && zone != levelInfo_)
+        vm_.callEvent(a, "ZoneChange", {Value::objectValue(zone)});
+    if (!a->deleted)
+        updateBodyRegions(a, false);
+}
+
+// Its base at the start: with an AttachTag, the actor it names (the last of
+// them); else, for a decoration, item or pawn colliding with the world,
+// with no base and not moving (Physics none or rotating), whatever it
+// stands on (8 units down), the world being none.
+void ScriptLevel::startBase(VmObject* a) {
+    if (const Value* t = prop(a, "AttachTag"); t && t->i != 0) {
+        VmObject* onto = nullptr;
+        for (VmObject* b : actors_)
+            if (const Value* tag = b != a && !b->deleted ? prop(b, "Tag") : nullptr; tag && tag->i == t->i)
+                onto = b;
+        if (onto)
+            setBase(a, onto);
+        return;
+    }
+    const Value* base = prop(a, "Base");
+    const Value* world = prop(a, "bCollideWorld");
+    const Value* physics = prop(a, "Physics");
+    if (!base || base->asObject() || !world || !world->asBool() || !physics ||
+        (physics->asInt() != 0 && physics->asInt() != 5))
+        return;
+    if (!vm_.isA(a, "Decoration") && !vm_.isA(a, "Inventory") && !vm_.isA(a, "Pawn"))
+        return;
+    const MoveHit h = testMove(a, {0, 0, -8});
+    if (h.hit() && h.actor && h.actor != levelInfo_)
+        setBase(a, h.actor);
 }
 
 VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& playerName, std::string& error,
@@ -242,19 +292,41 @@ VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& 
         error = "no game type to log in to";
         return nullptr;
     }
-    // Which start, and so which character.
+    // Which character, as SpawnPlayActor picks it: the Player of the
+    // level's CTVE_PlayerStarts that name one (enabled, or tagged as the
+    // portal arrived by). With no portal, the first; with one, the one
+    // tagged so, else the last. Else the URL's class, else Sisko.
     VmClass* cls = nullptr;
-    if (VmFunction* find = vm_.findFunction(game_, vm_.name("FindPlayerStart"))) {
-        const Value start = vm_.invoke(find, game_, {Value::objectValue(nullptr), Value::byteValue(255), Value::stringValue(portal)});
-        if (VmObject* s = start.asObject())
-            if (Value* p = s->find(vm_, "Player"); p && p->asObject() && p->o->asClass)
-                cls = p->o->asClass;
+    {
+        VmObject* chosen = nullptr;
+        bool matched = false;
+        const NameId portalName = portal.empty() ? 0 : vm_.name(portal);
+        for (VmObject* a : actors_) {
+            if (a->deleted || !vm_.isA(a, "CTVE_PlayerStart"))
+                continue;
+            const Value* p = prop(a, "Player");
+            if (!p || !p->asObject() || !p->o->asClass)
+                continue;
+            const Value* tag = prop(a, "Tag");
+            const bool tagged = portalName && tag && tag->i == portalName;
+            const Value* enabled = prop(a, "bEnabled");
+            if (!(enabled && enabled->asBool()) && !tagged)
+                continue;
+            if (!portalName) {
+                if (!chosen)
+                    chosen = a;
+            } else if (!matched) {
+                chosen = a;
+                matched = tagged;
+            }
+        }
+        if (chosen)
+            cls = prop(chosen, "Player")->o->asClass;
     }
     if (!cls && !playerClass.empty())
         cls = vm_.findClass(playerClass);
     if (!cls)
-        if (Value* p = game_->find(vm_, "DefaultPlayerClass"); p && p->asObject() && p->o->asClass)
-            cls = p->o->asClass;
+        cls = vm_.findClass("PLYR.DS9_Sisko");
     if (!cls) {
         error = "no player class";
         return nullptr;
@@ -274,8 +346,14 @@ VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& 
         error = "Login refused: " + (message.s.empty() ? std::string("no reason given") : message.s);
         return nullptr;
     }
+    // Then as SpawnPlayActor goes on: the viewport (Possess), an
+    // administrator (playing alone), TravelPreAccept, the game's
+    // AcceptInventory, TravelPostAccept, PostLogin.
     attachViewport();
     vm_.callEvent(player_, "Possess");
+    if (Value* v = prop(player_, "bAdmin"))
+        *v = Value::boolValue(true);
+    vm_.callEvent(player_, "TravelPreAccept");
     vm_.callEvent(game_, "AcceptInventory", {Value::objectValue(player_)});
     vm_.callEvent(player_, "TravelPostAccept");
     vm_.callEvent(game_, "PostLogin", {Value::objectValue(player_)});
@@ -467,9 +545,21 @@ void ScriptLevel::updateBodyRegions(VmObject* a, bool events) {
         float z;
         const char* event;
     };
+    // The engine's: the feet at the bottom; the player's chest
+    // (CTVE_PlayerPawn's) ChestHeight up its standing height (its height
+    // when swimming); the head at its eyes. (Engine.dll was read as giving
+    // the player no head region, but its scripts read one throughout.)
+    const bool player = vm_.isA(a, "CTVE_PlayerPawn");
+    float chestZ = 0;
+    if (player) {
+        const Value* stand = prop(a, "StandCollisionHeight");
+        const Value* physics = prop(a, "Physics");
+        const float tall = physics && physics->asInt() == 3 /* PHYS_Swimming */ ? height
+                                                                                : (stand ? stand->asFloat() : height);
+        chestZ = at[2] + (chestHeight ? chestHeight->asFloat() : 0.65f) * tall;
+    }
     Part parts[3] = {{foot, at[2] - height, "FootZoneChange"},
-                     {prop(a, "ChestRegion"), at[2] - height + 2 * height * (chestHeight ? chestHeight->asFloat() : 0.65f),
-                      "ChestZoneChange"},
+                     {player ? prop(a, "ChestRegion") : nullptr, chestZ, "ChestZoneChange"},
                      {head, at[2] + (eye ? eye->asFloat() : height * 0.5f), "HeadZoneChange"}};
     for (Part& p : parts) {
         if (!p.region)
@@ -487,30 +577,38 @@ bool ScriptLevel::paused() const {
     return v && !v->s.empty();
 }
 
+// A level tick, as ULevel::Tick: the time scaled by TimeDilation and
+// counted (unless paused), then kept within 0.005 to 0.4 of a second for
+// the actors (DeltaTime). Each actor that isn't static, in the level's
+// order (those spawned on the way too), as AActor::Tick: its animation;
+// the player its input and PlayerTick, any other its Tick; its state
+// code; its timer; its life span (Expired: gone, no physics); its
+// physics; a player's UpdateEyeHeight. Paused, the player only reads its
+// input (its axes 0) and only bAlwaysTick actors tick.
 void ScriptLevel::tick(float seconds) {
     const bool stopped = paused();
+    if (const Value* d = levelInfo_->find(vm_, "TimeDilation"); d && d->asFloat() > 0)
+        seconds *= d->asFloat();
     if (!stopped) {
         time_ += seconds;
         if (Value* v = levelInfo_->find(vm_, "TimeSeconds"))
             v->f += seconds;
     }
+    if (Value* v = levelInfo_->find(vm_, "NoPauseTimeSeconds"))
+        v->f += seconds;
+    seconds = std::clamp(seconds, 0.005f, 0.4f);
     if (Value* v = levelInfo_->find(vm_, "DeltaTime"))
         v->f = seconds;
-    // Actors spawned during the tick wait for the next. The player's
-    // pawn first gets PlayerTick (its input and view); then each actor's
-    // scripts, then its physics (and the player's UpdateEyeHeight).
-    const std::vector<VmObject*> now = actors_;
-    for (VmObject* a : now) {
-        if (a->deleted)
+    for (size_t i = 0; i < actors_.size(); ++i) {
+        VmObject* a = actors_[i];
+        if (a->deleted || a == levelInfo_)
+            continue;
+        if (const Value* st = prop(a, "bStatic"); st && st->asBool())
             continue;
         if (stopped && a != player_) {
             const Value* always = prop(a, "bAlwaysTick");
             if (!always || !always->asBool())
                 continue;
-        }
-        if (stopped && a == player_) {
-            vm_.callEvent(a, "PlayerTick", {Value::floatValue(seconds)});
-            continue;
         }
         if (a == player_) {
             // The input axes, as the engine sets them each frame: those
@@ -520,13 +618,14 @@ void ScriptLevel::tick(float seconds) {
             // held key adds its speed times the frame's time, and the
             // engine then scales the axes by 20 over the frame's time: 20
             // times the speed in all (the scripts' climbing speed,
-            // aForward x 0.02, is 120 a second).
+            // aForward x 0.02, is 120 a second). Paused, all 0.
             constexpr float kHeld = 20;
+            const float on = stopped ? 0.0f : 1.0f;
             const std::pair<const char*, float> axes[] = {
-                {"aBaseY", controls.forward * 300 * kHeld}, {"aStrafe", controls.strafe * 300 * kHeld},
-                {"aBaseX", controls.turn * 150 * kHeld},    {"aLookUp", controls.lookUp * 300 * kHeld},
-                {"aMouseX", controls.mouseX}, {"aMouseY", controls.mouseY},
-                {"aUp", ((controls.jump ? 300.0f : 0.0f) - (controls.duck ? 300.0f : 0.0f)) * kHeld},
+                {"aBaseY", on * controls.forward * 300 * kHeld}, {"aStrafe", on * controls.strafe * 300 * kHeld},
+                {"aBaseX", on * controls.turn * 150 * kHeld},    {"aLookUp", on * controls.lookUp * 300 * kHeld},
+                {"aMouseX", on * controls.mouseX}, {"aMouseY", on * controls.mouseY},
+                {"aUp", on * ((controls.jump ? 300.0f : 0.0f) - (controls.duck ? 300.0f : 0.0f)) * kHeld},
                 {"aForward", 0}, {"aTurn", 0}, {"aBaseZ", 0},
             };
             for (const auto& [axis, value] : axes)
@@ -536,30 +635,42 @@ void ScriptLevel::tick(float seconds) {
             for (const auto& [button, held] :
                  {std::pair{"bExtra1", controls.jump}, std::pair{"bDuck", controls.duck}, std::pair{"bFire", controls.fire}})
                 if (Value* v = a->find(vm_, button))
-                    v->i = held ? 1 : 0;
+                    v->i = held && !stopped ? 1 : 0;
+            if (stopped) {
+                vm_.callEvent(a, "PlayerInput", {Value::floatValue(seconds)});
+                continue;
+            }
+        }
+        animate(a, seconds);
+        if (a->deleted)
+            continue;
+        if (a == player_) {
             vm_.callEvent(a, "PlayerInput", {Value::floatValue(seconds)});
+            if (Value* old = prop(a, "OldLocation"))
+                if (const Value* at = prop(a, "Location"))
+                    vm_.assign(*old, *at);
             vm_.callEvent(a, "PlayerTick", {Value::floatValue(seconds)});
         }
-        vm_.tick(a, seconds);
-        if (!a->deleted)
-            physics(a, seconds);
-        // Once the player has moved, UpdateEyeHeight: the view's height,
-        // and in The Fallen the arms' IK, which puts the weapon in hand.
-        if (a == player_ && !a->deleted)
-            vm_.callEvent(a, "UpdateEyeHeight", {Value::floatValue(seconds)});
-        if (!a->deleted)
-            animate(a, seconds);
-        if (!a->deleted)
-            moveMultiMeshes(a, seconds);
+        vm_.tick(a, seconds, a != player_);
         // A life span running out: Expired, then gone.
         if (Value* life = a->deleted ? nullptr : prop(a, "LifeSpan"); life && life->asFloat() > 0) {
             life->f -= seconds;
-            if (life->f <= 0) {
+            if (life->f <= 0.0001f) {
                 life->f = 0;
                 vm_.callEvent(a, "Expired");
                 destroy(a);
+                continue;
             }
         }
+        if (!a->deleted)
+            physics(a, seconds);
+        // Once it has moved, a player's UpdateEyeHeight: the view's height,
+        // and in The Fallen the arms' IK, which puts the weapon in hand.
+        if (!a->deleted)
+            if (const Value* p = prop(a, "bIsPlayer"); p && p->asBool())
+                vm_.callEvent(a, "UpdateEyeHeight", {Value::floatValue(seconds)});
+        if (!a->deleted)
+            moveMultiMeshes(a, seconds);
     }
     // What's attached (C3DAttach) goes where its holder now is.
     placeAttached();
@@ -567,9 +678,8 @@ void ScriptLevel::tick(float seconds) {
     // menus).
     if (VmObject* con = console())
         vm_.callEvent(con, "Tick", {Value::floatValue(seconds)});
-    if (!stopped) {
-        tickDialog(seconds);
-    }
+    // The dialogue, paused or not.
+    tickDialog(seconds);
     tickFlis(seconds);
     ++ticks_;
     actors_.erase(std::remove_if(actors_.begin(), actors_.end(), [](VmObject* a) { return a->deleted; }),
@@ -609,12 +719,25 @@ VmObject* ScriptLevel::spawn(VmClass* cls, VmObject* owner, NameId tag, const Va
     updateRegion(a);
     if (owner && !owner->deleted)
         vm_.callEvent(owner, "GainedChild", {Value::objectValue(a)});
-    for (const char* event : {"Spawned", "PreBeginPlay", "BeginPlay", "PostBeginPlay", "SetInitialState"}) {
+    startAsSpawned(a);
+    return a->deleted ? nullptr : a;
+}
+
+// SpawnActor's events: SetInitialState, Spawned, PreBeginPlay, BeginPlay,
+// its zone, PostBeginPlay.
+void ScriptLevel::startAsSpawned(VmObject* a) {
+    for (const char* event : {"SetInitialState", "Spawned", "PreBeginPlay", "BeginPlay"}) {
         if (a->deleted)
-            break;
+            return;
         vm_.callEvent(a, event);
     }
-    return a->deleted ? nullptr : a;
+    if (a->deleted)
+        return;
+    updateRegion(a);
+    if (!a->deleted)
+        vm_.callEvent(a, "PostBeginPlay");
+    if (Value* v = prop(a, "bHasBegunPlay"))
+        *v = Value::boolValue(true);
 }
 
 void ScriptLevel::destroy(VmObject* a) {
@@ -643,9 +766,36 @@ void ScriptLevel::makeGhost(VmObject* a, bool ghost) {
     if (ghost == now)
         return;
     if (ghost) {
+        // As the engine destroys an actor, without destroying it (no
+        // Destroyed, not bDeleteMe): EndState; no base, and nothing based
+        // on it; its own actors without an owner; done touching (UnTouch
+        // both ways); its owner's LostChild.
+        vm_.callEvent(a, "EndState");
+        setBase(a, nullptr);
+        const std::vector<VmObject*> others = actors_;
+        for (VmObject* o : others) {
+            if (o == a || o->deleted)
+                continue;
+            if (const Value* b = prop(o, "Base"); b && b->asObject() == a)
+                setBase(o, nullptr);
+            if (Value* w = prop(o, "Owner"); w && w->asObject() == a)
+                w->o = nullptr;
+        }
+        const std::vector<VmObject*> touched = touching_[a];
+        for (VmObject* o : touched) {
+            auto& theirs = touching_[o];
+            theirs.erase(std::remove(theirs.begin(), theirs.end(), a), theirs.end());
+            vm_.callEvent(a, "UnTouch", {Value::objectValue(o)});
+            vm_.callEvent(o, "UnTouch", {Value::objectValue(a)});
+        }
+        touching_.erase(a);
+        if (Value* t = prop(a, "Touching"))
+            for (size_t k = 0; k < 4; ++k)
+                t[k] = Value::objectValue(nullptr);
+        if (const Value* w = prop(a, "Owner"); w && w->asObject() && !w->o->deleted)
+            vm_.callEvent(w->o, "LostChild", {Value::objectValue(a)});
         actors_.erase(std::remove(actors_.begin(), actors_.end(), a), actors_.end());
         ghosts_.push_back(a);
-        touching_.erase(a);
     } else {
         ghosts_.erase(std::remove(ghosts_.begin(), ghosts_.end(), a), ghosts_.end());
         actors_.push_back(a);
@@ -653,14 +803,25 @@ void ScriptLevel::makeGhost(VmObject* a, bool ghost) {
     if (Value* v = prop(a, "bIsGhost"))
         *v = Value::boolValue(ghost);
     collidersTick_ = -1;
+    // Back, as SpawnActor takes it again: one placed as a ghost starts as
+    // if spawned; one that began play already gets only its zone
+    // (ZoneChange if a ZoneInfo's) and base again.
+    if (!ghost) {
+        if (const Value* begun = prop(a, "bHasBegunPlay"); begun && !begun->asBool())
+            startAsSpawned(a);
+        else
+            startZone(a);
+        if (!a->deleted)
+            startBase(a);
+    }
 }
 
 void ScriptLevel::tickActor(VmObject* a, float seconds) {
     if (!a || a->deleted)
         return;
-    vm_.tick(a, seconds);
+    animate(a, seconds);
     if (!a->deleted)
-        animate(a, seconds);
+        vm_.tick(a, seconds);
 }
 
 namespace {
@@ -958,6 +1119,11 @@ void registerEngineNatives(Vm& vm) {
             return;
         const VmObject* cls = c.o(0);
         const bool byTag = c.given.size() > 2 && c.given[2] && c.i(2) != 0;
+        // Reviving all of a class's ghosts at once the engine refuses.
+        if (!byTag && !c.b(3)) {
+            c.vm.reportError("GhostActors: iterating over ghost actors without specifying a Tag");
+            return;
+        }
         const std::vector<VmObject*> ghosts = c.vm.level->ghosts();
         for (VmObject* a : ghosts) {
             if (a->deleted || (cls && cls->asClass && !(a->cls && a->cls->isA(cls->asClass))))
