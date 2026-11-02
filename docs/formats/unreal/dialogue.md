@@ -62,3 +62,16 @@ A line's key is its mission, type, speaker and line ID run together
 The voices are ADPCM WAV files ([sound.md](sound.md)); a line lasts as
 long as its WAV's data chunk at its bytes a second. The `.uax`'s
 ScriptText is only the `#EXEC AUDIO IMPORT` lines that built it.
+
+Each voice's WAV also has a `phnm` chunk, its lip-sync (all 249 of
+`m01_Dialogue.uax`'s), little-endian:
+- the line's text: a 32-bit length, then the bytes;
+- a 32-bit count of words, then each word: its name (32 bytes), where it
+  starts and ends in samples (two 32-bit integers) and in seconds (two
+  floats), and a 32-bit count of its phonemes;
+- each phoneme, 14 bytes: a label of 4 characters (`ih`, `m`), the IPA
+  letter (16 bits: U+026A, U+006D), a float not used, and the time it
+  starts, in seconds.
+
+"Main exit from tower has been sealed off...": `main` 0 to 0.317 s
+(`m` 0, `ih` 0.126, `n` 0.253), `exit` 0.317 to 0.666...

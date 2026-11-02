@@ -604,124 +604,121 @@ search over the paths the editor stored with the map.
 ### Dialogue
 
 `vm_dialog.cpp` plays the characters' lines from the game's dialogue
-tables ([dialogue.md](../formats/unreal/dialogue.md)). The table format
-is the game's, and so are the events it calls on the scripts' side. How
-lines are picked and timed is Reluva's reading of how the scripts use
-the natives.
-- **Which lines are the level's:** those of its own table (LevelInfo's
-  `DialogFile`) and the general one, or of every table if it names none.
-  Of those, the ones for whoever the player plays: a K, S or W mission
-  for Kira, Sisko or Worf (by the player's `Speaker_Tag`), G and M for
-  anyone. The missions follow the story, not the maps (the Promenade
-  opens with a mission 11 line), so the map's own mission number only
-  makes a line preferred.
+tables ([dialogue.md](../formats/unreal/dialogue.md)) as Engine.dll's
+dialogue engine (`FDialogEngine`, kept by the level) does, read from it;
+the code is Reluva's own.
+- **Two tables a level:** the general one (`GEN_Dialogue`) and its own:
+  LevelInfo's `DialogFile`, else the one its map's mission names
+  (M01_KiraL1A: `M01_Dialogue`). The menu's Entry has none. Their header
+  rows give each type's priority (`Types`: 1 DIE, 2 CIN, 3 the hails and
+  TRN, 4 PAN EXB EXG GSP DWN, 5 FSE, 6 SUR TTP GPI KIL FHE EVT HUD TBD,
+  7 BAT LSE INT LED ACK, 8 AMB REP) and the faces' order (`Faces`).
+- **Keys:** each line is known by TYPE, SPEAKER, LISTENER (`___` for
+  none), LINE ID and MISSION run together (`HBOOBNKRA010K03`). A key
+  asked for fits when each of its letters is `?`, or the line's is `_`
+  (a line to no one fits any listener), or they're the same. NEXTLINE
+  and RETURNLINE (MISSION TYPE SPEAKER ID in the tables) are keys so,
+  found at load when only one line fits.
+- **Running on:** in the tables' order (the general one, then the
+  level's), a line runs on to the next when it's of the same type and
+  the next number (Kira's log on the Promenade, 010 to 011; the opening's
+  conversation, whoever speaks). That's its next line, whatever its
+  NEXTLINE says, and such a line is never picked to start one.
+- **Defaults:** the player's hail option (HOP) with no NEXTLINE goes on
+  to the crewmate's answer (HBO from the listener to the speaker), with
+  no RETURNLINE back to the player's sign-off (HCL); an answer to someone
+  with no NEXTLINE to that someone's sign-off.
 - **`FindBestDialogLine(out Index, Type, FilterTag, ListenerTag,
-  SpeakerTag, LineID)`:** the lines of that type, with the tag, listener,
-  speaker and ID asked for (any, if none is asked), not `DoNotPlay`, and
-  their conditions met. Asked for by tag, which names one line, any
-  table's line will do, whoever the player is: CM10_KiraL1A's cut scene
-  goes on with `START_K10A2`, a line of Kira's marked as Worf's mission
-  (W10), in another mission's table. A line only ever reached from another one (the
-  middle of a conversation) is left out unless its ID is asked for. The
-  best is one of the map's own mission, then one of a mission over a
-  general one, then the one said fewest times, then any of those. It
-  returns how many would do.
-- **Conditions:** each test is the dialogue input's event of that name
-  (`CTVE_DialogInput`: `LowHealth(30)`, `HasItem`, `SpecialCondition`...),
-  its arguments converted to its parameters' types. `DS9Phase(n)`, which
-  no script defines, is taken as the player's `OpsPhase` being n, as the
-  scripts' own `OpsLevel` reads it. A test with no event is false and
-  counted. `TestCondition` asks the same.
-- **`IsDialogLineSpecial`:** a line of a mission, not a general one. The
-  HUD shows that a crewmate has something to say when hailing them would
+  SpeakerTag, LineID)`:** the key is the type, the speaker (asked, else
+  the caller's own `Speaker_Tag`), the listener and the number, `?`s
+  where not asked. Only a type and no tag finds nothing. The mission is
+  never part of it. Of the lines it fits (not those that run on):
+  - just one is the answer as it is;
+  - else each is scored. Asked for by tag, only lines with that tag;
+    otherwise a tagged line only for the caller whose `Dialogue_Tag` it
+    is (+100,000). For whoever the player plays: a cut scene's always, a
+    G mission's, one of the player's letter (K, S, W), an M mission's for
+    Sisko and Worf (never Kira). Its condition met (+1,000,000). 10,000
+    off for each hundred of its number. The times it's been said off (a
+    pain cry's: a random 0 to 14 instead). The highest wins; of equals,
+    the later in key order.
+  - It returns how many fit, not how many would do.
+- **Conditions** (`Conditional`): brackets and commas are spaces; words
+  gather into terms between `AND` and `OR`, taken left to right (a 0
+  before AND gives 0, a 1 before OR gives 1).
+  - A term with a `.` in it is about a variable (`Class.Property op
+    value`, of the caller), any other an event of the dialogue input's,
+    by a fixed list: `ObjectiveCompleted` (1 to 9), `PlayerFaceEnemy`
+    (the caller's enemy), `EnemyIsA`, `FriendClose`, `LowHealth`,
+    `HasItem`, `SpecialCondition`, `PlayerIs` (`IsPlayer`), `InPlace`
+    (`PlayerInPlace`), `DS9Phase` (`OpsLevel`)... A `!` anywhere in the
+    term turns it round.
+  - A name not on the list, or arguments missing, makes the condition
+    one the engine can't test: such a line is never picked, and
+    `TestCondition` reads it as met (and logs "Test Failed").
+  - `LowAmmo( 0.2 )` has a `.`, so the engine takes it for a variable
+    and it never holds: the six hail options that ask for ammunition
+    when low are never picked, and the beam-down below can't happen as
+    it did before in Reluva. The original game's log would show it.
+- **`IsDialogLineSpecial`:** a line never said yet, numbered under 800,
+  and with a tag longer than a speaker's code or a condition. The HUD
+  shows that a crewmate has something to say when hailing them would
   find one (`CheckSpecialComm`).
-- **`StartDialog`** (and `PlayDialog`, which calls it) plays the best
-  line, then the ones it leads to. It returns a thread number (0 if no
-  line would do), and `IsDialogThreadPlaying` stays true until the last
-  line is done. Each line:
-  - who says it, and to whom: the actor's `GetSpeakerActor` for their
-    codes (one near the camera, else the HUD's picture of someone on the
-    communicator);
-  - the level's `Talker`, `Listener`, `CurrentLineType`,
-    `CurrentLineIndex` and `CurrentLineFlags` set for the scripts (the heads look at the
-    talker, the cut scenes' directors aim at it);
-  - its event set off (`DoSpecialEvent`, then `DoEvent`: the actors with
-    that tag triggered), its animations played (`PlayDialogAnim`) and the
-    speaker's face set (`FacialExpression`, by name);
-  - the HUD told (`HudText`), and the Maps page shows it above the status
-    line;
-  - said for as long as its voice lasts: the length of the WAV in its
-    Sound (O'Brien's answer on M01_KiraL1A, 5 seconds), else about 15
-    letters a second;
-  - while it's said, the speaker's mouth moved (`C3DSpeechEvent` a tenth
-    of a second apart, the shape from the letter being said). This is
-    Reluva's own: the game's lip-sync data isn't read;
-  - then its pause, then the line its NEXTLINE names (`?` any character;
-    of those that fit, the best as above), else the one it runs on to,
-    else a return line or what's left of a hail (below), or the end: the
-    talker and listener cleared.
-- **Which lines, asked for by type** (not by tag): this map's mission's,
-  general ones, and another mission's only when its conditions tie it
-  to the story (`DS9Phase`...). Without that, a hail on M06 got mission
-  10's "Aye, sir.", and M04's guards M10's lines. Asked for by a tag
-  that no line of that type has, the line with the tag still does: the
-  training room asks for `TRAIN01` as TRN, and the table makes it EVT.
-- **Hails** (`PlayDialog("HAL", None, <crewmate>)`, the HUD's
-  communicator): first a need, if the player has one: an option (HOP) to
-  that crewmate whose conditions hold ("Chief, I need rifle ammunition",
-  `LowAmmo`; the line being blocked). Else a line of this mission's, as
-  above. Else the player's other options: asking for a report. Then the
-  answer: its NEXTLINE (O'Brien's "Stand by" then "Energizing… now",
-  which beams the ammunition down, in a beam-down zone; elsewhere the
-  mission's refusal; below), else that crewmate's report (HBO, to the player or
-  to no one). Then the sign-off: its RETURNLINE, else the player's HCL
-  (not after the crewmate has signed off). On M06_WorfL1A: "Captain,
-  what is your status?", Sisko's mission report, "Understood. Worf out."
-  On M03_KiraL2 with 20 shots left: "Chief, I need rifle ammunition.",
-  "Sir, I can't beam anything to your current position - there's too
-  much ionic distortion.", "Acknowledged. Kira out."
-- **The supply beam-down**, played through on M03_SiskoL1B (`ue-play
-  ... press 2 console "set DS9_FederationPhaserRifleAmmo AmmoAmount 20"
-  teleport DS9_BeamZone1 0 0 0 0 press f1 press f ...`): with 20 of
-  the rifle's 150 shots left, standing in the map's `DS9_BeamZone`, the
-  hail goes "Chief, I'm running low on ammunition." (`LowAmmo( 0.2 )`,
-  which also sets the rifle's `LastCheckForMinimum` to 30), "Stand by,
-  Captain." (`InBeamDownZone`: the HUD's `InBeamZone`, inside a zone's
-  radius by its signal strength), "Energizing… now." (EVENT
-  `-BeamDownAmmo -BeamDownShield`), "Acknowledged. Sisko out." The
-  ammunition clip is beamed in where Sisko faces, the transporter's
-  strips and violet sparks round it for a second or two; walking onto it
-  he stoops to pick it up and has 40 shots.
-  - **A line's EVENT** is words apart by spaces: each is a tag to
-    trigger (the dialogue input's `DoEvent`), or with a `-` before it one
-    of the HUD's beam-downs (`DoSpecialEvent("BeamDownAmmo")`: the
-    script compares the whole word). Passed whole, nothing was beamed.
-  - **Which NEXTLINE answer**: of the lines the key matches whose
-    conditions hold and that are for whoever the player plays (`KEN`'s
-    "Stand by, Major" only for Kira), this mission's first, then another
-    mission's its conditions tie to the story, then the general ones,
-    then another mission's that only happen to fit. Before, M04's "I
-    can't get a signal lock" (`G04`, no condition) beat the general
-    "Stand by, Captain".
-- **A condition's arguments**: a number where a name parameter comes
-  first leaves the name out: `LowAmmo( 0.2 )` is any weapon under a
-  fifth (taking 0.2 for the weapon's name, it was never true).
-- **RETURNLINE**: a line's return line is played once what its NEXTLINE
-  leads to is done ("…What's next?", O'Brien's answers, then Kira's
-  "I'm on my way. Kira out.").
-- **Running on**: a line with no NEXTLINE goes on to the one numbered
-  just after it, of the same table, mission, type and speaker, with no
-  tag of its own (or the same). Kira's log on the Promenade asks for
-  `START_K11A3` (010), which runs on to "I haven't been able to sleep…"
-  (011); M01's opening, 005 to 006 and 007.
-  A cut scene's (CIN) lines are a conversation, so they run on across
-  speakers: to the next line numbered in the table (past gaps, 009 to
-  010) up to the next one with a tag that starts a part of the scene. A
-  tag naming the line's own speaker (Zoto's lines tagged `ZTO`) doesn't.
-  Checked against a recording of the original: the opening's lab
-  (Title) said only Terell's first line of each part and ran on 20
-  seconds early; now its thirteen lines, from "Increase the magneton
-  pulse" to the scream, in step with the original's to within a second.
+- **`StartDialog`** (and `PlayDialog`, which calls it): a hail (HAL)
+  with no tag is the player's options to whom it hails (HOP), asked as
+  the player; one asked by tag that finds nothing is tried as HOP. A new
+  hail cuts off any hail line playing. It returns a thread number (0 if
+  no line would do), and `IsDialogThreadPlaying` stays true while a line
+  of it is said or waits.
+- **A line starting** (`StartLine`):
+  - A line for another character than the player's is swapped for the
+    same line of the player's letter (then M, for Sisko and Worf), or
+    not said.
+  - Who says it: the caller, if it's the line's speaker; else (and for a
+    voice-over or communicator line, V or H) whom the player's
+    `GetSpeakerActor` names for its code.
+  - **One line a speaker:** busy with a more important line, it refuses
+    the new one; with a less important one (or the same type, or a HUD
+    line) that one's cut off (no event, its thread ends); else the new
+    one waits its turn, and lines waiting for that speaker that matter
+    less are dropped.
+  - **Its voice** through the speaker's `PlaySpeech` (at 0.65; 1.4 for
+    deaths, pain, first sight and battle cries; 0.3 for EXG), which
+    plays it on the talk slot within 1100 units, high-passed on the
+    communicator's picture.
+  - Said by a pawn: **the listener** (none for a hail; else of the pawns
+    within 800 of the speaker, one with the line's listener code, else
+    the nearest, the player counted at a fifth of its distance; in a cut
+    scene only one with the code). **The level's** `Talker`,
+    `Listener`, `CurrentLineType`, `CurrentLineIndex` and
+    `CurrentLineFlags` (the CAMERA column's flags) if no line has them,
+    or this one is of a more important type, or as important and said
+    nearer the camera. Its animations (`PlayDialogAnim` at a tween of
+    0.3) while the pawn is `Frozen`. Its face (`FacialExpression`, its
+    place among the tables' faces; `FacialTimer` to half a second after
+    it ends). `HudText` for its voice's length and pause. A note in
+    brackets is heard only.
+  - **How long:** the frame's time, its voice's length (3.5 seconds
+    without one), its pause and a quarter second; a HUD line's clock runs
+    while paused, the others' don't.
+  - **Lip-sync:** each voice's WAV has a `phnm` chunk (the game's own
+    lip data: its words and their phonemes as IPA letters, with times),
+    which the audio driver reads. As each phoneme starts, the speaker
+    gets `C3DSpeechEvent(shape, weight)`: closed (0, 1) between words;
+    1 for i and ɪ (0.2), æ ɑ ɔ ə ʌ (0.8), e ɚ ɛ (1); 2 u w ʊ; 3 b m p;
+    4 f v; 5 s z ð ʃ ʒ ʤ ʧ θ; 6 d g h j k l n t ŋ ɫ ɹ ɾ; 7 o; others
+    nothing. At the end, (0, 0).
+- **A line ending:** the level's fields cleared if they were its, its
+  voice stopped. Then its EVENT (words apart by spaces: a tag to
+  trigger, `DoEvent`, or with a `-` before it one of the HUD's
+  beam-downs, `DoSpecialEvent`): so a line cut off never sets its event
+  off. Then its thread goes on: its next line (found then, for no
+  caller, if the tables didn't name just one), else the RETURNLINE its
+  thread holds (not a sign-off after a sign-off), else the thread ends.
+  A speaker destroyed ends its thread.
+- **Hails** on M06_WorfL1A: "Captain, what is your status?", Sisko's
+  report ("Heading to the objective. Neutralizing hostiles."),
+  "Acknowledged. Worf out."
 - **The CAMERA column's flags**: `V:1` a voice-over (a log), `H:1` heard
   over the communicator. They become `Level.CurrentLineFlags` 16 and 32
   (Pawn's head tracking then doesn't turn to the talker), and an H line's
@@ -729,11 +726,6 @@ the natives.
   `bForceUseHudMeshActor`). A line's place and turn (`A:`, `R:`) are the
   scripts' to ask for (`GetDialogueCameraData`, the cut scenes'
   directors and speech triggers).
-- **Who says it**: the actor whose `Dialogue_Tag` is the line's tag if
-  there's one (the Bajorans who hand over their cards, `BM2`), else the
-  nearest with the speaker's code.
-- **Notes for the voice actors**, text all in brackets ("[GROAN IN PAIN
-  #1]", the Grigari's "[Blah, blah, blah]"), are heard but not shown.
 - **The AI's own lines**, which no script asks for: the dialogue input's
   native `DialogTick`, which its `Tick` calls each tick while the HUD
   shows no letterbox. Reluva does as Engine.dll's does. It does nothing if
@@ -788,9 +780,8 @@ the natives.
     - A TTP isn't said again: not the same line, nor a general one after
       one (`DLG_LastSpokenTTP`). Nor while a hail is on.
     - Said, it sets `DLG_LastSpeakTime` and `DLG_LastSpokenLine`.
-    - The engine queues it with the other dialogue (whether it waits
-      there wasn't read). Reluva instead tries again a second later while
-      other dialogue plays, as the engine does for a busy TTP.
+    - Then it goes through `StartLine`'s rules for a busy speaker, as
+      any line does.
   - **Every tick**, for every pawn within the gates or not, its
     `DLG_OldHealth`, `DLG_OldEnemy` and `DLG_OldCommand` are what it has
     now. So a change while it's far off is never voiced.
@@ -801,10 +792,6 @@ the natives.
   `START_G11B` (mission 11's table isn't in the game: its voices are, in
   `m11_Dialogue.uax`, as are `m12_` and `trn_`) and a speech trigger on
   M04_SiskoL1 with no type.
-
-Each line's voice plays as it starts (below, Sound). Lip-sync: the game
-ships no lip data for its voices, so the mouth's shapes come from the
-line's letters (above).
 
 ### The HUD
 
@@ -1060,8 +1047,9 @@ per-frame `Update`), as read from them; the code is Reluva's own.
     over 3 seconds, and not started while a track plays.
   - A loaded game starts its music again.
 - **Voices:** a dialogue line's Sound (its record, in the package of its
-  table's name) plays as the line starts. It's heard everywhere, over
-  the communicator too, one at a time (a new line's stops the last).
+  table's name) plays through the speaker's `PlaySpeech` (above,
+  Dialogue): on its talk slot, as far as 1100 units, at the speech
+  volume (its package's name has `DIALOG`).
 - **`GetSoundDuration(Sound)`** is its length; `CTVE_Dialog` times its
   lines by it.
 - **Footsteps** go by the floor's material: `GetSurfaceTexture(Start,

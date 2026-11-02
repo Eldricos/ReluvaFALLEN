@@ -17,6 +17,7 @@
 #include <array>
 #include <map>
 #include <memory>
+#include <utility>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -90,6 +91,7 @@ public:
     void ambientSounds(std::vector<Ambient>& out);
     VmObject* currentMusic() { return level_->currentMusic(); }
     bool streamed(VmObject* sound) { return level_->streamedSound(sound); }
+    std::vector<std::pair<VmObject*, int>> takeSoundStops() { return std::exchange(level_->soundStops(), {}); }
     const ScriptLevel::Music& music() { return level_->music(); }
     void musicEnded(VmObject* sound) { level_->musicEnded(sound); }
     // The audio settings (the .ini's AudioDevice: MasterVolume,

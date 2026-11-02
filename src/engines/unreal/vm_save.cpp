@@ -434,8 +434,11 @@ Error ScriptLevel::saveGame(const std::string& slot) {
         ref(t.listener);
         out.f32(t.seconds);
         out.f32(t.timeLeft);
-        out.f32(t.pauseLeft);
-        out.f32(t.mouthTimer);
+        out.f32(t.elapsed);
+        out.u8(t.queued);
+        out.u8(t.hudClock);
+        out.i32(t.back);
+        out.str(t.backPattern);
     }
     out.i32(nextDialogThread_);
     out.i32(int32_t(dialogRandom_));
@@ -772,8 +775,12 @@ Error ScriptLevel::restore(const std::filesystem::path& file) {
         t.listener = ref();
         t.seconds = in.f32();
         t.timeLeft = in.f32();
-        t.pauseLeft = in.f32();
-        t.mouthTimer = in.f32();
+        t.elapsed = in.f32();
+        t.queued = in.u8() != 0;
+        t.hudClock = in.u8() != 0;
+        t.back = in.i32();
+        t.backPattern = in.str();
+        t.phoneme = 0;
         if (t.line >= 0 && size_t(t.line) < dialogLines_.size())
             dialogThreads_.push_back(t);
     }

@@ -177,6 +177,11 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
             mixer_.stop(p.handle);
         playing_.clear();
     }
+    // Those stopped (a line cut off: its speaker's talk slot).
+    for (const auto& [actor, slot] : play.takeSoundStops())
+        for (Playing& p : playing_)
+            if (p.actor == actor && p.slot == slot)
+                mixer_.stop(p.handle);
     playing_.erase(std::remove_if(playing_.begin(), playing_.end(),
                                   [&](const Playing& p) { return !mixer_.isPlaying(p.handle); }),
                    playing_.end());

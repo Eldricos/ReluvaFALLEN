@@ -194,7 +194,7 @@ public:
     // as its voice lasts, then the line it leads to.
     const std::vector<DialogLine>& dialogLines();
     int findDialogLine(const std::string& type, NameId filterTag, NameId listener, NameId speaker,
-                       const std::string& lineId, int& index);
+                       const std::string& lineId, int& index, VmObject* caller = nullptr);
     // CTVE_DialogInput.DialogTick: the AI's own lines, each tick (`input`
     // the dialogue input, whose PawnSurrenderOrPray it asks).
     void dialogTick(VmObject* input, float seconds);
@@ -205,6 +205,8 @@ public:
     // The lines begun so far, in order (their indexes; the last 256).
     const std::vector<int>& linesSaid() const { return dialogSaid_; }
     bool testCondition(const std::string& condition);
+    // A condition about `actor`: 1 met, 0 not, -1 not one the engine knows.
+    int evalCondition(const std::string& condition, VmObject* actor);
     // The lines being said now: the speaker's code, the text, the type.
     struct Subtitle {
         std::string speaker, text, type;
@@ -415,6 +417,8 @@ public:
         float lowPass = 0, highPass = 0, obstruction = 0;
     };
     std::vector<SoundRequest>& soundRequests() { return soundRequests_; }
+    // Sounds stopped (an actor's slot: a line cut off), for the page.
+    std::vector<std::pair<VmObject*, int>>& soundStops() { return soundStops_; }
     // The music is the streamed sound the player's CurrentMusic names. One
     // the scripts play (a music trigger's PlaySound) sets it, with its
     // volume and where in it to start (the HUD's StartTimeOffset); each such
@@ -746,28 +750,67 @@ private:
     std::map<std::pair<const Package*, int>, std::shared_ptr<Font>> fonts_;
     using IntFile = std::map<std::string, std::vector<std::pair<std::string, std::string>>>; // by section, lower case
     std::map<std::string, IntFile> intFiles_; // by file name, lower case
+    // A line being said (or waiting for its speaker), as the engine's
+    // dialogue keeps them: its thread, whose dialogue it is (the caller:
+    // its conditions, its own lines), who says it and to whom, and how
+    // long until it's done.
     struct DialogThread {
         int id = 0, line = 0;
-        VmObject* self = nullptr; // who started it
+        VmObject* self = nullptr;
         VmObject* speaker = nullptr;
         VmObject* listener = nullptr;
-        float seconds = 0, timeLeft = 0, pauseLeft = 0, mouthTimer = 0;
-        VmObject* forcedSpeaker = nullptr; // the AI's own lines: the pawn that says them
-        std::vector<std::string> returns;  // the RETURNLINEs given, to go back to in turn
-        struct FollowUp {
-            std::string type, speaker, listener; // a hail's answer and sign-off
-        };
-        std::vector<FollowUp> followUps;
+        float seconds = 0;     // its voice's length
+        float timeLeft = 0;    // until it's done: voice, pause and a quarter second
+        float elapsed = 0;     // since it began
+        bool queued = false;   // waiting for its speaker to be free
+        bool hudClock = false; // a HUD line: timed while paused too
+        int back = -1;         // the RETURNLINE pending in its thread
+        std::string backPattern;
+        size_t phoneme = 0;    // lip-sync: the next mouth shape
     };
-    int pickDialogLine(const std::string& type, const std::string& speaker, const std::string& listener,
-                       bool orUnaddressed, bool anyPlace, bool needsFirst, const std::string* actorTag = nullptr);
-    int runOnFrom(int index); // the line this one runs on from, -1 if none (found once)
-    int findRunOn(int index);
-    std::vector<int> runOnCache_; // -2: not found yet
-    bool runsOn(int index);
+    // Each line's engine side: its key (TYPE SPK LST ID MISSION, no
+    // listener ___), its type's priority (the tables' Types groups),
+    // whether it runs on from the line before, what follows it and what
+    // it returns to (resolved once if only one line fits), its tag, event
+    // and condition (none if in brackets), and its camera flags (A 1, R 2,
+    // C 4, D or T 8, V 16, H 32).
+    struct DialogRec {
+        std::string key;
+        int group = 9;
+        bool runOn = false;
+        int next = -1, back = -1;
+        std::string nextPattern, backPattern;
+        std::string tag, event, condition;
+        int flags = 0;
+    };
+    std::vector<DialogRec> dialogRecs_;
+    std::vector<int> dialogOrder_; // the lines in key order
+    std::vector<std::string> dialogFaces_;
+    std::map<std::string, int> dialogGroups_; // a type's priority (1 the most)
+    struct Phoneme {
+        float at = 0;
+        int shape = 0;
+        float weight = 0;
+    };
+    std::map<int, std::vector<Phoneme>> dialogPhonemes_; // by line
+    const std::vector<Phoneme>& phonemesOf(int line);
     std::string playerSpeaker();
-    bool ofThisMission(const DialogLine& l);
-    bool forPlayer(const DialogLine& l) const;
+    bool missionFits(int index);
+    int conditionTerm(const std::vector<std::string>& term, VmObject* actor);
+    int bestLine(const std::string& pattern, NameId filterTag, VmObject* caller, int* count);
+    // StartLine: 1 started, 2 waiting for its speaker, 0 refused.
+    int startLine(int thread, int index, VmObject* caller, int back = -1, const std::string& backPattern = {});
+    VmObject* speakerFor(int index, VmObject* caller);
+    void endLine(DialogThread& t, bool cut);
+    static bool keyFits(const std::string& pattern, const std::string& key);
+    struct PendingLine {
+        int thread = 0, line = -1;
+        VmObject* caller = nullptr;
+        int back = -1;
+        std::string backPattern;
+    };
+    std::vector<PendingLine> pendingLines_; // lines that follow, started after the tick's endings
+    void writeLineFields(DialogThread& t);
     // The AI's own lines (CTVE_DialogInput.DialogTick, as the engine's):
     // a type picked from each pawn's state, its line said by it, its
     // conditions about it.
@@ -802,10 +845,9 @@ private:
     bool canMoveTo(VmObject* pawn, VmObject* from, VmObject* to);
     std::map<VmObject*, float> noiseQuiet_; // pawns: no noise heard before this time
     std::mt19937 barkRandom_{13579};
-    VmObject* conditionSubject_ = nullptr; // whose conditions (the actor the tests ask about)
+    std::vector<std::pair<VmObject*, int>> soundStops_;
     void loadDialog();
     VmObject* dialogInput();
-    int bestDialogLine(const std::vector<int>& matches);
     float lineSeconds(const DialogLine& line);
     void beginLine(DialogThread& thread, int index);
     void tickDialog(float seconds);
@@ -813,12 +855,9 @@ private:
     std::vector<DialogLine> dialogLines_;
     std::vector<int> dialogPlays_;      // how often each line's been said
     std::vector<int> dialogSaid_;       // the lines begun, in order
-    std::vector<bool> dialogFollows_;   // only reached from another line
-    std::vector<bool> dialogOurs_;      // this level's and this player's
-    std::string dialogNumber_;          // the map's mission number ("01", "OP"), if it has one
-    char dialogWho_ = 0;                // K, S or W: whom the player plays
     std::vector<DialogThread> dialogThreads_;
     int nextDialogThread_ = 1;
+    int currentThread_ = 0;             // the thread whose line the level's fields show
     int currentLine_ = -1;              // the line said last (its camera: GetDialogueCameraData)
     VmObject* currentSpeaker_ = nullptr;
     uint32_t dialogRandom_ = 1;
