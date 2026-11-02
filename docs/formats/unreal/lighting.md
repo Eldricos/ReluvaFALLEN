@@ -104,6 +104,17 @@ those units, 1 the texture as it is.
   lightmap's range (64 of the 7 bits' 127: about half of it in Reluva's
   units). Surfaces without a lightmap get only this; unlit surfaces (poly
   flag 0x400000) are drawn as their texture.
+- **Which lights use their shadow bits** (the original's light manager):
+  every light in a surface's lightmap list, its bits blurred by a
+  weighted 8x8 kernel (0-255 rather than 0 or 1). A light it treats as
+  dynamic lights without them: one with `bDynamicLight`, or one neither
+  `bStatic` nor `bNoDelete` (a light that's spawned and dies), unless it's
+  a `TriggerLight`. `LightType` none, or `LightBrightness` 0, lights
+  nothing. `LightEffect` 15 (`OmniBumpMap`) lights only bump-mapped
+  surfaces (and is passed over for characters' shadows). Reluva's
+  lightmaps take each listed light's bits as they are, without the blur
+  (the texels' filtering softens the edges instead); its dynamic lights
+  (actors' lights) light without shadows, as the original's.
 - A light's properties are its own over its class's defaults
   ([actors.md](actors.md#class-defaults)). On The Fallen that changes
   only the 90 `Spotlight` actors (now cones, `LightEffect` 12 from their
@@ -353,7 +364,12 @@ against the same views here, matched shot for shot in cut scenes:
   (radius 1000 and more: the outdoor maps' sky lights; indoor cylinder
   lights are 50 to 625) light without their shadow bits
   (`unshadowed()`). The ground now comes within 15% of the recording
-  (through its display curve). Fitted: the original's code isn't known.
+  (through its display curve). Fitted, and not what the original's code
+  does: its renderer gives every light in a surface's lightmap list its
+  shadow bits (blurred by a weighted 8x8 kernel to 0-255), and only
+  lights it treats as dynamic go without (below); Hass'terral's are
+  plain static lights. Why the recording's field is evenly lit is still
+  not known.
   Still darker than the recording: the cliffs beside the path, which
   these lights don't reach (dropping the incidence for them overshot the
   ground by 70% and barely lit the cliffs).
