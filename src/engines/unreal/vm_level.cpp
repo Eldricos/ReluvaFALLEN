@@ -3,11 +3,14 @@
 
 #include "engines/unreal/vm_level.h"
 
+#include "engines/unreal/game_save.h"
+
 #include "engines/unreal/mesh.h"
 
 #include "common/fs.h"
 
 #include <algorithm>
+#include <set>
 #include <chrono>
 #include <fstream>
 #include <iterator>
@@ -94,6 +97,12 @@ Error ScriptLevel::load() {
     std::vector<int32_t> refs;
     if (Error err = readLevelActors(map_, refs))
         return err;
+    // A saved game's ghosts (actors out of the level for now) are made too.
+    std::set<int32_t> ghostRefs;
+    if (!readLevelExtras(map_, saved_))
+        for (int32_t g : saved_.ghosts)
+            if (g > 0 && ghostRefs.insert(g).second)
+                refs.push_back(g);
     // First every actor, so they can refer to each other; then their
     // properties.
     std::vector<std::pair<VmObject*, int>> made;
@@ -124,7 +133,7 @@ Error ScriptLevel::load() {
         vm_.adopt(map_, index, a);
         level.push_back(a);
         made.push_back({a, index});
-        actors_.push_back(a);
+        (ghostRefs.count(ref) ? ghosts_ : actors_).push_back(a);
     }
     for (const auto& [a, index] : made) {
         std::vector<uint8_t> data;
@@ -134,10 +143,13 @@ Error ScriptLevel::load() {
             continue;
         }
         Reader r(data, size_t(map_.exports()[size_t(index)].serialOffset));
-        if (Error err = beginObject(map_, index, r, props)) {
+        StateFrame frame;
+        if (Error err = beginObject(map_, index, r, props, &frame)) {
             vm_.reportError(err.message);
             continue;
         }
+        if (frame.has)
+            savedFrames_[a] = frame;
         vm_.applyProperties(a, map_, props);
         localizedSet_ += vm_.applyLocalizedActor(a, map_.name());
         if (!levelInfo_ && vm_.isA(a, "LevelInfo"))
@@ -336,7 +348,7 @@ VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& 
         error = game_->cls->name + " has no Login";
         return nullptr;
     }
-    const std::string options = "?Name=" + playerName + "?Class=" + cls->package->name() + "." + cls->name;
+    const std::string options = "?Name=" + playerName + "?Class=" + cls->package->name() + "." + cls->name + options_;
     Value message = Value::stringValue("");
     const Value pawn = vm_.invoke(login, game_,
                                   {Value::stringValue(portal), Value::stringValue(options), message, Value::objectValue(cls->object)},
@@ -890,9 +902,15 @@ Error runLevelStart(const PackageSet& packages, const Package& map, const std::s
         if (a->package == &map)
             before.push_back({a->exportIndex, {a, byteOf(a, "DrawType"), byteOf(a, "bHidden"), byteOf(a, "LightType"),
                                                byteOf(a, "LightBrightness")}});
-    level.beginPlay(defaultGame);
     std::string loginError;
-    if (VmObject* p = level.login(iniSetting(packages, "URL", "Class"), iniSetting(packages, "URL", "Name"), loginError))
+    VmObject* p = nullptr;
+    if (level.savedByGame()) { // a saved game of the original's
+        p = level.resumeSavedGame(iniSetting(packages, "URL", "Name"), loginError);
+    } else {
+        level.beginPlay(defaultGame);
+        p = level.login(iniSetting(packages, "URL", "Class"), iniSetting(packages, "URL", "Name"), loginError);
+    }
+    if (p)
         out.player = p->cls->name;
     out.loginError = loginError;
     for (int i = 0; i < int(seconds * 30); ++i)

@@ -223,6 +223,8 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
             continue;
         if (r.pitch != 1)
             mixer_.setPitch(p.handle, r.pitch);
+        if (r.startSeconds > 0)
+            mixer_.seek(p.handle, double(r.startSeconds) * sound->rate);
         playing_.push_back(p);
         ++started_;
         recent_.push_back(r.sound.package->name() + "." + r.sound.package->path(r.sound.exportIndex + 1));

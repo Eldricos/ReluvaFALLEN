@@ -186,6 +186,7 @@ if(RELUVA_ENGINE_UNREAL)
         src/engines/unreal/vm_level.cpp
         src/engines/unreal/vm_physics.cpp
         src/engines/unreal/vm_save.cpp
+        src/engines/unreal/game_save.cpp
         src/engines/unreal/vm_sound.cpp
         src/engines/unreal/vm_splines.cpp
         src/engines/unreal/vm_anim.cpp

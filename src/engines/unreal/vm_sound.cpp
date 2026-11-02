@@ -65,11 +65,13 @@ bool ScriptLevel::streamedSound(VmObject* sound) {
     return it->second;
 }
 
-// The sound's name (its object's, with its group's), upper case.
+// The sound's full name (package, group and object), upper case.
 std::string ScriptLevel::soundName(VmObject* sound) {
     if (!sound || !sound->package || sound->exportIndex < 0)
         return {};
-    std::string n = sound->package->path(sound->exportIndex + 1);
+    // Its full name, its package's too (Music.Trks_Moody_Fear...), as the
+    // audio driver tests it.
+    std::string n = sound->package->name() + "." + sound->package->path(sound->exportIndex + 1);
     for (char& ch : n)
         ch = char(std::toupper(static_cast<unsigned char>(ch)));
     return n;

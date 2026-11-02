@@ -163,6 +163,25 @@ void PackageSet::addFile(const std::filesystem::path& file) {
     entries_.try_emplace(fs::toLower(name), std::move(e));
 }
 
+std::string PackageSet::addLater(const std::filesystem::path& file) const {
+    const std::string name = file.stem().string();
+    auto it = entries_.find(fs::toLower(name));
+    if (it != entries_.end() && it->second.file != file) {
+        // Another file of the name (a save again, or a package): this one.
+        it->second.file = file;
+        it->second.package.reset();
+        it->second.tried = false;
+        it->second.error.clear();
+    } else if (it == entries_.end()) {
+        Entry e;
+        e.name = name;
+        e.extension = fs::toLower(file.extension().string());
+        e.file = file;
+        entries_.emplace(fs::toLower(name), std::move(e));
+    }
+    return name;
+}
+
 void PackageSet::addMemory(std::string name, std::string extension, std::vector<uint8_t> data) {
     Entry e;
     e.name = name;

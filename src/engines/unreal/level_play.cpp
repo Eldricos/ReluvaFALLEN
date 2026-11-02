@@ -36,6 +36,11 @@ Error LevelPlay::start(const std::string& portal, const std::filesystem::path& s
         player_ = level_->player();
         return Error::success();
     }
+    // A saved game of the original's: the map is its package.
+    if (level_->savedByGame()) {
+        player_ = level_->resumeSavedGame(iniSetting(packages_, "URL", "Name"), loginError_);
+        return Error::success();
+    }
     level_->beginPlay(defaultGameType(packages_));
     player_ = level_->login(iniSetting(packages_, "URL", "Class"), iniSetting(packages_, "URL", "Name"), loginError_,
                             portal);

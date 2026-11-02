@@ -164,7 +164,7 @@ Error readProperties(const Package& package, Reader& r, PropertyList& out) {
     return Error::fail("too many properties");
 }
 
-Error beginObject(const Package& package, int index, Reader& r, PropertyList& out) {
+Error beginObject(const Package& package, int index, Reader& r, PropertyList& out, StateFrame* frame) {
     if (index < 0 || size_t(index) >= package.exports().size())
         return Error::fail("no export " + std::to_string(index));
     const Export& e = package.exports()[size_t(index)];
@@ -174,12 +174,16 @@ Error beginObject(const Package& package, int index, Reader& r, PropertyList& ou
         // The state the object is in: its node and state node, the
         // events it ignores, its latent action, and where in the node's
         // code it is (only when it's in one).
-        const int32_t node = r.index();
-        r.index(); // state node
-        r.u64();   // probe mask
-        r.i32();   // latent action
-        if (node != 0)
-            r.index(); // code offset
+        StateFrame f;
+        f.has = true;
+        f.node = r.index();
+        f.stateNode = r.index();
+        f.probeMask = r.u64();
+        f.latent = r.i32();
+        if (f.node != 0)
+            f.offset = r.index();
+        if (frame)
+            *frame = f;
     }
     if (Error err = readProperties(package, r, out))
         return Error::fail(package.name(e.objectName) + ": " + err.message);

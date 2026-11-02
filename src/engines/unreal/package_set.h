@@ -43,6 +43,9 @@ public:
     // name wins, as with the search path.
     void addFile(const std::filesystem::path& file);
     void addMemory(std::string name, std::string extension, std::vector<uint8_t> data);
+    // A package found later (a saved game of the original's, opened as the
+    // level it is): added under its file's name, which it returns.
+    std::string addLater(const std::filesystem::path& file) const;
 
     // The package of that name (no extension, any case), opened on first
     // use; nullptr if there's none or it won't open (see error()).
@@ -76,7 +79,7 @@ private:
         mutable bool tried = false;
         mutable std::string error;
     };
-    std::map<std::string, Entry> entries_; // by lower-case name
+    mutable std::map<std::string, Entry> entries_; // by lower-case name (nodes stay put: packages keep their places)
     std::vector<std::string> paths_;
     std::vector<std::string> mapExtensions_{".unr"};
     std::filesystem::path ini_;

@@ -799,6 +799,12 @@ VmObject* Vm::objectAt(const Package& package, int32_t ref) {
     VmObject* out = o.get();
     objects_.push_back(std::move(o));
     exportObjects_[key] = out;
+    // Its outer, if that's an object of its package (a saved game's
+    // effect pools are their actors').
+    if (e.package > 0)
+        if (VmObject* outer = objectAt(*r.package, e.package))
+            if (Value* v = out->find(*this, "Outer"))
+                v->o = outer;
     // Its own properties over the defaults: scripts read them (The Fallen's
     // HUD textures keep where they go on the screen in theirs). Textures
     // and anything small; meshes and sounds aren't read whole for it.

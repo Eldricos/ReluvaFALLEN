@@ -144,6 +144,7 @@
 #endif
 
 #ifdef RELUVA_ENGINE_UNREAL
+#include "engines/unreal/game_save.h"
 #include "engines/unreal/actors.h"
 #include "engines/unreal/class_defaults.h"
 #include "engines/unreal/mesh.h"
@@ -4429,6 +4430,53 @@ int findUnrealExport(const reluva::unreal::Package& pkg, const std::string& whic
     return classIndex >= 0 ? classIndex : pkg.findExport(which);
 }
 
+// A saved game of the original's (a .dsa package): its Level object's
+// extras (ghosts, dialogue said, sounds playing) and its C3D mesh states.
+int cmdUeSave(int argc, char** argv) {
+    if (argc != 3) {
+        std::fprintf(stderr, "usage: reluva-tool ue-save <saved game .dsa>\n");
+        return 2;
+    }
+    reluva::unreal::Package pkg;
+    if (!openUnrealPackage(argv[2], pkg))
+        return 1;
+    reluva::unreal::LevelExtras x;
+    if (reluva::Error err = reluva::unreal::readLevelExtras(pkg, x)) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    int said = 0;
+    for (const auto& l : x.lines)
+        said += l.said > 0;
+    std::printf("map %s, portal %s; %zu actors, %zu ghosts; %zu dialogue lines (%d said); %zu sounds playing\n",
+                x.urlMap.c_str(), x.urlPortal.c_str(), x.actors.size(), x.ghosts.size(), x.lines.size(), said,
+                x.sounds.size());
+    for (const auto& l : x.lines)
+        if (l.said > 0)
+            std::printf("  said %dx: %s\n", l.said, l.key.c_str());
+    for (const auto& s : x.sounds)
+        std::printf("  sound %s on %s, id %d, volume %.2f, radius %.0f, pitch %.2f, from %.2f s\n", s.path.c_str(),
+                    pkg.path(s.actor).c_str(), s.id, s.volume, s.radius, s.pitch, s.start);
+    int states = 0, failed = 0;
+    for (int i : pkg.exportsOfClass("C3DMESHSTATE")) {
+        reluva::unreal::MeshState m;
+        if (reluva::unreal::readMeshState(pkg, i, m)) {
+            ++failed;
+            continue;
+        }
+        ++states;
+        if (m.groups.size() > 1) {
+            std::printf("  %s (%s):", pkg.path(i + 1).c_str(), m.mesh.c_str());
+            for (const auto& g : m.groups)
+                std::printf(" %s=%s@%.3f/t%d/s%d/w%.2f", g.group.c_str(), g.sequence.c_str(), g.frame, g.type, g.state,
+                            g.weight);
+            std::printf("\n");
+        }
+    }
+    std::printf("%d mesh states read, %d not\n", states, failed);
+    return 0;
+}
+
 int cmdUeInfo(int argc, char** argv) {
     if (argc != 3) {
         std::fprintf(stderr, "usage: reluva-tool ue-info <package>\n");
@@ -4565,9 +4613,14 @@ int cmdUeRun(int argc, char** argv) {
             continue;
         }
         const size_t before = level.actors().size();
-        level.beginPlay(defaultGameType(set));
         std::string loginError;
-        VmObject* player = level.login(iniSetting(set, "URL", "Class"), iniSetting(set, "URL", "Name"), loginError);
+        VmObject* player = nullptr;
+        if (level.savedByGame()) { // a saved game of the original's
+            player = level.resumeSavedGame(iniSetting(set, "URL", "Name"), loginError);
+        } else {
+            level.beginPlay(defaultGameType(set));
+            player = level.login(iniSetting(set, "URL", "Class"), iniSetting(set, "URL", "Name"), loginError);
+        }
         const auto t1 = std::chrono::steady_clock::now();
         for (int i = 0; i < int(seconds * 30); ++i)
             level.tick(1.0f / 30);
@@ -5849,6 +5902,8 @@ int main(int argc, char** argv) {
 #ifdef RELUVA_ENGINE_UNREAL
     if (argc >= 2 && std::strcmp(argv[1], "ue-info") == 0)
         return cmdUeInfo(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-save") == 0)
+        return cmdUeSave(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-exports") == 0)
         return cmdUeExports(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-props") == 0)
@@ -5917,6 +5972,7 @@ int main(int argc, char** argv) {
 #ifdef RELUVA_ENGINE_UNREAL
                  "  reluva-tool ue-check <game folder> [-v]\n"
                  "  reluva-tool ue-info <package>\n"
+                 "  reluva-tool ue-save <saved game .dsa>\n"
                  "  reluva-tool ue-exports <package> [filter]\n"
                  "  reluva-tool ue-props <package> <export>\n"
                  "  reluva-tool ue-extract <game folder> <package name> <export> [steps]\n"

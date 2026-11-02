@@ -13,6 +13,8 @@
 
 #include "engines/unreal/vm_level.h"
 
+#include "engines/unreal/game_save.h"
+
 #include "common/fs.h"
 
 #include <algorithm>
@@ -136,6 +138,24 @@ std::string readFile(const std::filesystem::path& file) {
 
 // The header: what's in it, which map, when.
 Error ScriptLevel::readSaveInfo(const std::filesystem::path& file, SaveInfo& out) {
+    // The original's: the level as a package, named from its title and
+    // the time played ("Bajoran_Ship_-_Ke'el_Tul-97.dsa"), dated by the
+    // file (as the game's load list has them).
+    if (isPackageFile(file.string())) {
+        out.file = file;
+        out.byGame = true;
+        out.map = file.stem().string();
+        out.description = out.map;
+        std::replace(out.description.begin(), out.description.end(), '_', ' ');
+        std::error_code ec;
+        const auto when = std::filesystem::last_write_time(file, ec);
+        if (!ec)
+            out.time = std::chrono::duration_cast<std::chrono::seconds>(
+                           (when - std::filesystem::file_time_type::clock::now()) +
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count();
+        return Error::success();
+    }
     std::ifstream f(file, std::ios::binary);
     char magic[8] = {};
     if (!f.read(magic, 8) || std::memcmp(magic, kMagic, 8) != 0)
@@ -152,7 +172,7 @@ Error ScriptLevel::readSaveInfo(const std::filesystem::path& file, SaveInfo& out
 }
 
 // The saved games in the save folder, newest first: QuickSave.dsa and
-// Save<n>.dss, the game's own names, but Reluva's files.
+// <Title>-<n>.dsa, the game's own names: Reluva's files and the original's.
 std::vector<ScriptLevel::SaveInfo> ScriptLevel::savedGames() const {
     std::vector<SaveInfo> out;
     std::error_code ec;
@@ -170,8 +190,8 @@ std::vector<ScriptLevel::SaveInfo> ScriptLevel::savedGames() const {
     return out;
 }
 
-// The level saved: "QuickSave" to QuickSave.dsa, anything else to the next
-// Save<n>.dss, described by the level's title.
+// The level saved, in Reluva's own format: "QuickSave" to QuickSave.dsa,
+// anything else as the game names its saves.
 Error ScriptLevel::saveGame(const std::string& slot) {
     if (saveFolder_.empty())
         return Error::fail("no folder to save games in");
@@ -183,14 +203,20 @@ Error ScriptLevel::saveGame(const std::string& slot) {
         file = saveFolder_ / "QuickSave.dsa";
         description = "QuickSave";
     } else {
-        int n = 1;
-        while (std::filesystem::exists(saveFolder_ / ("Save" + std::to_string(n) + ".dss"), ec))
-            ++n;
-        file = saveFolder_ / ("Save" + std::to_string(n) + ".dss");
+        // Named as the game names them: the level's title (else its name),
+        // spaces as underscores, then the seconds played, counting up past
+        // any already there.
         if (const Value* title = levelInfo_->find(vm_, "Title"); title && !title->s.empty())
             description = title->s;
         else
             description = map_.name();
+        std::string base = description.substr(0, 64);
+        std::replace(base.begin(), base.end(), ' ', '_');
+        const Value* played = player_ ? prop(player_, "GamePlayedTime") : nullptr;
+        int n = played ? int(played->asFloat()) : 0;
+        while (std::filesystem::exists(saveFolder_ / (base + "-" + std::to_string(n) + ".dsa"), ec))
+            ++n;
+        file = saveFolder_ / (base + "-" + std::to_string(n) + ".dsa");
     }
 
     // The objects: the level's actors and what they lead to that the level
@@ -891,6 +917,183 @@ void registerSaveNatives(Vm& vm) {
             std::filesystem::remove(saves[size_t(c.i(0) - 1)].file, ec);
         }
     });
+}
+
+// --- The original's saved games ---------------------------------------------------------
+
+bool ScriptLevel::savedByGame() const {
+    const Value* begun = levelInfo_ ? levelInfo_->find(vm_, "bBegunPlay") : nullptr;
+    return begun && begun->asBool();
+}
+
+// A saved game of the original's, as the engine's LoadMap takes it up: the
+// level as saved (bBegunPlay set, so nothing begins again); its time; each
+// actor back in the state, and at the place in its state code, it was
+// saved in; its animation groups and face channels (its C3D mesh state);
+// the dialogue table's counts; the sounds that were playing, from where
+// they were; the player's bJustLoaded; then the player logs in again,
+// taking up the saved pawn (GameInfo.Login reuses a PlayerPawn without a
+// player), and the game's unpaused.
+VmObject* ScriptLevel::resumeSavedGame(const std::string& playerName, std::string& error) {
+    vm_.holdEvents = false;
+    if (const Value* g = prop(levelInfo_, "Game"))
+        game_ = g->asObject();
+    if (const Value* t = prop(levelInfo_, "TimeSeconds"))
+        time_ = t->asFloat();
+    lipLast_ = time_;
+    // The states.
+    for (const auto& [a, f] : savedFrames_) {
+        if (a->deleted || !f.stateNode)
+            continue;
+        const ObjectRef st = vm_.packages().resolve(map_, f.stateNode);
+        if (!st)
+            continue;
+        const std::string stateName = st.package->objectName(st.exportIndex + 1);
+        VmState* state = a->cls ? vm_.findState(a->cls, vm_.name(stateName)) : nullptr;
+        if (!state || state == a->cls)
+            continue;
+        a->state = state;
+        ++a->stateSerial;
+        a->codeState = nullptr;
+        a->codeAt = -1;
+        if (!f.node || f.offset < 0)
+            continue;
+        // Its code: the state of that name in the class the node is in.
+        const ObjectRef node = vm_.packages().resolve(map_, f.node);
+        if (!node)
+            continue;
+        const std::string path = node.package->path(node.exportIndex + 1);
+        const std::string owner = path.substr(0, path.find('.'));
+        VmState* code = nullptr;
+        for (VmStruct* s = state; s && s->kind == VmStruct::Kind::State; s = s->super)
+            if (auto* ss = static_cast<VmState*>(s); ss->owner && fs::toLower(ss->owner->name) == fs::toLower(owner)) {
+                code = ss;
+                break;
+            }
+        if (!code)
+            continue;
+        // The statement at the offset (the one after the latent call it
+        // waits in); waiting in anything but Sleep, the call made again
+        // (a move, a FinishAnim: the actor's properties have what it needs).
+        int at = -1, before = -1;
+        uint32_t best = 0, bestBefore = 0;
+        for (const auto& [off, statement] : code->statementAt) {
+            if (off >= uint32_t(f.offset) && (at < 0 || off < best))
+                at = statement, best = off;
+            if (off < uint32_t(f.offset) && (before < 0 || off > bestBefore))
+                before = statement, bestBefore = off;
+        }
+        a->codeState = code;
+        a->codeAt = at;
+        if (f.latent != 0) {
+            if (f.latent == 256) { // Sleep: what's left of it
+                const Value* left = prop(a, "LatentFloat");
+                a->latent = true;
+                a->sleeping = left ? left->asFloat() : 0;
+            } else if (before >= 0) {
+                a->codeAt = before;
+            }
+        }
+    }
+    // What each actor was touching (its Touching), so nothing it's in
+    // already is touched again.
+    for (VmObject* a : actors_)
+        if (const Value* t = prop(a, "Touching"))
+            for (size_t k = 0; k < 4; ++k)
+                if (VmObject* o = t[k].asObject(); o && !o->deleted)
+                    touching_[a].push_back(o);
+    // The C3D mesh states: the layers on the body and the face channels.
+    for (VmObject* a : actors_) {
+        const Value* ms = prop(a, "C3DOurMeshState");
+        VmObject* o = ms ? ms->asObject() : nullptr;
+        if (!o || !o->package || o->exportIndex < 0)
+            continue;
+        MeshState m;
+        if (readMeshState(*o->package, o->exportIndex, m))
+            continue;
+        for (const MeshStateGroup& g : m.groups) {
+            const bool active = !g.sequence.empty() && fs::toLower(g.sequence) != "nonactive";
+            if (g.group.rfind("sk", 0) == 0) {
+                SkinChannel c;
+                if (active)
+                    c.sequence = vm_.name(g.sequence);
+                c.frame = g.frame;
+                c.weight = g.weight;
+                c.fromFrame = g.fromFrame;
+                c.fromWeight = g.fromWeight;
+                c.elapsed = g.elapsed;
+                c.duration = g.duration;
+                c.tweening = g.state == 5;
+                if (!g.pendingSequence.empty() && fs::toLower(g.pendingSequence) != "nonactive") {
+                    c.pending = true;
+                    c.pendingSequence = vm_.name(g.pendingSequence);
+                    c.pendingFrame = g.pendingFrame;
+                    c.pendingWeight = g.pendingWeight;
+                    c.pendingTween = g.pendingTween;
+                }
+                skins_[a].push_back({vm_.name(g.group), c});
+            } else if (active && g.type == 1 && fs::toLower(g.group) != "fullbody") {
+                AnimLayer l;
+                l.sequence = vm_.name(g.sequence);
+                l.bone = g.bone.empty() ? 0 : vm_.name(g.bone);
+                l.rest = fs::toLower(g.group) == "lowertorso";
+                l.frame = g.frame;
+                l.rate = g.rate;
+                l.weight = 1;
+                layers_[a][vm_.name(g.group)] = l;
+            }
+        }
+    }
+    // How often each line's been said.
+    loadDialog();
+    std::map<std::string, int> said;
+    for (const LevelExtras::Line& l : saved_.lines)
+        if (l.said > 0)
+            said[l.key] = l.said;
+    for (size_t i = 0; i < dialogRecs_.size(); ++i)
+        if (auto it = said.find(dialogRecs_[i].key); it != said.end())
+            dialogPlays_[i] = it->second;
+    // The sounds playing (the music's the player's CurrentMusic, which the
+    // page starts again from the HUD's StartTimeOffset).
+    for (const LevelExtras::Sound& snd : saved_.sounds) {
+        VmObject* a = snd.actor > 0 ? vm_.objectAt(map_, snd.actor) : nullptr;
+        const size_t dot = snd.path.find('.');
+        const Package* p = dot == std::string::npos ? nullptr : vm_.packages().get(snd.path.substr(0, dot));
+        const std::string name = snd.path.substr(snd.path.rfind('.') + 1);
+        const int e = p ? p->findExport(name, "Sound") : -1;
+        if (!a || e < 0)
+            continue;
+        VmObject* sound = vm_.objectAt(*p, e + 1);
+        if (soundName(sound).find("MUSIC") != std::string::npos || streamedSound(sound)) {
+            // Music: the player's, from where it was.
+            if (const Value* who = prop(levelInfo_, "Player"); who && who->asObject())
+                if (Value* v = prop(who->o, "CurrentMusic"))
+                    v->o = sound;
+            music_.volume = snd.volume;
+            music_.startSeconds = std::max(0.0f, time_ - snd.start);
+            ++music_.serial;
+            continue;
+        }
+        SoundRequest r;
+        r.actor = a;
+        r.sound = {p, e};
+        r.slot = snd.id < 0 ? 0 : (snd.id >> 1) & 7;
+        r.noOverride = snd.id >= 0 && (snd.id & 1);
+        r.volume = snd.volume;
+        r.radius = snd.radius;
+        r.pitch = snd.pitch;
+        r.startSeconds = std::max(0.0f, time_ - snd.start);
+        soundRequests_.push_back(r);
+    }
+    // The player, back.
+    if (Value* v = prop(levelInfo_, "Pauser"))
+        *v = Value::stringValue("");
+    options_ = "?load";
+    VmObject* player = login({}, playerName, error, {});
+    if (player)
+        if (Value* v = prop(player, "bJustLoaded"))
+            *v = Value::boolValue(true);
+    return player;
 }
 
 } // namespace reluva::unreal

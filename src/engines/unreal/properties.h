@@ -66,7 +66,16 @@ Error readProperties(const Package& package, Reader& r, PropertyList& out);
 // Reads the start of an export's data up to the class's own data: its
 // state frame, if it has one, and its properties. Classes (whose data is
 // laid out differently) are refused.
-Error beginObject(const Package& package, int exportIndex, Reader& r, PropertyList& out);
+// The state an object was saved in (objects with HasStack: a saved game's
+// actors): its code's node and its state (object references), the events
+// it ignores, its latent action, and where in the node's code it is (-1
+// none).
+struct StateFrame {
+    bool has = false;
+    int32_t node = 0, stateNode = 0, latent = 0, offset = -1;
+    uint64_t probeMask = 0;
+};
+Error beginObject(const Package& package, int index, Reader& r, PropertyList& out, StateFrame* frame = nullptr);
 
 // A property's value as text, for viewers and tools.
 std::string describe(const Package& package, const Property& p);

@@ -2341,6 +2341,19 @@ void MapViewer::travel(const std::string& url) {
                 play_->hudEvent(1010);
             return;
         }
+        // The original's: the save is the level itself, opened as a map.
+        if (info.byGame) {
+            const std::string level = ctx_.packages.addLater(file);
+            if (std::find(names_.begin(), names_.end(), level) == names_.end())
+                names_.push_back(level);
+            if (!selectMap(level)) {
+                stopPlay();
+                playError_ = "load " + name + ": doesn't open";
+                return;
+            }
+            startPlay({});
+            return;
+        }
         if (!selectMap(info.map)) {
             stopPlay();
             playError_ = "load " + name + ": no map " + info.map;

@@ -1225,41 +1225,52 @@ known.
 
 ### Saved games
 
-`vm_save.cpp` saves a level being played and starts one from a save. The
-file is Reluva's own: the original saves the level as a package, which
-this doesn't read or write. The files take the game's names, in the
-game's save folder (`Saves` in Reluva's folder for it): QuickSave.dsa,
-and Save1.dss, Save2.dss... A file holds:
-- **A header:** the map, a description ("QuickSave", or the level's
-  title, "DS9 - Computer Core"), and when it was saved.
-- **The objects:** the level's actors and every object they lead to that
-  the level made, not the packages' objects, nor the engine's viewport,
-  console and canvas. The map's own actors are written by their export,
-  the rest by class and name. Each has its properties, its state, where
-  its state code is, its Sleep and latent wait, the events it has
-  disabled, and its timer. A map actor missing from the file was
-  destroyed.
-- **The level's records:** the actors' order, the player and game type,
-  the time and ticks, what's touching, moves under way, falls,
-  animation waits and layers, skin channels, attachments, bends and IK,
-  the dialogue (how often each line's been said, the conversations
-  running), and the counts behind made-up names.
-- **The textures' properties:** the scripts change these (the HUD's
-  places, the FLC textures' playing), and the engine keeps them across a
-  load, its packages staying loaded.
+`vm_save.cpp` saves a level being played and starts one from a save.
 
-Loading starts the map as usual, then puts the file's level in place
-of `BeginPlay` and the player logging in. The player gets a new
-viewport and console, and `bJustLoaded`, as the engine sets it. The
-game isn't paused: it's saved paused (`ExecuteSaveGame`, `QuickSave`).
+**The original's saved games** ([save.md](../formats/unreal/save.md))
+load as the engine's `LoadMap` loads them: the save is the level itself,
+so its package is opened as the map (`?LOAD=<file>.dsa` adds it to the
+packages). With `bBegunPlay` set, nothing begins again; instead
+(`resumeSavedGame`):
+- the ghosts are made too, set aside;
+- the level's time is the saved one;
+- each actor goes back into its saved state, its state code at the
+  statement it was at. One waiting in `Sleep` waits out what was left
+  (`LatentFloat`); one waiting in any other latent function makes the
+  call again (a move, a `FinishAnim`: its properties have what it needs);
+- each actor's body layers and face channels come from its C3D mesh
+  state; what it was touching from its `Touching`, so it isn't touched
+  again;
+- the dialogue's counts come from the saved table, by key;
+- the sounds that were playing start again where they'd got to; the
+  music becomes the player's `CurrentMusic` again, from where it was;
+- the game's unpaused, and the player logs in with `?load`: the game
+  type's `Login` takes up the saved pawn (a PlayerPawn without a player),
+  and `CTVE_GameInfo` marks the game loaded so `PostLogin` doesn't start
+  the level's opening again. The player gets `bJustLoaded`.
 
+Loaded so, `Bajoran_Ship_-_Ke'el_Tul-97.dsa` (M01_SiskoL1A) has Sisko in
+his EVA suit on the Ke'el Tul with 91 health and his phaser drawn. The
+speech trigger he'd just stepped on was waiting in its state code, so the
+scene goes on (Worf: "Sir, Chief O'Brien was injured during the initial
+assault..."), and then he walks on. No script accesses None in 20 seconds.
+Not restored: the IK targets, bones' adjustments and attachments in the
+mesh states (the scripts set them again each tick), the probe masks (what
+events each state ignores, which the states themselves give), and the
+dialogue's lines under way (none in the example).
+
+**Reluva's own saves** are what it writes; the original can't read them,
+and Reluva doesn't write the original's yet. They take the game's names
+(QuickSave.dsa, else the level's title and the seconds played, as the
+game names its saves), in the game's save folder (`Saves` in Reluva's
+folder for it). A file holds:
 The game's side is all script:
 - F6 (`QuickSave`) and the main menu's Save Game send `SaveGame`.
 - The Load Game list asks `DrawLoadGameList`, which hands the HUD each
   game, newest first (`DrawLoadGameFile(Id, name, time)`).
 - `LoadByFileID(Id)` gives the HUD its file, and the HUD travels to
-  `?LOAD=Save1.dss`. The page loads that game's map and carries on
-  from it.
+  `?LOAD=<file>`. The page loads that game's map (or, for the
+  original's, the save itself) and carries on from it.
 - F5 (`QuickLoad`) asks to confirm, then travels to
   `?load=QuickSave.dsa`. With none there, the HUD is told (`HudEvent`
   1010) and says so.

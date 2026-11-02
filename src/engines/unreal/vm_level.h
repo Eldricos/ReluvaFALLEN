@@ -13,6 +13,7 @@
 #include "engines/unreal/actors.h"
 #include "engines/unreal/collision.h"
 #include "engines/unreal/dialog_table.h"
+#include "engines/unreal/game_save.h"
 #include "engines/unreal/font.h"
 #include "engines/unreal/mesh.h"
 #include "engines/unreal/model.h"
@@ -427,6 +428,7 @@ public:
         // filtered sound is mixed flat, and walls in the way quieten it by
         // its ObstructionFactor).
         float lowPass = 0, highPass = 0, obstruction = 0;
+        float startSeconds = 0; // where in it to start (a saved game's sounds)
     };
     std::vector<SoundRequest>& soundRequests() { return soundRequests_; }
     // A sound played by an actor: its lip-sync (vm_sound.cpp), if it has any.
@@ -457,6 +459,7 @@ public:
         std::filesystem::path file;
         std::string map, description; // the map's name; "QuickSave" or the level's title
         int64_t time = 0;              // when, in seconds since 1970
+        bool byGame = false;           // the original's (a package: the level itself)
     };
     void setSaveFolder(std::filesystem::path folder) { saveFolder_ = std::move(folder); }
     static Error readSaveInfo(const std::filesystem::path& file, SaveInfo& out);
@@ -465,6 +468,10 @@ public:
     // The level as a saved game of this map has it, in place of
     // beginPlay() and login().
     Error restore(const std::filesystem::path& file);
+    // A saved game of the original's: the level loaded is the save's own
+    // package (bBegunPlay set), so instead of beginPlay and login, this.
+    bool savedByGame() const;
+    VmObject* resumeSavedGame(const std::string& playerName, std::string& error);
     std::set<int>& keysDown() { return keysDown_; }
     std::string& travel() { return travel_; }
     bool& quitAsked() { return quitAsked_; }
@@ -901,6 +908,8 @@ private:
     int editorCameras_ = 0;
     std::vector<VmObject*> actors_;
     std::vector<VmObject*> ghosts_;
+    LevelExtras saved_;                       // a saved game's Level extras (a map's are empty)
+    std::map<VmObject*, StateFrame> savedFrames_; // the state each saved actor was in
     SurfaceSwaps surfaceSwaps_;
     std::map<VmObject*, Decal> decals_;
     std::map<VmObject*, float> sparkFlash_; // sparks' lights, on for this long yet
