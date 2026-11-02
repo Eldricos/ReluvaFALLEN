@@ -40,7 +40,7 @@ instruction, or kept in the repository.
 | Detection | The Fallen: one Windows release by `DS9.exe` and `Engine.u`'s hashes; others by file names (`System/DS9.ini` or `System/DS9.exe`, with `Core.u` and `Engine.u`), shown as "unknown release"; any other UE1 game as unidentified |
 | Packages | header, name, import and export tables, the older layouts (before versions 64 and 68) as well as later ones; only The Fallen's, versions 71-73, checked on real files ([package.md](../formats/unreal/package.md)); found by name through the `.ini`'s `[Core.System] Paths` (`package_set.cpp`); imports resolved to the package that defines them |
 | Properties | tagged properties of every type, state frames ([package.md](../formats/unreal/package.md)) |
-| Textures | P8 with palettes (masked colour 0), DXT1, RGB8, RGBA8; all The Fallen's stored textures decode. Procedural ones play: fire (with its lathes), water, wave (lit as bumps), wet, ice, and The Fallen's FLC ones ([texture.md](../formats/unreal/texture.md)); the fire, wave and wet ones are Fire.dll's (byte for byte, run against it in an emulator), and so is every texture's pacing |
+| Textures | P8 with palettes (masked colour 0), DXT1, RGB8, RGBA8; all The Fallen's stored textures decode. Procedural ones play: fire, water, wave (lit as bumps), wet, ice, and The Fallen's FLC ones ([texture.md](../formats/unreal/texture.md)); the fire, wave and wet ones are Fire.dll's (byte for byte, run against it in an emulator), and so is every texture's pacing |
 | Sounds | the embedded WAV, played through `common/audio`; The Fallen's music streamed from `mp3/` in place of its placeholder Sounds ([sound.md](../formats/unreal/sound.md)) |
 | Music | The Fallen has no music modules: its music is the MP3s (above), which play. Other UE1 games' modules (`.umx`) are extracted (`ue-extract`) but not played: there's no tracker player yet |
 | Levels | all 74 of The Fallen's maps read and draw. The level's BSP model: points, vectors, nodes, surfaces, vertices ([model.md](../formats/unreal/model.md)); polygons drawn textured, with masked, translucent and modulated surfaces, and only the zones seen through the zone portals. Lit by lightmaps worked out from the shadow bits and light actors, with zone ambient ([lighting.md](../formats/unreal/lighting.md)): lights' types change their brightness (flicker, pulse) and their effects draw their patterns across the surfaces (a torch's waver, water's shimmer, waves rolling out), scripted lights follow their scripts, lights' coronas glow where they're seen, lit actors light what's near them as they move, and movers are lit where they are. Movers (doors, lifts) from their own brushes, moved by their scripts, and the sky from the level's sky zone ([actors.md](../formats/unreal/actors.md)). Lightmaps, movers, the sky and the light effects' patterns not yet compared with the original running |
@@ -83,11 +83,9 @@ What's left is mostly checking against the original, and speed:
 
 1. **Compare with the original running.** Nothing has been compared side
    by side with The Fallen running: the lightmaps, movers and the sky on
-   its maps; how the fire, water and wave textures look; the effects
-   (swarms, lava, water rings, scripted paths); the AI's own lines'
-   timing. Several readings are Reluva's own until then (the bone axis
-   order and IK natives in [unreal_vm.md](unreal_vm.md), the lathe and
-   wave lighting in [texture.md](../formats/unreal/texture.md)).
+   its maps; the effects (swarms, lava, water rings, scripted paths).
+   Several readings are Reluva's own until then (the bone axis order and
+   IK natives in [unreal_vm.md](unreal_vm.md)).
 2. **Speed.** Every map runs 20 seconds of play in under 12 of CPU
    without drawing (M03_KiraL2 about 6); the characters' own
    `C3DPreRender` scripts and the HUD's are what's left most. Drawing on
