@@ -1259,11 +1259,16 @@ mesh states (the scripts set them again each tick), the probe masks (what
 events each state ignores, which the states themselves give), and the
 dialogue's lines under way (none in the example).
 
-**Reluva's own saves** are what it writes; the original can't read them,
-and Reluva doesn't write the original's yet. They take the game's names
-(QuickSave.dsa, else the level's title and the seconds played, as the
-game names its saves), in the game's save folder (`Saves` in Reluva's
-folder for it). A file holds:
+**Saving** writes the original's format ([save.md](../formats/unreal/save.md),
+`game_save_write.cpp`): QuickSave.dsa, else the level's title and the
+seconds played, as the game names its saves, in the game's save folder
+(`Saves` in Reluva's folder for it). The original loads them, and Reluva
+loads them as it loads the original's (above). Every map saved four
+seconds in and loaded back comes back the same: the player where it
+was, in its state, with its weapon.
+
+Reluva's own format (its older saves; `reluvaFormat_` writes it) still
+loads. A file of it holds:
 The game's side is all script:
 - F6 (`QuickSave`) and the main menu's Save Game send `SaveGame`.
 - The Load Game list asks `DrawLoadGameList`, which hands the HUD each

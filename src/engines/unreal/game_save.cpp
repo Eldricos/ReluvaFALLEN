@@ -203,8 +203,8 @@ Error readMeshState(const Package& package, int exportIndex, MeshState& out) {
         g.state = r.i32();
         g.rate = r.f32();
         g.weight = r.f32();
-        g.fromFrame = r.f32();
         g.fromWeight = r.f32();
+        g.fromFrame = r.f32();
         g.elapsed = r.f32();
         r.f32();
         g.duration = r.f32();
@@ -218,6 +218,72 @@ Error readMeshState(const Package& package, int exportIndex, MeshState& out) {
         out.groups.push_back(std::move(g));
     }
     return r.ok() ? Error::success() : Error::fail("a C3D mesh state cut short");
+}
+
+bool meshStateGroupSpan(const std::vector<uint8_t>& data, size_t& begin, size_t& end) {
+    Reader r(data);
+    r.index(); // no properties
+    auto str16 = [&] { r.skip(r.u16()); };
+    auto array = [&] {
+        const int32_t n = r.i32();
+        r.i32();
+        r.i32();
+        return r.ok() && n >= 0 ? n : 0;
+    };
+    if (r.u32() != 0xFFFFDE80u)
+        return false;
+    r.i32();
+    r.i32();
+    str16();
+    r.i32();
+    for (int32_t n = array(); n > 0 && r.ok(); --n) {
+        r.i32();
+        str16();
+        r.i32();
+        str16();
+        r.skip(24);
+    }
+    r.i32();
+    begin = r.pos();
+    for (int32_t n = array(); n > 0 && r.ok(); --n) {
+        str16();
+        str16();
+        r.skip(48);
+        str16();
+        r.skip(12);
+        str16();
+        r.skip(12);
+    }
+    end = r.pos();
+    return r.ok();
+}
+
+bool levelModelSpan(const std::vector<uint8_t>& data, int version, size_t& begin, size_t& end) {
+    Reader r(data);
+    r.index(); // its properties: none, the None that ends them
+    const int32_t count = r.i32();
+    r.i32();
+    for (int32_t i = 0; i < count && r.ok(); ++i)
+        r.index();
+    for (int k = 0; k < 4; ++k)
+        r.string(version);
+    for (int32_t n = r.index(); n > 0 && r.ok(); --n)
+        r.string(version);
+    r.i32();
+    r.i32();
+    begin = r.pos();
+    r.index();
+    for (int32_t n = r.index(); n > 0 && r.ok(); --n) {
+        r.i32();
+        r.index();
+        r.index();
+        r.i32();
+        r.i32();
+        r.i32();
+        r.u8();
+    }
+    end = r.pos();
+    return r.ok();
 }
 
 } // namespace reluva::unreal

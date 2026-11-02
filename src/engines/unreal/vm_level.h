@@ -35,6 +35,9 @@ namespace reluva::unreal {
 // 0 for empty slots.
 Error readLevelActors(const Package& map, std::vector<int32_t>& out);
 
+class ByteWriter;
+class PackageWriter;
+
 class ScriptLevel {
 public:
     ScriptLevel(Vm& vm, const Package& map);
@@ -433,6 +436,13 @@ public:
     std::vector<SoundRequest>& soundRequests() { return soundRequests_; }
     // A sound played by an actor: its lip-sync (vm_sound.cpp), if it has any.
     void lipSyncPlay(VmObject* actor, int slot, bool noOverride, const Package* package, int exportIndex);
+    // What's playing as the audio driver's tracker keeps it (a saved game
+    // holds it): each sound an actor played, until it's done or replaced.
+    void trackSound(const SoundRequest& r, float seconds);
+    void trackMusic(VmObject* actor, float startSeconds);
+    // Writes the level as the original saves it (a package: game_save_write.cpp).
+    Error writeGameSave(const std::string& path);
+    bool reluvaFormat_ = false; // save in Reluva's own format instead
     // Sounds stopped (an actor's slot: a line cut off), for the page.
     std::vector<std::pair<VmObject*, int>>& soundStops() { return soundStops_; }
     // The music is the streamed sound the player's CurrentMusic names. One
@@ -807,6 +817,7 @@ private:
     std::vector<DialogRec> dialogRecs_;
     std::vector<int> dialogOrder_; // the lines in key order
     std::vector<std::string> dialogFaces_;
+    std::array<std::vector<std::pair<int, std::string>>, 4> dialogHeaders_; // Missions, Types, Speakers, Faces
     std::map<std::string, int> dialogGroups_; // a type's priority (1 the most)
     // Lip-sync, as the audio driver does it (vm_sound.cpp): a sound's
     // words and their phonemes (its WAV's phnm chunk), and the sounds
@@ -837,7 +848,7 @@ private:
     int startLine(int thread, int index, VmObject* caller, int back = -1, const std::string& backPattern = {});
     VmObject* speakerFor(int index, VmObject* caller);
     void endLine(DialogThread& t, bool cut);
-    static bool keyFits(const std::string& pattern, const std::string& key);
+    static bool keyFits(const std::string& pattern, const std::string& key, bool strict = false);
     struct PendingLine {
         int thread = 0, line = -1;
         VmObject* caller = nullptr;
@@ -881,6 +892,18 @@ private:
     std::map<VmObject*, float> noiseQuiet_; // pawns: no noise heard before this time
     std::mt19937 barkRandom_{13579};
     std::vector<std::pair<VmObject*, int>> soundStops_;
+    struct TrackedSound {
+        SoundRequest request;
+        float start = 0, seconds = 0;
+    };
+    std::vector<TrackedSound> trackedSounds_;
+    void writeMeshGroups(ByteWriter& b, VmObject* actor);
+    bool usesC3DMesh(VmObject* actor);
+    int meshStates_ = 1000; // new C3D mesh states' numbers (their names)
+    VmObject meshStateMarker_; // stands for an actor's new mesh state while it's written
+    void writeDialogEngine(ByteWriter& b, PackageWriter& w);
+    VmObject* musicActor_ = nullptr;
+    float musicStart_ = 0;
     void loadDialog();
     VmObject* dialogInput();
     float lineSeconds(const DialogLine& line);

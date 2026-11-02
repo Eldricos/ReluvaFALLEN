@@ -82,14 +82,30 @@ void ScriptLevel::loadDialog() {
                 std::stringstream cs(row);
                 for (std::string cell; std::getline(cs, cell, '\t');)
                     cells.push_back(cell);
+                // The header rows, as the engine keeps them too (its saved
+                // games carry them): each word with its number, a Types
+                // row's its group, the others' their place in the row.
+                int place = 0;
+                auto keep = [&](size_t table, const std::string& word, int id) {
+                    dialogHeaders_[table].push_back({id, word});
+                };
                 if (cells.size() >= 3 && same(cells[0], "Types")) {
                     std::istringstream types(cells[2]);
-                    for (std::string t; types >> t;)
+                    for (std::string t; types >> t;) {
                         dialogGroups_[upper(t)] = std::atoi(cells[1].c_str());
-                } else if (cells.size() >= 3 && same(cells[0], "Faces") && dialogFaces_.empty()) {
+                        keep(1, t, std::atoi(cells[1].c_str()));
+                    }
+                } else if (cells.size() >= 3 && (same(cells[0], "Missions") || same(cells[0], "Speakers"))) {
+                    std::istringstream words(cells[2]);
+                    for (std::string t; words >> t;)
+                        keep(same(cells[0], "Missions") ? 0 : 2, t, ++place);
+                } else if (cells.size() >= 3 && same(cells[0], "Faces")) {
                     std::istringstream faces(cells[2]);
-                    for (std::string f; faces >> f;)
-                        dialogFaces_.push_back(upper(f));
+                    for (std::string f; faces >> f;) {
+                        if (std::find(dialogFaces_.begin(), dialogFaces_.end(), upper(f)) == dialogFaces_.end())
+                            dialogFaces_.push_back(upper(f));
+                        keep(3, f, ++place);
+                    }
                 }
             }
         }
@@ -99,10 +115,13 @@ void ScriptLevel::loadDialog() {
     dialogRecs_.assign(n, {});
     auto noted = [](const std::string& s) { return !s.empty() && s.front() == '(' ? std::string() : s; };
     // MISSION TYPE SPEAKER ID, as the tables name a line, as a key.
+    // (As the engine rewrites it: a short ID stays short, "GENHALOBN64"
+    // giving HALOBN???64GEN.)
     auto pattern = [](std::string k) {
         k = upper(k);
-        k.resize(12, '?');
-        return k.substr(3, 3) + k.substr(6, 3) + "???" + k.substr(9, 3) + k.substr(0, 3);
+        if (k.size() < 9)
+            k.resize(9, '?');
+        return k.substr(3, 3) + k.substr(6, 3) + "???" + k.substr(9) + k.substr(0, 3);
     };
     for (size_t i = 0; i < n; ++i) {
         const DialogLine& l = dialogLines_[i];
@@ -119,13 +138,12 @@ void ScriptLevel::loadDialog() {
         r.nextPattern = l.next.empty() ? "" : pattern(l.next);
         r.backPattern = l.back.empty() ? "" : pattern(l.back);
         const std::string type = upper(l.type), by = upper(l.speaker), to = upper(l.listener);
-        if (type == "HOP") {
-            if (r.nextPattern.empty())
-                r.nextPattern = "HBO" + to + by;
+        if (type == "HOP" && r.nextPattern.empty()) { // (only with no NEXTLINE of its own)
+            r.nextPattern = "\x01HBO" + to + by;
             if (r.backPattern.empty())
-                r.backPattern = "HCL" + by + to;
+                r.backPattern = "\x01HCL" + by + to;
         } else if (type == "HBO" && !to.empty() && r.nextPattern.empty()) {
-            r.nextPattern = "HCL" + to + by;
+            r.nextPattern = "\x01HCL" + to + by;
         }
         // CAMERA's flags: CAM(V:1), CAM(H:1), CAM(R:... F:..).
         std::string cam = upper(l.camera);
@@ -161,29 +179,34 @@ void ScriptLevel::loadDialog() {
         dialogOrder_[i] = int(i);
     std::stable_sort(dialogOrder_.begin(), dialogOrder_.end(),
                      [&](int a, int b) { return dialogRecs_[size_t(a)].key < dialogRecs_[size_t(b)].key; });
-    // NEXTLINE and RETURNLINE resolved now where only one line fits.
+    // NEXTLINE and RETURNLINE resolved now where only one line fits; a
+    // default link (marked) that nothing fits is dropped.
     for (DialogRec& r : dialogRecs_)
         for (auto [pat, to] : {std::pair{&r.nextPattern, &r.next}, std::pair{&r.backPattern, &r.back}}) {
             if (pat->empty())
                 continue;
+            const bool byDefault = (*pat)[0] == '\x01';
+            if (byDefault)
+                pat->erase(0, 1);
             int found = -1, count = 0;
             for (size_t i = 0; i < n && count < 2; ++i)
                 if (keyFits(*pat, dialogRecs_[i].key))
                     found = int(i), ++count;
-            if (count == 1) {
+            if (count == 1)
                 *to = found;
+            if (count == 1 || (count == 0 && byDefault))
                 pat->clear();
-            }
         }
 }
 
 // A key fits a pattern as long as the pattern goes: '?' in the pattern or
 // '_' in the key (a line to no one) fits anything.
-bool ScriptLevel::keyFits(const std::string& pattern, const std::string& key) {
+bool ScriptLevel::keyFits(const std::string& pattern, const std::string& key, bool strict) {
     if (pattern.size() > key.size())
         return false;
     for (size_t i = 0; i < pattern.size(); ++i)
-        if (pattern[i] != '?' && key[i] != '_' && std::toupper(uint8_t(pattern[i])) != std::toupper(uint8_t(key[i])))
+        if (pattern[i] != '?' && (strict || key[i] != '_') &&
+            std::toupper(uint8_t(pattern[i])) != std::toupper(uint8_t(key[i])))
             return false;
     return true;
 }

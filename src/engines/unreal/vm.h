@@ -176,6 +176,7 @@ struct VmState : VmStruct {
     std::map<NameId, VmFunction*> functions; // its own
     std::map<NameId, uint32_t> labels;       // state code labels
     uint32_t stateFlags = 0;
+    uint64_t probeMask = 0, ignoreMask = ~0ull; // the events it (or its class) has, and those it doesn't ignore
 };
 
 struct VmClass : VmState {

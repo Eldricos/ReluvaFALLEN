@@ -626,6 +626,11 @@ void ScriptLevel::copySkins(VmObject* to, VmObject* from) {
                 c = o;
 }
 
+bool ScriptLevel::usesC3DMesh(VmObject* a) {
+    const MeshInfo* info = meshInfoOf(vm_, a);
+    return info && info->c3d;
+}
+
 void registerAnimationNatives(Vm& vm) {
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     // PlayAnim(name Sequence, optional float Rate, optional float TweenTime)

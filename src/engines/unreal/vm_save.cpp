@@ -218,6 +218,10 @@ Error ScriptLevel::saveGame(const std::string& slot) {
             ++n;
         file = saveFolder_ / (base + "-" + std::to_string(n) + ".dsa");
     }
+    // As the original saves it, so the original loads it too (Reluva's
+    // own format, below, stays for its older saves).
+    if (!reluvaFormat_)
+        return writeGameSave(file.string());
 
     // The objects: the level's actors and what they lead to that the level
     // made (not the packages' objects, nor the engine's viewport, console

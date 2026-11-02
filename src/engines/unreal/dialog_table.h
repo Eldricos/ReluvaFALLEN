@@ -29,6 +29,8 @@ struct DialogLine {
     std::string next, back; // the keys of the line that follows, and of the one to go back to (may hold '?')
     std::string tag, event, condition, camera;
     std::string speakerAnim, listenerAnim, speakerFace, listenerFace;
+    int row = 0;         // its row in its table's file (from 0)
+    std::string rawText, rawCondition; // its LINE and CONDITION as the file has them (trailing spaces kept)
 
     // How other lines name it: mission, type, speaker and line ID ("K01AMBBFC000").
     std::string key() const { return mission + type + speaker + lineId; }

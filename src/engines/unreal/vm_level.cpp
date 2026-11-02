@@ -247,7 +247,11 @@ void ScriptLevel::beginPlay(const std::string& defaultGame) {
     };
     pass([&](VmObject* a) { vm_.callEvent(a, "SetInitialState"); });
     pass([&](VmObject* a) { vm_.callEvent(a, "PreBeginPlay"); });
-    pass([&](VmObject* a) { vm_.callEvent(a, "BeginPlay"); });
+    pass([&](VmObject* a) {
+        vm_.callEvent(a, "BeginPlay");
+        if (Value* v = prop(a, "bHasBegunPlay"))
+            *v = Value::boolValue(true);
+    });
     pass([&](VmObject* a) { startZone(a); });
     pass([&](VmObject* a) { vm_.callEvent(a, "PostBeginPlay"); });
     pass([&](VmObject* a) { startBase(a); });

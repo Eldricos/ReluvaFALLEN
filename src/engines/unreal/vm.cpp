@@ -599,6 +599,8 @@ void Vm::loadStruct(VmStruct& s, const ScriptObject& so) {
     if (s.kind == VmStruct::Kind::Class || s.kind == VmStruct::Kind::State) {
         auto& st = static_cast<VmState&>(s);
         st.stateFlags = so.stateFlags;
+        st.probeMask = so.probeMask;
+        st.ignoreMask = so.ignoreMask;
         for (const Expr& x : s.code.exprs)
             for (const auto& [label, offset] : x.labels)
                 st.labels[name(package.name(label))] = offset;

@@ -68,3 +68,72 @@ Checked on `Bajoran_Ship_-_Ke'el_Tul-97.dsa` (M01_SiskoL1A, 97 seconds
 in): 1,857 actors, 33 ghosts, 977 dialogue lines (6 said), 2 sounds
 playing (the music, the HUD's confirm click), 118 mesh states, all read
 to their ends.
+
+## Writing one
+
+Reluva saves as the game does (`game_save_write.cpp`, `SaveGame`), so its
+saves load in the original and the original's in Reluva. The package is
+written over the map's own tables ([package.md](package.md)): what the
+level hasn't changed (its BSP and the movers' brushes, the lights'
+surfaces, the map's editor-only objects, which the engine never loads)
+is the map's data as it is; the rest comes from the running level.
+
+- **What's saved:** the level's actors and ghosts, and every object they
+  lead to that the level made or that's one of the map's; not the
+  engine's viewport, console and canvas, nor objects of transient classes.
+  New objects are named as the level names them (made unique in their
+  outer), their classes imported.
+- **Each actor:** its state frame (flag 0x02000000), then its properties
+  (those not at their class's default, not transient), then None.
+  - The frame's node is the state its code is in (or the state itself,
+    or for an actor in none its class), its state node its state.
+  - Its probe mask is its state's and its class's together, less what
+    its state ignores (the compiled states' masks, read from the
+    packages), less events it has disabled (`Disable('Tick')`). An actor
+    placed as a ghost and never started has every bit set. Checked
+    against the original's save: the masks agree with all of its actors'
+    but those (98% before the two rules, all after).
+  - The bits' events are Core's names from 300 on: Spawned, Destroyed,
+    GainedChild, LostChild, two probes, Trigger, UnTrigger, Timer,
+    HitWall, Falling, Landed, ZoneChange, Touch, UnTouch, Bump,
+    BeginState, EndState, BaseChange, Attach, Detach, ActorEntered,
+    ActorLeaving, KillCredit, AnimEnd, EndedRotation, InterpolateEnd,
+    EncroachingOn, EncroachedBy, FootZoneChange, HeadZoneChange,
+    PainTimer, SpeechTimer, MayFall, a probe, The Fallen's C3DAnimEnd,
+    C3DPreRender, ChangePhysics, ChestZoneChange, C3DSpeechEvent, then
+    Tick (bit 40), PlayerTick, Expired, a probe, SeePlayer,
+    EnemyNotVisible, HearNoise, UpdateEyeHeight, SeeMonster, SeeFriend,
+    SpecialHandling, BotDesireability, probes.
+  - The code offset is where its next statement starts. Waiting in
+    `Sleep`, the latent action is 256 and `LatentFloat` the time left;
+    waiting in anything else, the offset is the call's own statement, to
+    be made again.
+- **The map's mesh states** get their groups from the actor's animation,
+  layers and face channels (the rest, IK targets and all, as the map has
+  it); a spawned actor with a C3D mesh gets a new one.
+- **The Level object:** the actor list (the LevelInfo, none, the rest);
+  the URL (`DS9`, the map, `Name=Player`, the player's class); the
+  model and reach list as the map's; the time; the ghosts; the dialogue
+  engine; the sounds playing (each an actor played in the last of its
+  length, and the music, the HUD's, since it began); an i32 0.
+- **The dialogue engine** is written as the engine builds it: on The
+  Fallen's M01_SiskoL1A, all 977 lines agree with the original's save in
+  every field but how often they've been said, its missions, types,
+  speakers, faces and cameras too. What that took, of the engine's
+  loading:
+  - the header rows aren't lines (Types and Faces rows too), and the
+    speakers of both tables are listed, each table's numbered from 1;
+  - a line's row is 1 + the rows before it in its file that aren't blank;
+  - its LINE and CONDITION keep their spaces; a quoted CONDITION loses its
+    quotes; a condition is kept with its brackets and commas as spaces;
+  - a NEXTLINE or RETURNLINE with a short ID keeps it short (`GENHALOBN64`
+    is `HALOBN???64GEN`);
+  - a hail option's default links (to the answer, back to the sign-off)
+    are made only if it has no NEXTLINE of its own; a default link
+    nothing fits is dropped (an explicit one is kept);
+  - the cameras: each line's CAMERA in the tables' order, one with no
+    place keeping the one before's, the same ones once.
+- **Not written:** the dialogue's lines under way (the engine's two lists
+  are left empty), the IK targets and bone adjustments of new mesh
+  states, and the Level's model and reach list renumbered (the map's own
+  numbering is kept, so references are a byte longer here and there).

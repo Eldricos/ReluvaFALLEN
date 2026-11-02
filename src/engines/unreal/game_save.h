@@ -60,6 +60,13 @@ struct MeshState {
 };
 Error readMeshState(const Package& package, int exportIndex, MeshState& out);
 
+// Where a C3D mesh state's animation groups are in its export's data
+// (from the start of its count to the end of the last).
+bool meshStateGroupSpan(const std::vector<uint8_t>& data, size_t& begin, size_t& end);
+// Where, in a Level object's data, the model reference starts and the
+// reach list ends (copied as they are into a saved game's).
+bool levelModelSpan(const std::vector<uint8_t>& data, int version, size_t& begin, size_t& end);
+
 // Whether a file is a package (a saved game of the original's, not Reluva's own).
 bool isPackageFile(const std::string& path);
 

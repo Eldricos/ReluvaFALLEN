@@ -339,6 +339,29 @@ void ScriptLevel::lipSyncUpdate() {
     lipLast_ = now;
 }
 
+void ScriptLevel::trackSound(const SoundRequest& r, float seconds) {
+    auto& list = trackedSounds_;
+    list.erase(std::remove_if(list.begin(), list.end(),
+                              [&](const TrackedSound& t) {
+                                  return t.start + t.seconds < time_ || (t.request.actor && t.request.actor->deleted) ||
+                                         (r.slot != 0 && t.request.actor == r.actor && t.request.slot == r.slot &&
+                                          !t.request.noOverride);
+                              }),
+               list.end());
+    if (r.slot != 0)
+        for (const TrackedSound& t : list)
+            if (t.request.actor == r.actor && t.request.slot == r.slot)
+                return; // its slot's kept by one played not to be overridden
+    if (list.size() >= 64)
+        list.erase(list.begin());
+    list.push_back({r, time_, seconds});
+}
+
+void ScriptLevel::trackMusic(VmObject* actor, float startSeconds) {
+    musicActor_ = actor;
+    musicStart_ = time_ - startSeconds;
+}
+
 void registerSoundNatives(Vm& vm) {
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     // PlaySound(Sound, optional ESoundSlot Slot, optional float Volume,
@@ -394,8 +417,10 @@ void registerSoundNatives(Vm& vm) {
             m.volume = r.volume;
             m.startSeconds = std::max(0.0f, actorFloat("StartTimeOffset", 0));
             ++m.serial;
+            level->trackMusic(c.self, m.startSeconds);
             return;
         }
+        level->trackSound(r, soundSeconds(c.vm.packages(), *sound->package, sound->exportIndex));
         level->lipSyncPlay(c.self, r.slot, r.noOverride, sound->package, sound->exportIndex);
         auto& requests = level->soundRequests();
         if (requests.size() >= kMostRequests)

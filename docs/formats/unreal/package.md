@@ -94,12 +94,26 @@ Objects that aren't classes start with:
    name table stores them), 14 Map, 15 Fixed array. Vector structs are
    3 floats; Rotator structs 3 i32 (pitch, yaw, roll; 65536 a turn).
 
-   Properties at their class's default value aren't stored.
+   Properties at their class's default value aren't stored, nor transient
+   ones. They're listed a class's own first, then its parent's, and so
+   on; a class property is stored as an Object (5); a struct's value is
+   its fields one after another (a Bool field a byte).
 3. **The class's own data**, laid out by the class: see
    [texture.md](texture.md), [sound.md](sound.md), [model.md](model.md).
 
 Classes (class reference 0) are laid out differently (their script and
 defaults); not read yet.
+
+## Writing one
+
+`PackageWriter` (`package_writer.cpp`) writes a version 73 package
+starting from another's tables, so the base's names, imports and exports
+keep their numbers and an export's data copied as it is still refers to
+the right objects; names, imports (with the packages, groups and classes
+they're in) and exports are added after. The file is the header, the
+names (each a string and its flags), the exports' data, the imports and
+the exports, each table entry as above; the generation the export and
+name counts. A saved game is written so ([save.md](save.md)).
 
 ## Search path
 
