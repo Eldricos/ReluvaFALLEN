@@ -3,8 +3,8 @@
 Status: **implemented** for the layout below (`src/engines/unreal/mesh.cpp`,
 drawn by `mesh_render.cpp` in the Maps and Meshes pages), tested on
 meshes built by the unit tests. **The Fallen's meshes are laid out
-differently** (below): read for LodMeshes, checked on one of its meshes
-whole; its classic Meshes not yet. `reluva-tool ue-probe <game folder>
+differently** (below): read for LodMeshes and its classic Meshes,
+checked on one of its meshes whole. `reluva-tool ue-probe <game folder>
 <mesh>` maps a mesh's data (where its lazy arrays sit, every byte with
 -all).
 
@@ -88,16 +88,33 @@ worked out; for now the first frame found is used for every frame
 (`Mesh::keyFrames` says how many were found) so the mesh is at least drawn.
 
 **`ue-check` on The Fallen** after this layout was added (October 2026):
-306 of 455 LodMeshes and 4 of 9 Meshes read. JadziaDax failed only for an
+306 of 455 LodMeshes and 4 of 9 Meshes read (all now: see Classic Meshes
+below). JadziaDax failed only for an
 animation (aaThumbTest2) running past its frames; such animations are now
 left out rather than the mesh. The rest are still to be looked at with
 `ue-probe`, which lists the block's array headers and every place the
 standard tail could start.
 
-A Mesh (not LodMesh) in this layout has no triangles in their standard
-array either; they're presumably the block's triangle and corner arrays
-(with texture coordinates somewhere in it), not read yet. The Fallen has
-9 such meshes (Female, Male...).
+**Classic Meshes** (not LodMesh): The Fallen has 9.
+- **Six have geometry:** `TransporterTubeMesh`, `EMPulseRifleImpactMesh`,
+  `JEM_Grenade` and the three `SR3_Corpse*`. Each keeps its triangles in
+  the standard `Tris` lazy array, 20 bytes each: three u16 vertex
+  numbers, three (u, v) byte pairs, u32 polygon flags and an i32
+  texture. The connections and vertex links are in their standard lazy
+  arrays too. The vertex array is empty: the vertices are in the
+  imported-model block, as in the LodMeshes. The
+  reader reads them so: the grenade's 14 vertices and 24 triangles; the
+  tube's 70 and 120; the corpses' 187 vertices, 5 frames and 370
+  triangles, two of them posed from 28 bones.
+- **Female, Male and MaleTwo have none:** no vertices, no triangles,
+  only a block of bones and animation clips (4, 274 and 111 clips).
+  They're the shared animation sets the characters' meshes borrow from
+  (`shared.Male`, above). `CTV_Player.AltMeshes` lists them, and
+  `C3DInitAltMeshes` hands them to the C3D code. They're read as sets,
+  not drawn, as the game doesn't draw them.
+
+`ue-check` (November 2026): 455 of 455 LodMeshes and the 6 Meshes with
+geometry read, none failed.
 
 **Meshes built on a skeleton** (BajFanatic, GrigSentryDrone, Obsidian_Snow,
 the corpses and the other characters that keep no packed vertices). Worked
