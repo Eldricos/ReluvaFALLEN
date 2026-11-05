@@ -57,6 +57,9 @@ struct Mover {
     std::array<Vec3f, 8> keyPos{};
     std::array<Rotator, 8> keyRot{};
     float moveTime = 1; // seconds between keys
+    // bDynamicLightMover: lit where it is by the lights reaching its leaf
+    // each frame; otherwise it keeps the light it was built with.
+    bool dynamicLight = false;
     Vec3f basePosition() const;
     Rotator baseRotation() const;
 };

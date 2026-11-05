@@ -389,6 +389,10 @@ private:
     // vertices as surfaces are lit (no lightmap of its own); `reaching`,
     // how many reach it (the renderer takes six).
     MeshLight moverLightAt(const Vec3f& at, float reach, size_t* reaching = nullptr) const;
+    // A dynamic light mover's: the lights permeating its leaf (the level
+    // model's leaf lists), as Render.dll lights such a mover's surfaces.
+    MeshLight dynamicMoverLight(const Vec3f& at, float reach) const;
+    std::vector<int32_t> leafLights_; // each leaf's first entry in Model::lights (-1 none)
     gfx::Mat4 moverTransform(const MoverDraw& m) const;
     static gfx::Mat4 moverPlacement(const Mover& m, const Vec3f& location, const Rotator& rotation);
     // The lights that move and change while playing (lit actors not among

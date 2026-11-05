@@ -150,12 +150,21 @@ being cut to 5 bits, if anything brighter). Not found yet.
 
 Meshes are lit at each vertex, as the original's renderer does:
 
-- **Its lights**: those whose radius reaches the actor (special lit ones
-  only for a special lit actor), most important first, importance
-  (1 - distance / radius) x `LightBrightness`; down to an eighth of the
+- **Its lights**: those whose radius reaches the actor by the straight
+  distance from the light to the actor's `Location` (Render.dll's light
+  list keeps a light whose radius squared is more than the distance
+  squared; a cylinder light is no different: a sky light far above lights
+  no actor), special lit ones only for a special lit actor, gathered from
+  the actor's cached list, its zone's lights and the dynamic ones; most
+  important first, importance (1 - distance / radius) x
+  `LightBrightness` (x 1024, as an integer); down to an eighth of the
   first's; at most three that stay put (`bStatic`), and lights that move
   only while it has fewer than three. A light that stays put must see
-  the actor's `Location`, no wall between.
+  the actor's `Location`, no wall between (Reluva's: where the cached
+  list comes from isn't read).
+- **No cylinder case**: the vertex lighting treats a cylinder light as
+  any other, from where it is (only distance fog, `LE_DistanceFog`, is
+  set aside, to scale the light by the height below it).
 - **At each vertex**, for each light, with d the vector to it and N the
   vertex's normal: (max(0, (cos + 1)^2 - 1.5) + specular) x (1 - |d| /
   radius) x the light's colour (undoubled: half of a lightmap's), cos
@@ -174,25 +183,33 @@ Reluva does this in the renderers (`gfx::DrawCall::vertexLights`).
 
 ## Movers' light
 
-A mover's brush has no lightmap of its own. Its model's surfaces point at
-none, and the lightmaps the model holds are stale (their origins lie on
-none of its surfaces, their light lists point past what's there); nor
-are there surfaces in the level's model for it. The original's renderer
-only sets up a lightmap for a surface that has one, and a surface without
-one is drawn as its texture, at full brightness; but in the recording
-movers are lit like the walls round them (CM10_KiraL1A's door behind the
-guards is dark, Sisko's door in Cm11B_SWK shows its panel lit), so its
-moving-brush tracker must light them, in a way not read yet. Reluva's
-reading: a mover's vertices are lit as the level's surfaces are, where
-it is now, by the lights reaching its brush (the six brightest there):
+A mover's brush has no lightmap of its own in its model: its surfaces
+point at none, and the lightmaps the model holds are stale (their light
+lists index past its own lights). How Render.dll lights a surface
+(`0x10b082d9` on): when the surface belongs to a mover whose
+`bDynamicLightMover` is set (the Mover's flags at +0x4cc, bit 4), it is
+lit by the lights permeating the mover's BSP leaf (`Region.iLeaf`: the
+leaf's list in the level model's `Lights`, to the first empty entry),
+each one in front of the surface's plane and of the mover's special lit
+kind, added without shadow bits (unshadowed), and by the dynamic lights;
+each light's function then lights it in full (no count limit). A mover
+without it is lit by its lightmaps' own light lists, which index the
+level model's lights and bits; such a mover keeps its light as it moves.
+In The Fallen most movers are not dynamic (M01_SiskoL1B 2 of 52,
+M03_SiskoL2 8 of 40, CM_ArdPrison 18 of 30; CM10_KiraL1A's doors are).
+
+Reluva: a dynamic light mover's vertices are lit where it is now, by its
+leaf's lights and the dynamic ones, the six most important (the
+renderer takes six): importance `LightBrightness` x level x (1 - the
+distance past the brush's reach / radius), a light smaller than the
+brush counted for the share of it it reaches (radius over the brush's);
 colour x (1 - 3 f^2 + 2 f^3) x the facing (a cylinder light 1 - f^2
-across), with its zone's ambient light, at most 1, without shadows.
-Against those two frames it comes close. A light smaller than the brush
-counts for the share of it it reaches (its radius over the brush's), and
-a brush over 1000 across with more than six lights reaching it is lit
-from all of them, worked out when the level is read, while it hasn't
-moved (CM_ArdPrison's docked Defiant, a mover 5000 across under the
-station's lamps).
+across), with its zone's ambient, at most 1, no shadows. Any other mover
+keeps the light worked out on its vertices when the level was read, from
+every light reaching them, without shadows (in place of the lightmaps
+its stale lists point to), and carries it as it moves. CM_ArdPrison's
+docked Defiant (Mover10, not dynamic, 5000 across) is lit so, as in a
+recording.
 
 ## Lights whose brightness changes
 
@@ -373,8 +390,14 @@ against the same views here, matched shot for shot in cut scenes:
   does: its renderer gives every light in a surface's lightmap list its
   shadow bits (blurred by a weighted 8x8 kernel to 0-255), and only
   lights it treats as dynamic go without (below); Hass'terral's are
-  plain static lights. Why the recording's field is evenly lit is still
-  not known.
+  plain static lights. Read again (November 2026): `AddLight` makes a
+  `bStatic` steady light with a still effect (the effect table's flags
+  both clear, as Cylinder's are) a lightmap light, and the cylinder
+  lightmap function multiplies (1 - (dx^2 + dy^2) / r^2) by the light's
+  filtered shadow map; a light gets no shadow map (filled lit, 127) only
+  when it's added without one: a dynamic light mover's leaf lights, the
+  dynamic lights. Why the recording's field is evenly lit is still not
+  known.
   Still darker than the recording: the cliffs beside the path, which
   these lights don't reach (dropping the incidence for them overshot the
   ground by 70% and barely lit the cliffs).

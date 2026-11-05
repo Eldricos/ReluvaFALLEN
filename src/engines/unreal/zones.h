@@ -25,6 +25,8 @@ public:
     // The zone a point is in (0 with no BSP); `solid` set if it's inside
     // solid, in no leaf.
     int zoneAt(const Vec3f& p, bool* solid = nullptr) const;
+    // The leaf a point is in, -1 inside solid.
+    int leafAt(const Vec3f& p) const;
     // Bit z set for each zone seen from `eye` with `clipFromWorld` (Unreal
     // coordinates to clip space, column-major): every bit when the level
     // has no portals or the eye is in solid, outside it.

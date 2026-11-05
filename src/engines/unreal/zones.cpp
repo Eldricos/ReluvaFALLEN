@@ -178,6 +178,19 @@ int ZoneVisibility::zoneAt(const Vec3f& p, bool* solid) const {
     return zone & 63;
 }
 
+int ZoneVisibility::leafAt(const Vec3f& p) const {
+    int32_t n = 0;
+    for (size_t guard = 0; guard <= nodes_.size() && n >= 0 && size_t(n) < nodes_.size(); ++guard) {
+        const Node& node = nodes_[size_t(n)];
+        const bool front = node.plane[0] * p[0] + node.plane[1] * p[1] + node.plane[2] * p[2] - node.plane[3] >= 0;
+        const int32_t next = front ? node.front : node.back;
+        if (next <= 0)
+            return node.leaf[front ? 1 : 0];
+        n = next;
+    }
+    return -1;
+}
+
 uint64_t ZoneVisibility::visible(const Vec3f& eye, const std::array<float, 16>& clipFromWorld) const {
     if (portals_.empty())
         return ~uint64_t(0);

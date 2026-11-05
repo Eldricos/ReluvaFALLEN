@@ -258,6 +258,9 @@ void MapViewer::load(int index) {
     const std::vector<Polygon> polys = levelPolygons(model);
     // And by the zones they're seen from, to leave out those not seen.
     zones_.build(model);
+    leafLights_.clear();
+    for (const Leaf& l : model.leaves)
+        leafLights_.push_back(l.permeating);
     volumes_.clear();
     for (const LightSource& l : lights_.unique)
         if (l.volumeRadius > 0 && (l.volumeFog > 0 || l.volumeColor[0] + l.volumeColor[1] + l.volumeColor[2] > 0))
@@ -2073,15 +2076,14 @@ void MapViewer::drawWorld(const gfx::Vec3& forward, const gfx::Vec3& right, cons
             place = moverTransform(m);
             at = Vec3f{place[12], -place[13], place[14]};
         }
-        size_t reaching = 0;
-        const MeshLight light = moverLightAt(at, m.reach, &reaching);
-        // More lights than the renderer takes on a mover still where it
-        // was built: its vertices' light worked out then, from all of them
-        // (the original lights a mover's brush from every light reaching
-        // it, like the level's surfaces). CM_ArdPrison's docked Defiant,
-        // under the station's lamps, is lit so, as in a recording.
-        // Only for a large brush (a door's six nearest are its lights).
-        const bool baked = m.reach > 1000 && reaching > size_t(gfx::kMaxVertexLights) && place == m.built;
+        // As Render.dll lights a mover's surfaces: a bDynamicLightMover by
+        // the lights permeating its leaf (each in front of the surface, no
+        // shadows) and the dynamic lights, where it is now; any other by
+        // the lightmaps it was built with, which go with it as it moves
+        // (Reluva: its vertices' light worked out when the level was read,
+        // from every light reaching them, without shadows).
+        const bool baked = !m.mover.dynamicLight;
+        const MeshLight light = baked ? MeshLight{} : dynamicMoverLight(at, m.reach);
         drawBatches(m.batches, moverMesh_, place, false, false, baked ? nullptr : &light);
         if (inFogZone(at))
             volumesOver(m.batches, moverMesh_, place, gfx::Cull::Back, false);
@@ -2201,6 +2203,50 @@ void MapViewer::drawMirrors(const gfx::Mat4& proj, const gfx::Mat4& view, const 
 // facing (a cylinder light 1 - f^2 across), with its zone's ambient
 // light, at most 1; without the lights' shadows. Reluva's reading: how
 // the original's moving-brush tracker lights them isn't known.
+MeshLight MapViewer::dynamicMoverLight(const Vec3f& at, float reach) const {
+    MeshLight light;
+    struct Candidate {
+        const LightSource* l;
+        float level, importance;
+    };
+    std::vector<Candidate> found;
+    auto consider = [&](const LightSource& l, float level) {
+        if (level <= 0 || l.specialLit || l.radius <= 0)
+            return;
+        const float dist = lightDistance(l, at);
+        if (dist >= l.radius + reach)
+            return;
+        const float near = std::max(0.0f, dist - reach);
+        const float share = reach > l.radius ? l.radius / reach : 1.0f;
+        found.push_back({&l, level, float(l.brightness) * level * (1 - near / l.radius) * share});
+    };
+    const int leaf = zones_.leafAt(at);
+    if (leaf >= 0 && size_t(leaf) < leafLights_.size() && leafLights_[size_t(leaf)] >= 0)
+        for (size_t i = size_t(leafLights_[size_t(leaf)]); i < lights_.sources.size() && lights_.sources[i].radius > 0; ++i)
+            consider(lights_.sources[i], levelOf(lights_.sources[i]));
+    for (const LightSource& l : dynamic_)
+        consider(l, 1);
+    // The renderer takes six: the most of them.
+    std::stable_sort(found.begin(), found.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.importance > b.importance; });
+    for (size_t i = 0; i < found.size() && i < size_t(gfx::kMaxVertexLights); ++i) {
+        gfx::VertexLight v;
+        v.position = toWorld(found[i].l->position);
+        v.radius = found[i].l->radius;
+        v.cylinder = found[i].l->cylinder;
+        for (size_t k = 0; k < 3; ++k)
+            v.color[k] = found[i].l->color[k] * found[i].level;
+        light.lights.push_back(v);
+    }
+    const int zone = zones_.zoneAt(at);
+    const Vec3f ambient = zone >= 0 && size_t(zone) < lights_.zoneAmbient.size() ? lights_.zoneAmbient[size_t(zone)]
+                                                                                 : Vec3f{};
+    light.ambient = {ambient[0], ambient[1], ambient[2]};
+    light.directed = {0, 0, 0};
+    light.perVertex = true;
+    return light;
+}
+
 MeshLight MapViewer::moverLightAt(const Vec3f& at, float reach, size_t* reaching) const {
     MeshLight light;
     struct Candidate {
@@ -2310,7 +2356,12 @@ void MapViewer::actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLi
     auto consider = [&](const LightSource& l, float level, bool moves) {
         if (level <= 0 || l.specialLit || l.radius <= 0)
             return;
-        const float dist = lightDistance(l, at);
+        // By the straight distance, a cylinder light's too: Render.dll's
+        // actor light list keeps a light whose radius squared passes the
+        // distance squared, and weighs it (1 - distance / radius) x
+        // LightBrightness. (A sky light far above lights no actor.)
+        const float dx = l.position[0] - at[0], dy = l.position[1] - at[1], dz = l.position[2] - at[2];
+        const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (dist >= l.radius)
             return;
         found.push_back({&l, level, (1 - dist / l.radius) * float(l.brightness) * level, moves});
@@ -2333,15 +2384,9 @@ void MapViewer::actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLi
         if (!c.moves)
             ++still;
         gfx::VertexLight v;
-        // A cylinder light reaches as far as its radius across, whatever
-        // its height (lightDistance), so it's chosen that way; it lights
-        // the actor from its own height too, or a sky light far above
-        // (CM06_SW_Capture's, 11000 up with a radius of 6400) would give
-        // nothing where it was chosen. Reluva's reading, from the
-        // recording: Sisko lit by them in the capture.
-        Vec3f from = c.l->position;
-        if (c.l->cylinder)
-            from[2] = at[2];
+        // Shaded as a point light, a cylinder light too (Render.dll's actor
+        // lighting has no cylinder case).
+        const Vec3f from = c.l->position;
         v.position = toWorld(from);
         v.radius = c.l->radius;
         // The lightmaps' colours are doubled (lightColor); actors' aren't.

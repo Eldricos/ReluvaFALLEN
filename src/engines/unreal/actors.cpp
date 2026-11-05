@@ -158,6 +158,7 @@ std::vector<Mover> findMovers(const PackageSet& packages, const Package& package
         m.keyNum = std::min(int(props.byte("KeyNum")), 7);
         m.numKeys = std::clamp(int(props.byte("NumKeys", 2)), 1, 8);
         m.moveTime = props.number("MoveTime", 1);
+        m.dynamicLight = props.boolean("bDynamicLightMover");
         for (int k = 0; k < 8; ++k) {
             props.vector("KeyPos", m.keyPos[size_t(k)], k);
             props.rotator("KeyRot", m.keyRot[size_t(k)], k);
