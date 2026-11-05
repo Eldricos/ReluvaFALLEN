@@ -469,6 +469,37 @@ void MapViewer::load(int index) {
         if (Error err = renderer_->createMesh(vertices, indices, moverMesh_))
             error_ = err.message;
     sky_ = findSkyZone(ctx_.packages, *pkg);
+    // Each zone's sky, as ZoneInfo.LinkToSkybox links it: the SkyZoneInfo
+    // tagged the zone's Event, else the first there is. The view shows its
+    // own zone's (CM_ArdPrison's two: the sun for CM07A, a moon for CM07B).
+    zoneSkies_.clear();
+    if (sky_) {
+        ClassDefaults defaults(ctx_.packages);
+        std::vector<std::pair<std::string, Vec3f>> skies;
+        for (size_t i = 0; i < pkg->exports().size(); ++i) {
+            if (pkg->exports()[i].classRef == 0 || !isA(ctx_.packages, *pkg, int(i), "SkyZoneInfo"))
+                continue;
+            ActorProperties props;
+            std::array<float, 3> at{};
+            if (!defaults.actorProperties(*pkg, int(i), props) && props.vector("Location", at))
+                skies.emplace_back(fs::toLower(props.nameValue("Tag")), Vec3f{at[0], at[1], at[2]});
+        }
+        for (const Zone& z : model.zones) {
+            std::optional<Vec3f> sky = sky_;
+            const ObjectRef zone = z.actor ? ctx_.packages.resolve(*pkg, z.actor) : ObjectRef{};
+            ActorProperties props;
+            if (zone && !defaults.actorProperties(*zone.package, zone.exportIndex, props)) {
+                const std::string event = fs::toLower(props.nameValue("Event"));
+                if (!event.empty() && event != "none")
+                    for (const auto& [tag, at] : skies)
+                        if (tag == event) {
+                            sky = at;
+                            break;
+                        }
+            }
+            zoneSkies_.push_back(sky);
+        }
+    }
 
     // Actors drawn as meshes: each mesh read and uploaded once; its skins
     // by texture index (MultiSkins, else Skin, else the mesh's own); lit
@@ -1187,7 +1218,11 @@ void MapViewer::update(uint64_t nowMs) {
         // The sky first: the level seen from the sky zone, looking the
         // same way; then the view, from scratch, with the backdrop
         // surfaces leaving it showing.
-        const gfx::Vec3 eye = toWorld(*sky_);
+        Vec3f skyAt = *sky_;
+        if (const int z = zones_.zoneAt(Vec3f{pos_[0], -pos_[1], pos_[2]}); z >= 0 && size_t(z) < zoneSkies_.size() &&
+                                                                          zoneSkies_[size_t(z)])
+            skyAt = *zoneSkies_[size_t(z)];
+        const gfx::Vec3 eye = toWorld(skyAt);
         const gfx::Mat4 skyView = gfx::multiply(proj, gfx::lookAlong(eye, forward, {0, 0, 1}));
         seeZonesFrom(eye, skyView);
         renderer_->beginFrame(skyView, eye, {20, 24, 40});
@@ -2281,7 +2316,16 @@ void MapViewer::actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLi
         if (!c.moves)
             ++still;
         gfx::VertexLight v;
-        v.position = toWorld(c.l->position);
+        // A cylinder light reaches as far as its radius across, whatever
+        // its height (lightDistance), so it's chosen that way; it lights
+        // the actor from its own height too, or a sky light far above
+        // (CM06_SW_Capture's, 11000 up with a radius of 6400) would give
+        // nothing where it was chosen. Reluva's reading, from the
+        // recording: Sisko lit by them in the capture.
+        Vec3f from = c.l->position;
+        if (c.l->cylinder)
+            from[2] = at[2];
+        v.position = toWorld(from);
         v.radius = c.l->radius;
         // The lightmaps' colours are doubled (lightColor); actors' aren't.
         for (size_t k = 0; k < 3; ++k)

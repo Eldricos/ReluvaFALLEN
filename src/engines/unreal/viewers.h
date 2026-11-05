@@ -411,7 +411,8 @@ private:
     std::vector<Batch> batches_;
     gfx::MeshId moverMesh_ = 0;
     std::vector<MoverDraw> movers_;
-    std::optional<Vec3f> sky_; // the sky zone's viewpoint, Unreal's coordinates
+    std::optional<Vec3f> sky_; // the sky zone's viewpoint, Unreal's coordinates (the first)
+    std::vector<std::optional<Vec3f>> zoneSkies_; // each zone's own (ZoneInfo.LinkToSkybox)
     bool showSky_ = true;
     // The zones seen through the portals from where the view is drawn
     // from; Z draws them all.

@@ -63,6 +63,26 @@ differs only in that way, Reluva follows its own scripts.
   10 s in): the column appears, the sparkle spreads over the body and
   then crossfades into the skin at the same times as in the recording.
 
+- **Sparks**: a phaser's hit throws 2 sparks a frame along its
+  reflection, falling under gravity (-450) and gone in 0.4-1.2 s
+  (`DS9_BeamWeaponFX`); Reluva's fall and fade so. The recording's cloud
+  is denser because the recording runs at more frames a second.
+- **The capture on SR-III** (`CM06_SW_Capture`, from 7688.6 s): its cuts
+  agree (6.5 and 13.3 s). Sisko (CIN_Sisko, facing the camera) was drawn
+  black: the scene's only lights are three sky cylinder lights 11000
+  units above (radius 6400), chosen by their distance across but then
+  shaded by their full distance, which is past their radius. A cylinder
+  light now shades an actor from the actor's own height; he and the
+  Jem'Hadar are lit as in the recording. Hass'terral's snowfield, lit the
+  same way, looks as it did.
+- **Arduria** (`CM_ArdPrison/CM07_A_Sisko01`, from 7719.75 s): the camera
+  matches. Each zone now shows its own sky, as `ZoneInfo.LinkToSkybox`
+  links it (the SkyZoneInfo tagged the zone's Event, else the first);
+  Reluva used to show the level's first everywhere. This map has two:
+  `CM07A` (a sun) and `CM07B` (a moon); the opening's zone is `CM07A`'s,
+  and now shows the sun, as in the recording. The prison overhead from
+  22 s on matches.
+
 ## Open
 
 - **Overall brightness**: the recording runs brighter than Reluva by 1.2
@@ -94,8 +114,17 @@ differs only in that way, Reluva follows its own scripts.
   give. Not yet explained.
 - **The Ke'el Tul flyby** (CM01a_SW, about 18 s): the ship is lit in the
   recording and dark in Reluva.
-- **Not compared yet**: the Jeraddo swarms, sparks, Arduria's effects,
-  fire and water speed. Each needs finding in the recording first.
+- **Arduria's docked Defiant**: in the recording the Defiant lies under
+  the docking arm for the first 7 s; Reluva shows the arm without it. The
+  `DS9_Defiant` actor is drawn, but far off at its own place, and
+  `Mover10` (Tag `MoveDefiant`, a 190 KB brush in front of the camera)
+  shows nothing there. Not found yet.
+- **The swarms**: SR-III's firefly swarms (`SR3_FireFlySwarm`, Size 0.05)
+  are too small to see in the opening scenes, in either; Jeraddo's bugs
+  appear only in play. Not compared.
+- **Fire and water speed**: no fixed view of a fire or water texture
+  found in the recording yet. M05_SiskoL1a's burning pod is brighter in
+  the recording (as everything is), its motion not measured.
 - **Dialogue in play** (hails, Ops and Promenade talks, chatter): the
   recording's speech recognised and matched against the dialogue tables
   (689 lines found) depends on how it was played, so it can't be compared
