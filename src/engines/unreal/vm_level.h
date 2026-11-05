@@ -208,6 +208,7 @@ public:
     bool dialogLineSpecial(int index);
     // The lines begun so far, in order (their indexes; the last 256).
     const std::vector<int>& linesSaid() const { return dialogSaid_; }
+    const std::vector<float>& linesSaidAt() const { return dialogSaidAt_; } // the level's seconds
     bool testCondition(const std::string& condition);
     // A condition about `actor`: 1 met, 0 not, -1 not one the engine knows.
     int evalCondition(const std::string& condition, VmObject* actor);
@@ -913,6 +914,7 @@ private:
     std::vector<DialogLine> dialogLines_;
     std::vector<int> dialogPlays_;      // how often each line's been said
     std::vector<int> dialogSaid_;       // the lines begun, in order
+    std::vector<float> dialogSaidAt_;   // when each was begun
     std::vector<DialogThread> dialogThreads_;
     int nextDialogThread_ = 1;
     int currentThread_ = 0;             // the thread whose line the level's fields show

@@ -711,9 +711,12 @@ void ScriptLevel::beginLine(DialogThread& t, int index) {
     const DialogLine& l = dialogLines_[size_t(index)];
     const DialogRec& r = dialogRecs_[size_t(index)];
     ++dialogPlays_[size_t(index)];
-    if (dialogSaid_.size() >= 256)
+    if (dialogSaid_.size() >= 256) {
         dialogSaid_.erase(dialogSaid_.begin());
+        dialogSaidAt_.erase(dialogSaidAt_.begin());
+    }
     dialogSaid_.push_back(index);
+    dialogSaidAt_.push_back(float(time_));
     currentLine_ = index;
     currentSpeaker_ = t.speaker;
     ++dialog.lines;

@@ -85,7 +85,9 @@ What's left is mostly checking against the original, and speed:
    by side with The Fallen running: the lightmaps, movers and the sky on
    its maps; the effects (swarms, lava, water rings, scripted paths).
    Several readings are Reluva's own until then (the bone axis order and
-   IK natives in [unreal_vm.md](unreal_vm.md)).
+   IK natives in [unreal_vm.md](unreal_vm.md)). A full playthrough's
+   recording has been compared so far: see
+   [unreal_playthrough.md](unreal_playthrough.md).
 2. **Speed.** Every map runs 20 seconds of play in under 12 of CPU
    without drawing (M03_KiraL2 about 6); the characters' own
    `C3DPreRender` scripts and the HUD's are what's left most. Drawing on
@@ -94,5 +96,5 @@ What's left is mostly checking against the original, and speed:
    layouts other licensees changed, once there's a second game to check
    against.
 
-The game's own gaps, which nothing here can fill: no lip-sync data, and
-no dialogue table for mission 12.
+The game's own gap, which nothing here can fill: no dialogue table for
+mission 12.

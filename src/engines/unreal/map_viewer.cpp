@@ -855,9 +855,12 @@ std::vector<std::string> MapViewer::linesSaid() {
     if (!play_)
         return out;
     ScriptLevel& level = play_->level();
-    for (const int i : level.linesSaid()) {
+    for (size_t k = 0; k < level.linesSaid().size(); ++k) {
+        const int i = level.linesSaid()[k];
         const DialogLine& l = level.dialogLines()[size_t(i)];
-        out.push_back(l.key() + ": " + l.text + (l.event.empty() ? "" : " [" + l.event + "]"));
+        char at[32];
+        std::snprintf(at, sizeof at, "%7.2f ", k < level.linesSaidAt().size() ? level.linesSaidAt()[k] : 0.0f);
+        out.push_back(at + l.key() + ": " + l.text + (l.event.empty() ? "" : " [" + l.event + "]"));
     }
     return out;
 }
@@ -1856,18 +1859,8 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
         frames_ = 0;
     }
     std::fill(overlay_.pixels.begin(), overlay_.pixels.end(), 0);
-    if (play_ && view_.letterbox) { // a cut scene's black bars, under the text
-        const int bar = kFrameH / 8;
-        for (int y = 0; y < kFrameH; ++y) {
-            if (y >= bar && y < kFrameH - bar)
-                continue;
-            uint8_t* p = overlay_.row(y);
-            for (int x = 0; x < kFrameW; ++x) {
-                p[x * 4] = p[x * 4 + 1] = p[x * 4 + 2] = 0;
-                p[x * 4 + 3] = 255;
-            }
-        }
-    }
+    // A cut scene's black bars are the HUD's own (CTV_Hud.RenderLetterBox,
+    // with the subtitles drawn over them).
     if (!showInfo_ && error_.empty())
         return;
     std::vector<std::string> lines = info_;
