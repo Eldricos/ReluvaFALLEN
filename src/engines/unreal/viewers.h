@@ -310,6 +310,8 @@ public:
     void placeCamera(const Vec3f& at, float yaw, float pitch);
     std::vector<std::pair<std::string, Vec3f>> actorPlaces(const std::string& classPart);
     std::string describePlayer();
+    // The level's seconds played (0 if not playing).
+    float playTime() const;
     // A console command as the player types it (its ConsoleCommand), and
     // what it answers; ue-play's tests.
     std::string consoleCommand(const std::string& command);

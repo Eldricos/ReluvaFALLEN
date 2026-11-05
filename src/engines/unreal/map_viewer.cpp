@@ -865,6 +865,8 @@ std::vector<std::string> MapViewer::linesSaid() {
     return out;
 }
 
+float MapViewer::playTime() const { return play_ ? play_->time() : 0; }
+
 std::string MapViewer::describePlayer() {
     if (!play_ || !play_->player())
         return "no player";

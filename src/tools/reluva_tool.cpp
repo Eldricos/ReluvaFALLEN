@@ -5012,8 +5012,8 @@ int cmdUePlay(int argc, char** argv) {
                 for (int x = 0; x < f.w; ++x)
                     std::fwrite(f.row(y) + x * 4, 1, 3, out);
             std::fclose(out);
-            std::printf("shot %s: %d draws, %d triangles, drawn in %.0f ms\n", file.c_str(), renderer.lastDraws(),
-                        renderer.lastTriangles(),
+            std::printf("shot %s at %.3f s: %d draws, %d triangles, drawn in %.0f ms\n", file.c_str(),
+                        double(page.playTime()), renderer.lastDraws(), renderer.lastTriangles(),
                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
             continue;
         } else {

@@ -46,6 +46,23 @@ differs only in that way, Reluva follows its own scripts.
 - **The chase camera**: `CTVE_Camera.CameraAI`'s `FocusPitch` -0.1 gives
   -18 degrees, as in the recording.
 
+- **Opening cut scenes**: `CM01a_SW` (the flyby and the bridge), from
+  both `CM01_A_Sisko01` and `CM01_A_Worf01`, cuts between cameras at the
+  same moments as the recording: all 17 cuts in the first 90 s within
+  0.3 s (Reluva sampled every 0.5 s; the cuts found where the picture
+  changes at once). It ends 105.5 s in, and the recording's next load
+  starts 105.6 s after its own. M01_SiskoL1A's opening (the shuttle bay)
+  then matches frame for frame, and M03_SiskoL1A's descending camera
+  (`CM03-SiskoL1A`, Director8 to 6 to 7) matches each recorded frame
+  to within 0.3 s throughout. `ue-play`'s `shot` now gives the level
+  time it was taken at (each shot plays a frame of its own, 33 ms).
+- **The framing**: the recording keeps the 4:3 picture's height and
+  shows more at the sides. Its middle 4:3 lines up with Reluva's whole
+  frame.
+- **The transporter's timing** (`CTV_TransporterBeamIn`, M03_SiskoL1A
+  10 s in): the column appears, the sparkle spreads over the body and
+  then crossfades into the skin at the same times as in the recording.
+
 ## Open
 
 - **Overall brightness**: the recording runs brighter than Reluva by 1.2
@@ -61,8 +78,24 @@ differs only in that way, Reluva follows its own scripts.
   levels checked (M03_SiskoL1B, M06_SiskoL1C, M07_SiskoL2, M07_SiskoL3A,
   the CM01a_SW bridge). Until Render.dll's mesh normals are read, it stays
   as it is.
+- **The transporter's look.** In the recording the beamed-in body shows
+  its own lit skin under the sparkle from the start; in Reluva it shows
+  only the sparkle until the crossfade (2.2 s in). The script draws the
+  skin in `STY_Blended` with `MultiTextureOneScaleGlow` 0 and raises it to
+  1 over 2.5 s. Render.dll hands that glow to the device's
+  `SetBlendRatio`, and both shipped drivers draw a blended polygon with
+  its light and its alpha times that ratio (D3DDrv's
+  `SRCALPHA`/`INVSRCALPHA`, OpenGLDrv's `GL_SRC_ALPHA`), so by the code
+  it starts unseen, as Reluva draws it. The recording's renderer
+  seemingly draws it opaque, as it is also brighter throughout. Its
+  column is also lower and shorter (at most knee height, gone 0.5 s
+  sooner); Reluva's spans the body, as the script's scale (twice the
+  height over 80) and the quad mesh centred on its pivot (Z -200 to 200)
+  give. Not yet explained.
 - **The Ke'el Tul flyby** (CM01a_SW, about 18 s): the ship is lit in the
   recording and dark in Reluva.
+- **Not compared yet**: the Jeraddo swarms, sparks, Arduria's effects,
+  fire and water speed. Each needs finding in the recording first.
 - **Dialogue in play** (hails, Ops and Promenade talks, chatter): the
   recording's speech recognised and matched against the dialogue tables
   (689 lines found) depends on how it was played, so it can't be compared
