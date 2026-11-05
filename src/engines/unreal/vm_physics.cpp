@@ -1117,8 +1117,6 @@ void ScriptLevel::physics(VmObject* a, float dt) {
             }
         } else if (vm_.isA(a, "Pawn"))
             walkPawn(a, dt, 8);
-        if (!a->deleted && physicsOf(a) == kPhysWalking)
-            climbCheck(a, false, dt);
         break;
     case kPhysFalling: {
         // Where a fall began: The Fallen's falling damage is by the height
@@ -1350,7 +1348,11 @@ void ScriptLevel::walkPlayer(VmObject* a, float dt) {
             break;
         remaining -= h.time * remaining;
         delta = mul(delta, 1 - h.time);
-        // A step up (the engine finds it with its ledge test): up, across, down.
+        // A ledge or a ladder there (Engine.dll's TestForLedge, then
+        // CheckClimbing, on the move left): the walk ends.
+        if (h.normal[2] < 0.65f && climbBlocked(a, h.actor, h.normal, delta))
+            return;
+        // A step up (the engine's ledge test does it for small steps): up, across, down.
         if (h.normal[2] < 0.65f && remaining > 0.01f) {
             Value* loc = prop(a, "Location");
             const Value here = *loc;

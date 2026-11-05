@@ -391,7 +391,7 @@ Actors move through the level's BSP ([collision.md](../formats/unreal/collision.
 and each other (`vm_physics.cpp`), as Engine.dll's `ULevel::MoveActor`
 and the actors' `phys*` functions do it (read for what they do, written
 here anew). The Fallen's ledge and ladder tests (`TestForLedge`,
-`CheckClimbing`) weren't decoded and stay Reluva's own (below).
+`CheckClimbing` and their helpers) are read from it the same way (below).
 
 - **A move** (`MoveActor`) sweeps the actor's box 2 units further than
   asked, through the world if it has `bCollideWorld`, then against the
@@ -448,7 +448,7 @@ Physics each tick, after the actor's scripts:
 
 | Physics | What it does |
 |---|---|
-| Walking, the player | `calcVelocity` (below), then one move along the floor's slope (`FloorNormal`) with up to three slides. Each wall is told `HitWall` as The Fallen's player's walking state reads it: X how head-on (the move's direction against the normal), Y its flat speed, Z how fast it slides on. Head-on (under −0.8), it stops. A step up is tried first (Reluva's: the engine finds steps in its undecoded ledge test). Then down onto the floor for real, `MaxStepHeight` + 2, sliding down a floor steeper than 0.65. No floor: back up, `Falling`, then falling. Its velocity is then what it really moved. |
+| Walking, the player | `calcVelocity` (below), then one move along the floor's slope (`FloorNormal`) with up to three slides. Each wall is told `HitWall` as The Fallen's player's walking state reads it: X how head-on (the move's direction against the normal), Y its flat speed, Z how fast it slides on. Head-on (under −0.8), it stops. A ledge or ladder there is tried first (below); then a step up (in Engine.dll, `TestForLedge`'s small-step branch, here the walk's own up, across and down). Then down onto the floor for real, `MaxStepHeight` + 2, sliding down a floor steeper than 0.65. No floor: back up, `Falling`, then falling. Its velocity is then what it really moved. |
 | Walking, other pawns | `calcVelocity`, then in steps of at most 0.05 s when going far, up to 4 (8 for pawns not The Fallen's). What stops a move is stepped up (`stepUp`: up `MaxStepHeight`, across, down; a square wall tried as a step again, else slid along; landing on a slope steeper than 0.7 undone). It's kept 1.9 to 2.4 above the floor (0.7 or flatter). With no floor, a pawn that can't jump (`bCanJump`) or is walking (`bIsWalking`) goes back, stops, and gives its move up (`MoveTimer` −1). Others fall with the rest of the tick. Velocity is what it moved, flat. A CTVE pawn's rise or drop on a step is eased out of how it's drawn (`PivotOffset`, into `PrePivot`, at 10 a second). |
 | Falling, the player | Gravity 1.4 times the zone's, times 1 − 2.2·dt (kept to 0.5-1), `AirControl` of `AccelRate` across, up to the terminal velocity. One move with up to four slides, `HitWall` (head-on-ness, speed) at the first only. Landing on anything flatter than 0.65. Its velocity is then what it moved. |
 | Falling, everything else | Steps of at most 0.1 s (8 at most), each moving at the average of its velocity at the start and end, split at the top of an arc. A pawn's air control is less with something just ahead. Landing on more than 0.7 (`Landed`, then walking, or still for an actor, and the rest of the tick walked). Steeper: `HitWall` and along it, then along both. `bBounce`: `HitWall` and its script bounces it. |
@@ -474,17 +474,18 @@ Physics each tick, after the actor's scripts:
 
 The Fallen added its own modes (past 10): the player's climbing,
 free flight, fish, interpolation and one for each kind of effect.
-`vm_climbing.cpp` and `vm_effect_physics.cpp` work them; the original
-code isn't known, so each is Reluva's reading of what the scripts set
-and leave undone.
+`vm_climbing.cpp` and `vm_effect_physics.cpp` work them. The player's
+three (Climbing, Hanging, Clambering) are as Engine.dll's
+`ACTVE_PlayerPawn::physClimbing`, `physHanging` and `physClambering`;
+the rest are Reluva's reading of what the scripts set and leave undone.
 
 | Physics | What it does |
 |---|---|
 | Interpolating, CTVE_Interpolating | Along a path of interpolation points (`SpecialEvent`'s player paths, the intro's camera): from `Target` to its `Next` by `PhysAlpha`, at `PhysRate` times the point's `RateModifier`, placed and turned between them. At each point, `InterpolateEnd` on the point and the actor (their scripts end the path), then on to the next (past one with `bSkipNextPath`). No shipped map has interpolation points, so it isn't seen. |
 | Trailer | At its owner's place (and turned as it, with `bTrailerSameRotation`), as UE1's. |
-| Climbing | Up and down a ladder at its `Acceleration.Z` (the scripts': `aForward` x 0.02, 120 a second). At the top, with no ladder at the chest, the ledge found there and `ChangePhysics(Clambering)`; down onto a floor, `Landed` and walking. |
-| Hanging | Along the ledge at its acceleration (`aStrafe` x 0.008), while there's ledge under its hands. |
-| Clambering | As the engine: up at `DodgeClickTimer` units a second (its scripts' `PlayClambering` sets 100 or 130; Kira's 104 or 130) until the feet are over `LedgeHeight`, feeling 4 units forward; clear there (or 4 over), `Landed`, which sets the rise to 0. Then forward at 120 a second until stopped, when `ChangePhysics(Walking)`; its scripts' `AnimEnd` walks too. Blocked rising: `ChangePhysics(Falling)`. |
+| Climbing | By its acceleration (the scripts': `aForward` x 0.02 up the view's Z, 120 a second), while a ladder is 1.6 radii ahead at the head going up (4 under it) or the feet going down (4 over them). Onto a floor: `Landed` (the scripts walk). At the top with no ladder at the head: 4 units on, and if that's blocked by a ledge (`TestForLedge`), `ChangePhysics(Clambering)`. At the bottom with none at the feet: `ChangePhysics(Falling)` (the scripts let go). Its velocity is what it moved. |
+| Hanging | Along the ledge by its acceleration (`aStrafe` x 0.008): a hand's box (`HandCollisionHeight`) swept over the ledge, moved only where there's a hand hold. No ledge under the hands (`TestForHangLedge`): the scripts' `Falling`. |
+| Clambering | Up at `DodgeClickTimer` units a second (its scripts' `PlayClambering` sets 100 or 130; Kira's 104 or 130) until the feet are over `LedgeHeight`, feeling 4 units forward; clear there (or 4 over), `Landed` with the normal of what it felt (none if clear), which sets the rise to 0. Then forward at 120 a second until stopped, when `ChangePhysics(Walking)`; its scripts' `AnimEnd` walks too. Blocked rising: `ChangePhysics(Falling)`. |
 | RotatingYaw, RotatingPitch | Turning about the one axis by `RotationRate`. |
 | Particle | No gravity: its velocity changed by its acceleration (a ship lifting off, debris settled), moved against the world, `Landed` or `HitWall`. One that makes copies stays where its scripts put it. |
 | Newtonian | Free flight by momentum (the Vulture, the Wraith, the Arachnid): its acceleration changes its velocity, up to `AirSpeed`; no gravity, no friction. |
@@ -492,21 +493,48 @@ and leave undone.
 | EXP_Trail | An explosion's trail: by its velocity and acceleration, through everything. |
 | The rest | Only their copies move (see Effects). |
 
-**Finding a ledge or a ladder** (`climbCheck`, after each walking or
-falling move of a `CTVE_PlayerPawn` pushing forward): a wall straight
-ahead, just above a step's height or at the chest. A ladder if its
-texture's `TexTag` says so (`TT_Ladder`): `ChangePhysics(Climbing)`.
-Else its top, traced down onto from above just past its face, as long
-as nothing's in the way up there. Its height goes in `LedgeHeight`, how
-deep it is in `LedgeDepth`, the room over it (as a half-height, which
-the scripts compare with theirs) in `HeadRoom`, the wall's normal in
-`LedgeNormal`. The scripts' `ChangePhysics` does the rest:
-- A ledge up to 100 above the feet, deep enough and with room, pushed
-  into for 0.15 seconds (at once in a jump): `Clambering`.
-- A higher one while falling, within the hands' reach (`ArmCollisionHeight`
-  over the head, up to 30 more): the player is put hanging from it,
-  facing the wall, and asked to hang (`Hanging`). Forward from there
-  climbs up (the scripts' `PlayerHanging`); jump or back lets go.
+**Finding a ledge or a ladder**, as Engine.dll does. Each search turns
+the player to face into the wall before asking its scripts'
+`ChangePhysics`, and puts the rotation back if they refuse.
+- **A walk blocked by a wall of the level** (with the move left over):
+  - **A ledge** (`TestForLedge`): only head on to an upright wall (the
+    move and the view both within -0.85 of it), not crouching, and not
+    in a level with `bNoActionLevel` unless climbing.
+    - The search: a box up to twice `ArmCollisionHeight` +
+      `StandCollisionHeight` (the ducked box from the feet if standing),
+      on by twice the class's `CollisionRadius`, and down onto a floor
+      (`TestStepUp`).
+    - What it tells the scripts: `LedgeHeight` (the feet on it),
+      `LedgeNormal` (its floor's normal, not the wall's), `LedgeDepth`
+      (how far on, as a share of that), `HeadRoom` (the room over it, as
+      a half-height up to `StandCollisionHeight`) and `LedgeItem`.
+    - It's taken if higher than a step and deep enough (over 1.6 radii if
+      more than 45 high, else 0.5), flat (0.9), with floor just past the
+      wall's face (`TestForStrongLedgeFooting`), and with the wall and
+      floor under the hands 8 units to either side
+      (`TestForHandHold`, which makes it the player's Base).
+    - Then `ChangePhysics(Clambering)`, and the walk ends.
+  - **Else a ladder** (`CheckClimbing`): a ladder texture (`TT_Ladder`)
+    at the chest and the head, 1.6 radii into the wall. The player is put
+    against it, 2 units off. Then `ChangePhysics(Climbing)`.
+- **In a jump** (only the scripts' reaching jump, with `CollisionHeight`
+  at `StandCollisionHeight` + `ArmCollisionHeight`), after each falling
+  move toward a wall 6 units ahead at the chest:
+  - **A ladder there:** `Climbing`.
+  - **Else a ledge for the hands:** found with the hands' box and a
+    search of twice `ArmCollisionHeight` + `HandCollisionHeight`, at
+    least 4 deep and flat. There must be room to get there, a hang
+    ledge over it (`TestForHangLedge`) and a hand hold. Then `Hanging`,
+    and the player is put there with the box's top at the ledge.
+- **Not done here:**
+  - Engine.dll's ducking under a low ledge (`ForceDuck`,
+    `CollisionHeightOverride`) and its auto-duck timer.
+  - The tests against the BSP node a hit came from (`TestHitIntegrity`).
+  - Keeping 12 units inside a ladder's edges (`GetNodeXOffsets`).
+  - Swimming's ledge and ladder tests.
+- **Seen:** on M01_KiraL2, walking into the ladder under
+  `CTVE_LadderTop2` climbs it at 120 a second, pulls up over the top
+  and walks on.
 
 The input axes are 20 times the bindings' speeds (`aBaseY` 6000 for a
 held MoveForward), as UE1's input scales a held key's axis. The

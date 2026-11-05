@@ -553,13 +553,28 @@ public:
     // The Fallen's player climbing (vm_climbing.cpp): what's ahead (a
     // wall, a ladder on it, a ledge on top), checked as it walks or falls,
     // and the hanging, climbing and clambering physics.
-    struct Ledge {
-        bool ledge = false, ladder = false;
-        std::array<float, 3> wall{}, normal{}; // where the wall was met, and its normal (flat)
-        float height = 0, depth = 0, headRoom = 0;
+    struct Sweep {
+        float time = 1;
+        std::array<float, 3> at{}, normal{};
+        VmObject* actor = nullptr;
+        bool hit() const { return actor != nullptr; }
     };
-    bool findLedge(VmObject* a, const std::array<float, 3>& dir, float highest, Ledge& out);
-    void tellLedge(VmObject* a, const Ledge& l);
+    Sweep sweep(VmObject* a, const std::array<float, 3>& from, const std::array<float, 3>& to,
+                const std::array<float, 3>& extent);
+    float climbFloat(VmObject* a, const char* name, float otherwise);
+    std::array<float, 3> viewX(VmObject* a);
+    float defaultRadius(VmObject* a);
+    float testStepUp(VmObject* a, float stepHeight, float height, const std::array<float, 3>& start,
+                     const std::array<float, 3>& forward, const std::array<float, 3>& extent);
+    bool strongFooting(VmObject* a, const std::array<float, 3>& normal, const std::array<float, 3>& at);
+    bool handHold(VmObject* a, const std::array<float, 3>& normal, const std::array<float, 3>& at);
+    bool hangLedge(VmObject* a, const std::array<float, 3>& normal, std::array<float, 3>& at);
+    bool testForLedge(VmObject* a, const std::array<float, 3>& hitNormal, const std::array<float, 3>& dir);
+    bool checkClimbing(VmObject* a, const std::array<float, 3>& wallNormal, const std::array<float, 3>& dir, bool snap,
+                       bool feet, bool chest, bool head);
+    bool askClimb(VmObject* a, const std::array<float, 3>& wallNormal, int physics);
+    // A player's walk blocked by a wall: a ledge or ladder there taken.
+    bool climbBlocked(VmObject* a, VmObject* by, const std::array<float, 3>& hitNormal, const std::array<float, 3>& left);
     void climbCheck(VmObject* a, bool falling, float dt);
     void climbPhysics(VmObject* a, int physics, float dt);
     void endClamber(VmObject* a);
@@ -938,7 +953,6 @@ private:
     SurfaceSwaps surfaceSwaps_;
     std::map<VmObject*, Decal> decals_;
     std::map<VmObject*, float> sparkFlash_; // sparks' lights, on for this long yet
-    std::map<VmObject*, float> ledgePush_;  // the player pushing into a ledge, this long
     std::map<VmObject*, Clamber> clambers_; // pulls up onto ledges under way
     std::map<VmObject*, float> copyStarts_; // effects' copies: the life each started with
     float copyFloat(VmObject* mm, const char* name, float otherwise = 0);

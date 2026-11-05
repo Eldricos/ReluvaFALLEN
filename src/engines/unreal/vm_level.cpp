@@ -771,7 +771,6 @@ void ScriptLevel::destroy(VmObject* a) {
     ghosts_.erase(std::remove(ghosts_.begin(), ghosts_.end(), a), ghosts_.end());
     decals_.erase(a);
     sparkFlash_.erase(a);
-    ledgePush_.erase(a);
     clambers_.erase(a);
     noiseQuiet_.erase(a);
 }
