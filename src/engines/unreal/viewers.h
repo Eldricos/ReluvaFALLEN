@@ -383,10 +383,12 @@ private:
         int key = 0, target = 0; // moving from key to target
         float t = 0;             // 0-1 of the way
         float reach = 0;         // how far its brush reaches from its pivot
+        gfx::Mat4 built{};       // where its vertices' baked light was worked out
     };
     // A mover's light: the lights reaching its brush, worked out on its
-    // vertices as surfaces are lit (no lightmap of its own).
-    MeshLight moverLightAt(const Vec3f& at, float reach) const;
+    // vertices as surfaces are lit (no lightmap of its own); `reaching`,
+    // how many reach it (the renderer takes six).
+    MeshLight moverLightAt(const Vec3f& at, float reach, size_t* reaching = nullptr) const;
     gfx::Mat4 moverTransform(const MoverDraw& m) const;
     static gfx::Mat4 moverPlacement(const Mover& m, const Vec3f& location, const Rotator& rotation);
     // The lights that move and change while playing (lit actors not among

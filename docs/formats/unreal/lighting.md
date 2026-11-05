@@ -187,7 +187,12 @@ reading: a mover's vertices are lit as the level's surfaces are, where
 it is now, by the lights reaching its brush (the six brightest there):
 colour x (1 - 3 f^2 + 2 f^3) x the facing (a cylinder light 1 - f^2
 across), with its zone's ambient light, at most 1, without shadows.
-Against those two frames it comes close.
+Against those two frames it comes close. A light smaller than the brush
+counts for the share of it it reaches (its radius over the brush's), and
+a brush over 1000 across with more than six lights reaching it is lit
+from all of them, worked out when the level is read, while it hasn't
+moved (CM_ArdPrison's docked Defiant, a mover 5000 across under the
+station's lamps).
 
 ## Lights whose brightness changes
 

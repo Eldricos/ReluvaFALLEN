@@ -415,6 +415,7 @@ void MapViewer::load(int index) {
                 d.reach = std::max(d.reach, std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2]));
             }
         const gfx::Mat4 place = moverTransform(d);
+        d.built = place;
         std::map<std::pair<int32_t, uint32_t>, std::vector<const Poly*>> moverGroups;
         for (const Poly& p : d.mover.polys)
             if (p.vertices.size() >= 3 && !(p.polyFlags & (polyflag::Invisible | polyflag::Portal)))
@@ -2072,8 +2073,16 @@ void MapViewer::drawWorld(const gfx::Vec3& forward, const gfx::Vec3& right, cons
             place = moverTransform(m);
             at = Vec3f{place[12], -place[13], place[14]};
         }
-        const MeshLight light = moverLightAt(at, m.reach);
-        drawBatches(m.batches, moverMesh_, place, false, false, &light);
+        size_t reaching = 0;
+        const MeshLight light = moverLightAt(at, m.reach, &reaching);
+        // More lights than the renderer takes on a mover still where it
+        // was built: its vertices' light worked out then, from all of them
+        // (the original lights a mover's brush from every light reaching
+        // it, like the level's surfaces). CM_ArdPrison's docked Defiant,
+        // under the station's lamps, is lit so, as in a recording.
+        // Only for a large brush (a door's six nearest are its lights).
+        const bool baked = m.reach > 1000 && reaching > size_t(gfx::kMaxVertexLights) && place == m.built;
+        drawBatches(m.batches, moverMesh_, place, false, false, baked ? nullptr : &light);
         if (inFogZone(at))
             volumesOver(m.batches, moverMesh_, place, gfx::Cull::Back, false);
     }
@@ -2187,11 +2196,12 @@ void MapViewer::drawMirrors(const gfx::Mat4& proj, const gfx::Mat4& view, const 
 // The mover's brushes have no lightmaps of their own (their models' are
 // stale, pointing at no surface), so its vertices are lit as the level's
 // surfaces are, where it is now: the lights reaching its brush (at most
-// six, the brightest there), each colour x (1 - 3 f^2 + 2 f^3) x the
+// six, the brightest there, a light smaller than the brush counted for
+// the share of it it reaches), each colour x (1 - 3 f^2 + 2 f^3) x the
 // facing (a cylinder light 1 - f^2 across), with its zone's ambient
 // light, at most 1; without the lights' shadows. Reluva's reading: how
 // the original's moving-brush tracker lights them isn't known.
-MeshLight MapViewer::moverLightAt(const Vec3f& at, float reach) const {
+MeshLight MapViewer::moverLightAt(const Vec3f& at, float reach, size_t* reaching) const {
     MeshLight light;
     struct Candidate {
         const LightSource* l;
@@ -2205,7 +2215,12 @@ MeshLight MapViewer::moverLightAt(const Vec3f& at, float reach) const {
         if (dist >= l.radius + reach)
             return;
         const float near = std::max(0.0f, dist - reach);
-        found.push_back({&l, level, float(l.brightness) * level * (1 - near / l.radius)});
+        // On a brush larger than the light's reach, only so much of it is
+        // lit: CM_ArdPrison's docked Defiant (Mover10, 5000 across) was
+        // otherwise given six bright lamps of radius 50 to 100 by its
+        // pivot and left black, not the station's lights of 4000 round it.
+        const float share = reach > l.radius ? l.radius / reach : 1.0f;
+        found.push_back({&l, level, float(l.brightness) * level * (1 - near / l.radius) * share});
     };
     for (const LightSource& l : lights_.unique)
         consider(l, levelOf(l));
@@ -2213,6 +2228,8 @@ MeshLight MapViewer::moverLightAt(const Vec3f& at, float reach) const {
         consider(l, 1);
     std::stable_sort(found.begin(), found.end(),
                      [](const Candidate& a, const Candidate& b) { return a.importance > b.importance; });
+    if (reaching)
+        *reaching = found.size();
     for (size_t i = 0; i < found.size() && i < size_t(gfx::kMaxVertexLights); ++i) {
         gfx::VertexLight v;
         v.position = toWorld(found[i].l->position);

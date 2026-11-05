@@ -81,7 +81,16 @@ differs only in that way, Reluva follows its own scripts.
   Reluva used to show the level's first everywhere. This map has two:
   `CM07A` (a sun) and `CM07B` (a moon); the opening's zone is `CM07A`'s,
   and now shows the sun, as in the recording. The prison overhead from
-  22 s on matches.
+  22 s on matches. The docked Defiant under the arm is a brush mover
+  (`Mover10`, Tag `MoveDefiant`: 562 polygons, 5000 across, its textures
+  the ship's), not the `DS9_Defiant` actor. It was drawn black: a mover
+  is lit by six lights chosen from its pivot, and on so large a brush six
+  tiny red lamps by the pivot (radius 50 to 100) won over the station's
+  lights of 4000. A light smaller than the brush now counts for the share
+  of it it reaches, and a large brush (over 1000 across) with more lights
+  on it than the renderer takes is lit from all of them, as worked out
+  when the level was read, while it stays where it was. It now lies under
+  the arm, lit, as in the recording (a little darker, as everything is).
 
 ## Open
 
@@ -114,11 +123,6 @@ differs only in that way, Reluva follows its own scripts.
   give. Not yet explained.
 - **The Ke'el Tul flyby** (CM01a_SW, about 18 s): the ship is lit in the
   recording and dark in Reluva.
-- **Arduria's docked Defiant**: in the recording the Defiant lies under
-  the docking arm for the first 7 s; Reluva shows the arm without it. The
-  `DS9_Defiant` actor is drawn, but far off at its own place, and
-  `Mover10` (Tag `MoveDefiant`, a 190 KB brush in front of the camera)
-  shows nothing there. Not found yet.
 - **The swarms**: SR-III's firefly swarms (`SR3_FireFlySwarm`, Size 0.05)
   are too small to see in the opening scenes, in either; Jeraddo's bugs
   appear only in play. Not compared.
