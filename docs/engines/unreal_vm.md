@@ -818,11 +818,17 @@ The natives:
   one line.
 - **`SetRenderFrame(X, Y, W, H, Location, Rotation, FOV, ClearZ)`** sets
   the frame the next actors are drawn in: a rectangle of the screen and a
-  camera (its own field of view if given, else the world's). It lasts
-  until the next one or the end of the frame. A frame of the whole screen
-  is the world's view: `ResetCanvas` asks for one with the HUD actor's
-  own place and rotation, which nothing sets, so taking it as the
-  player's view is Reluva's reading.
+  camera, as given (Engine.dll's `execSetRenderFrame` hands them to
+  `FSceneNode::ComputeRenderCoords`), with the field of view given or 90.
+  It also sets the viewing player's `FovAngle` to that field of view, and
+  clears the depth with ClearZ. It lasts until the next one or the end of
+  the frame; each frame starts in the world's view. The HUD's
+  `ResetCanvas` sets the whole screen with the HUD actor's own place (the
+  camera's, `UpdateLocation`) and rotation, and the `FovAngle` that
+  `SaveCanvas` kept. The scripts draw no actor in it after that and
+  project nothing in it, so it shows nothing. What it does is put back
+  the `FovAngle` that a portrait's or the tricorder's frame changed,
+  which `CTV_Hud`'s debug labels read.
 - **Tiles in a frame** are placed from its corner and cut to it, and the
   canvas's clip (`ClipX`, `ClipY`) becomes its size, as the scripts
   expect. The info pad's documents are drawn from 0, 0 and scroll

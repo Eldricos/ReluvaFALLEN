@@ -468,13 +468,15 @@ void registerCanvasNatives(Vm& vm) {
         v.height = std::max(1, c.i(3));
         v.location = Vm::vectorOf(c.args[4]);
         v.rotation = Vm::rotatorOf(c.args[5]);
-        if (c.given.size() > 6 && c.given[6] && c.i(6) > 0)
-            v.fov = float(c.i(6));
-        // The whole screen again (the HUD's ResetCanvas, with the HUD's own
-        // place and a rotation nothing sets): the world's view.
-        const ScriptLevel::HudView& world = c.vm.level->hudView();
-        if (v.x <= 0 && v.y <= 0 && v.width >= world.width && v.height >= world.height)
-            v = world;
+        v.fov = c.given.size() > 6 && c.given[6] ? float(c.i(6)) : 90.f;
+        // Engine.dll's execSetRenderFrame takes the place and rotation as
+        // given (FSceneNode::ComputeRenderCoords), whole screen or not, and
+        // sets the viewing player's FovAngle to the FOV (90 if none): the
+        // HUD's ResetCanvas puts back the FovAngle SaveCanvas kept, with the
+        // HUD's own place and rotation, which nothing draws in afterwards.
+        if (VmObject* p = c.vm.level->player())
+            if (Value* f = p->find(c.vm, "FovAngle"))
+                *f = Value::floatValue(c.given.size() > 6 && c.given[6] ? float(c.i(6)) : 90.f);
         c.vm.level->hudFrameClear() = c.given.size() > 7 && c.given[7] && c.b(7);
     });
     // GetScreenCoords(Vector Location, out int X, out int Y, out float Scale):
