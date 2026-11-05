@@ -801,7 +801,9 @@ static void testAnimatedTextures() {
     endProps(wb, w);
     mips(wb, 8, 8);
     w.addExport(water, 0, "Pool", wb.b);
-    // Brick through itself, the source sliding a pixel a second.
+    // Brick through itself, the source sliding 2 x (132 - 128) pixels a
+    // game second; frame-rate synced, each frame a 120th of one: 2 pixels a
+    // second at 30 frames.
     Bytes ib;
     tag(ib, w, "SourceTexture", PropertyType::Object, 1);
     ib.index(brick);

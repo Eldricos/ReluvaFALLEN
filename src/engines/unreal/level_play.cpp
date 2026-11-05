@@ -462,20 +462,9 @@ void LevelPlay::coronas(std::vector<Corona>& out) {
             continue;
         Corona c;
         c.actor = a;
-        // Its skin, else its texture if it's drawn as a sprite (a light's
-        // lens flare), unless that's an icon from the editor (Engine's
-        // S_Light, S_ZoneInfo...): none glows. A mesh's texture is only its
-        // icon in the editor too: CM10_SWK_L3's red orb glowed as the
-        // Inventory icon, a crate on green, and M05_KiraL1 had a ZoneInfo's
-        // icon and a plain light's (a bulb, a question mark) as coronas.
+        // Its Skin, drawn: Render.dll takes no corona from a light without
+        // one (not its Texture, a sprite's or an editor icon).
         c.texture = refOf(at(Skin));
-        const Value* drawType = at(DrawType);
-        if (!c.texture && (!drawType || drawType->asInt() == 1)) {
-            c.texture = refOf(at(Texture));
-            if (c.texture && fs::toLower(c.texture.package->name()) == "engine" &&
-                fs::toLower(c.texture.package->objectName(c.texture.exportIndex + 1)).rfind("s_", 0) == 0)
-                c.texture = {};
-        }
         if (!c.texture)
             continue;
         if (const Value* v = at(Location)) {
@@ -486,6 +475,15 @@ void LevelPlay::coronas(std::vector<Corona>& out) {
             c.drawScale = v->asFloat();
         if (const Value* r = at(Region); r && regionZoneField_ >= 0 && size_t(regionZoneField_) < r->fields.size())
             c.zone = r->fields[size_t(regionZoneField_)].asInt();
+        if (const Value* v = a->find(*vm_, "LightHue"))
+            c.hue = uint8_t(v->asInt());
+        if (const Value* v = a->find(*vm_, "LightSaturation"))
+            c.saturation = uint8_t(v->asInt());
+        if (const Value* v = a->find(*vm_, "LightRadius"))
+            c.radius = 25.0f * float(v->asInt() + 1);
+        if (const Value* v = a->find(*vm_, "bStatic"))
+            c.isStatic = v->asBool();
+        c.ref = a->exportIndex >= 0 && a->package == &map_ ? a->exportIndex + 1 : 0;
         out.push_back(c);
     }
 }

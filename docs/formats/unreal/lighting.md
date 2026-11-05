@@ -534,23 +534,31 @@ usual). Reluva:
 
 ## Coronas
 
-A light with `bCorona` (in 33 of The Fallen's maps, and some
-projectiles) draws a corona: its `Skin` (else its `Texture`, the lens
-flares of `ds9genFX.LensFlares`, if it's drawn as a sprite: a mesh's
-`Texture` is its editor icon, and the red orb, a pickup with `bCorona`,
-glowed as the Inventory icon's crate on green; nor one of the editor's own
-icons, Engine's `S_` textures: M05_KiraL1 has a ZoneInfo and a plain light
-with `bCorona` and no flare, which glowed as a bulb and a question mark) as a glow where it is, added over
-everything, the same size on the screen however far away: the texture's
-width times `DrawScale` times 8 on a 960-wide frame. In a recording of
-the original the credits station's flares (`coronaora02` at 0.025,
-`coronaora01` at 0.05, both 128 wide) were about 15 and 22 pixels across,
-the glow's visible part about 60% of its quad. The light's own
-brightness doesn't matter: those have `LightBrightness` 0 and glow in
-their texture's orange. Shown only while the level's walls aren't between
-the camera and the light (a light inside its lamp's fixture counts as
-seen) and its zone is seen, fading in and out over a fifth of a second.
-Reluva's reading: the original's code isn't known (`MapViewer::addCoronas`).
+As Render.dll draws them (the routine at `0x10b23cd4` and the one adding
+each light, `0x10b24210`):
+
+- **Which lights**: those permeating the BSP leaf the camera is in (the
+  level model's leaf list) and the moving lights linked to that leaf,
+  each with `bCorona` and a `Skin` (no Skin, no corona: not its
+  `Texture`, a sprite's or an editor icon), not being deleted, and with a
+  clear line from the light to the camera (the level's line check); at
+  most 32 at once.
+- **The glow**: each frame every corona's glow drops by the frame's time,
+  and a seen one's rises by twice that, at most 1: in over a second, out
+  over a second; at 0 it's gone.
+- **Drawn** in front of the camera only, as its `Skin`, translucent (the
+  device's tile with flags 0x104), over everything, centred where the
+  light is on the screen, the frame's width x `DrawScale` x 0.8 pixels
+  across; its colour the light's `LightHue` in the engine's three thirds,
+  made whiter by `LightSaturation` / 255, times the glow (its
+  `LightBrightness` not used). The credits station's flares
+  (`coronaora02` at 0.025, `coronaora01` at 0.05) come to 19 and 38
+  pixels on a 960-wide frame; their glow's visible part was about 15 and
+  22 in a recording.
+
+Reluva: a moving light (not `bStatic`) counts while the camera is within
+its radius (in place of the leaf's links), and the line check is its
+own trace through the level (`MapViewer::addCoronas`).
 
 ## Translucent lit surfaces
 

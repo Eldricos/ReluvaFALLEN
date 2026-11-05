@@ -2661,45 +2661,74 @@ void MapViewer::drawScreenFlash(const gfx::Vec3& forward, const gfx::Vec3& right
     }
 }
 
-// A corona is the light's texture glowing where the light is, added over
-// everything, the same size on the screen however far it is: its texture
-// times its DrawScale, times 8 on a 960-wide frame (the credits station's
-// flares, DrawScale 0.025 and 0.05 of a 128 texture, were about 15 and 22
-// pixels across in a recording of the original, their glow's visible part
-// about 60% of the quad). Shown while the level's walls aren't between it
-// and the camera, fading in and out over a fifth of a second (Reluva's
-// reading: the original's code isn't known).
+// Coronas, as Render.dll draws them: of the lights permeating the
+// leaf the camera is in (the level model's leaf list) and the moving
+// lights reaching it, each with bCorona and a Skin, at most 32, those with
+// a clear line from the light to the camera; each frame every corona's
+// glow drops by the frame's time and a seen one's rises by twice that (in
+// over a second, out over a second), gone at 0. Drawn as its Skin,
+// translucent, over everything, centred where the light is on the
+// screen, the frame's width x DrawScale x 0.8 pixels across, in its
+// light's hue made whiter by its saturation, times the glow (its
+// brightness not used).
 void MapViewer::addCoronas(std::vector<SpriteDraw>& sprites, const gfx::Vec3& forward, float dt) {
     play_->coronas(coronaScratch_);
     const Vec3f eye{pos_[0], -pos_[1], pos_[2]};
     const float tanHalf = std::tan(std::clamp(fov_, 1.0f, 170.0f) * kPi / 360);
-    std::map<VmObject*, float> fades;
+    // The level's lights reaching the camera's leaf.
+    std::set<int32_t> permeating;
+    if (const int leaf = zones_.leafAt(eye); leaf >= 0 && size_t(leaf) < leafLights_.size() && leafLights_[size_t(leaf)] >= 0)
+        for (size_t i = size_t(leafLights_[size_t(leaf)]); i < lights_.sources.size() && lights_.sources[i].ref; ++i)
+            permeating.insert(lights_.sources[i].ref);
+    // Every glow down by the frame's time.
+    for (auto it = coronaFade_.begin(); it != coronaFade_.end();) {
+        it->second -= dt;
+        it = it->second < 0 ? coronaFade_.erase(it) : std::next(it);
+    }
     for (const LevelPlay::Corona& c : coronaScratch_) {
+        const bool candidate = c.isStatic ? permeating.count(c.ref) != 0
+                                          : std::sqrt((c.location[0] - eye[0]) * (c.location[0] - eye[0]) +
+                                                      (c.location[1] - eye[1]) * (c.location[1] - eye[1]) +
+                                                      (c.location[2] - eye[2]) * (c.location[2] - eye[2])) < c.radius;
+        if (candidate && !play_->wallBetween(c.location, eye)) {
+            auto it = coronaFade_.find(c.actor);
+            if (it != coronaFade_.end())
+                it->second = std::min(1.0f, it->second + 2 * dt);
+            else if (coronaFade_.size() < 32)
+                coronaFade_[c.actor] = std::min(1.0f, 2 * dt);
+        }
+    }
+    for (const LevelPlay::Corona& c : coronaScratch_) {
+        auto it = coronaFade_.find(c.actor);
+        if (it == coronaFade_.end())
+            continue;
+        const float fade = it->second;
         const gfx::Vec3 at = toWorld(c.location);
         const float depth = (at[0] - pos_[0]) * forward[0] + (at[1] - pos_[1]) * forward[1] + (at[2] - pos_[2]) * forward[2];
-        const bool zoneSeen = c.zone < 0 || c.zone >= 64 || ((zonesSeen_ >> c.zone) & 1);
-        const bool visible = depth > 8 && zoneSeen && !play_->wallBetween(eye, c.location);
-        auto old = coronaFade_.find(c.actor);
-        float fade = old == coronaFade_.end() ? (visible ? 1.0f : 0.0f) : old->second;
-        fade = std::clamp(fade + (visible ? 5.0f : -5.0f) * dt, 0.0f, 1.0f);
-        fades[c.actor] = fade;
-        if (fade <= 0 || depth <= 8)
+        if (fade <= 0 || depth <= 1)
             continue;
         const auto [texture, size] = textureOf(c.texture);
         if (!texture)
             continue;
-        const float pixels = float(size[0]) * c.drawScale * 8 * float(kFrameW) / 960;
+        // Its colour: the hue in three thirds, whitened by the saturation.
+        const float h = float(c.hue);
+        Vec3f col = c.hue < 86 ? Vec3f{(85 - h) / 85, h / 85, 0}
+                    : c.hue < 171 ? Vec3f{0, (170 - h) / 85, (h - 85) / 85}
+                                  : Vec3f{(h - 170) / 85, 0, (255 - h) / 84};
+        const float white = float(c.saturation) / 255;
+        for (float& x : col)
+            x = (x + (1 - x) * white) * fade;
+        const float pixels = float(kFrameW) * c.drawScale * 0.8f;
         const float world = pixels * depth * 2 * tanHalf / float(kFrameW);
         SpriteDraw d;
         d.texture = texture;
         d.at = at;
         d.width = d.height = world;
         d.style = kStyleTranslucent;
-        d.color = {fade, fade, fade};
+        d.color = {col[0], col[1], col[2]};
         d.onTop = true;
         sprites.push_back(d);
     }
-    coronaFade_ = std::move(fades);
 }
 
 // The Fallen's characters cast shadows of their own shape (actors with

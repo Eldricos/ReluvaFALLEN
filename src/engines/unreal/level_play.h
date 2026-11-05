@@ -178,9 +178,13 @@ public:
     struct Corona {
         VmObject* actor = nullptr;
         Vec3f location{};
-        ObjectRef texture;
+        ObjectRef texture; // its Skin
         float drawScale = 1;
         int zone = -1;
+        uint8_t hue = 0, saturation = 255;
+        float radius = 0;     // its light's, world units (25 x (LightRadius + 1))
+        bool isStatic = true; // bStatic: one of the level's own lights
+        int32_t ref = 0;      // its export (object reference) in the level, 0 if spawned
     };
     void coronas(std::vector<Corona>& out);
     // Its copies (The Fallen's MultiMesh: particles, sparks, a beam's

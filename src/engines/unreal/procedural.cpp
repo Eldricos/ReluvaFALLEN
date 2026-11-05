@@ -27,6 +27,7 @@ struct TextureData {
     size_t native = 0;   // where the class's own data starts (a Reader position)
     PropertyList props;
     int width = 0, height = 0;
+    size_t mip0 = 0, mip0Size = 0; // the first mipmap's bytes (an index into data)
 };
 
 Error readTextureData(const Package& package, int index, TextureData& out) {
@@ -47,6 +48,10 @@ Error readTextureData(const Package& package, int index, TextureData& out) {
             const int32_t size = r.index();
             if (size < 0)
                 return Error::fail(what + ": a mipmap of " + std::to_string(size) + " bytes");
+            if (list == 0 && m == 0) {
+                out.mip0 = r.pos() - out.base;
+                out.mip0Size = size_t(size);
+            }
             r.skip(size_t(size));
             const int32_t w = r.i32(), h = r.i32();
             r.u8();
@@ -859,17 +864,19 @@ private:
 };
 
 // ---------------------------------------------------------------------
-// Ice: a SourceTexture seen through a GlassTexture, one sliding over the
-// other. Each pixel shows the source shifted by the slope of the glass's
-// brightness there (a quarter of the difference either side, up to 16
-// pixels), like light bent through uneven glass. The glass slides (or,
-// with MoveIce, the source does) as PanningStyle says (IceTexture's
-// PanningType in Fire.u): Linear at HorizPanSpeed and VertPanSpeed (128
-// still; a step either side a quarter of a pixel a second); Circular round
-// a circle of Amplitude / 4 pixels, Frequency / 64 turns a second;
-// Gestation wobbling to and fro on both axes; WavyX and WavyY linear with
-// a wobble across. None of The Fallen's textures is an IceTexture, so this
-// is untried on real data.
+// Ice, as Fire.dll's UIceTexture does it (MoveIcePosition, BlitTexIce,
+// BlitIceTex): each pixel shows the SourceTexture's row, taken from as far
+// along it as the GlassTexture's palette index there (plus its own
+// column, wrapping), the glass or (MoveIce) the source shifted by the
+// position. The position: a clock moving 120 a second; a pan of
+// 2 x (HorizPanSpeed - 128) pixels a second leftwards and 2 x
+// (VertPanSpeed - 128) downwards; then by PanningStyle, in whole pixels
+// with a = (Amplitude + 1) and f = (Frequency + 1) x clock x 0.0012
+// radians: Linear the pan; Circular a sin f, a cos f; Gestation a sin f,
+// a cos (f x 11/12); WavyX a sin f / 2 across only; WavyY a cos f / 2 down
+// only. TimeMethod frame-rate synced steps 1/120 s each time the texture
+// is due (its pace); real time moves it by each frame's time. It's drawn
+// again only when the whole-pixel position changes.
 
 // A referenced texture, decoded and scaled to w x h.
 bool scaledPicture(const PackageSet& packages, const Package& package, int32_t ref, int w, int h, image::Image& out) {
@@ -886,24 +893,35 @@ bool scaledPicture(const PackageSet& packages, const Package& package, int32_t r
     return true;
 }
 
+// A referenced texture's palette indices (its first mipmap), scaled to w x h.
+bool scaledIndices(const PackageSet& packages, const Package& package, int32_t ref, int w, int h,
+                   std::vector<uint8_t>& out) {
+    const ObjectRef obj = packages.resolve(package, ref);
+    TextureData t;
+    if (!obj || readTextureData(*obj.package, obj.exportIndex, t) ||
+        t.mip0Size < size_t(t.width) * size_t(t.height) || t.mip0 + t.mip0Size > t.data.size())
+        return false;
+    out.resize(size_t(w) * size_t(h));
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            out[size_t(y) * size_t(w) + size_t(x)] =
+                t.data[t.mip0 + size_t(y * t.height / h) * size_t(t.width) + size_t(x * t.width / w)];
+    return true;
+}
+
 class Ice : public AnimatedTexture {
 public:
     enum Panning : uint8_t { Linear, Circular, Gestation, WavyX, WavyY };
 
-    Ice(const PropertyList& props, image::Image source, image::Image glass)
+    Ice(const PropertyList& props, image::Image source, std::vector<uint8_t> glass)
         : source_(std::move(source)), glass_(std::move(glass)), pace_(props) {
         panning_ = props.byte("PanningStyle");
-        hSpeed_ = float(int(props.byte("HorizPanSpeed", 128)) - 128) / 4;
-        vSpeed_ = float(int(props.byte("VertPanSpeed", 128)) - 128) / 4;
-        frequency_ = float(props.byte("Frequency")) / 64;
-        amplitude_ = float(props.byte("Amplitude")) / 4;
+        realTime_ = props.byte("TimeMethod") != 0;
+        hSpeed_ = float(int(props.byte("HorizPanSpeed", 128)) - 128);
+        vSpeed_ = float(int(props.byte("VertPanSpeed", 128)) - 128);
+        frequency_ = float(props.byte("Frequency")) + 1;
+        amplitude_ = float(props.byte("Amplitude")) + 1;
         moveIce_ = props.boolean("MoveIce");
-        // The glass's brightness, for its slopes.
-        brightness_.resize(size_t(glass_.w) * size_t(glass_.h));
-        for (size_t i = 0; i < brightness_.size(); ++i) {
-            const uint8_t* p = glass_.rgba.data() + i * 4;
-            brightness_[i] = (int(p[0]) * 3 + int(p[1]) * 6 + int(p[2])) / 10;
-        }
         image_ = source_;
         render();
     }
@@ -911,24 +929,40 @@ public:
     const char* kind() const override { return "ice"; }
 
     bool advance(float seconds) override {
-        // Its glass slides in real time; drawn when its pace says.
-        time_ += std::max(0.0f, seconds);
+        seconds = std::max(0.0f, seconds);
         const int n = pace_.due(seconds);
-        if (n)
+        if (realTime_) {
+            if (n)
+                move(seconds + held_), held_ = 0;
+            else
+                held_ += seconds;
+        } else {
+            for (int k = 0; k < n; ++k)
+                move(1.0f / 120);
+        }
+        if (n && (int(std::lround(u_)) != drawnU_ || int(std::lround(v_)) != drawnV_)) {
             render();
-        return n > 0;
+            return true;
+        }
+        return false;
     }
 
 private:
-    // How far the moving one has slid, in pixels.
-    std::array<float, 2> offset() const {
-        const float angle = 2 * kPi * frequency_ * time_;
+    void move(float dt) {
+        clock_ += dt * 120;
+        uPan_ -= 2 * dt * hSpeed_;
+        vPan_ += 2 * dt * vSpeed_;
+        const float f = frequency_ * clock_ * 0.0012f;
+        auto whole = [](float x) { return float(int(std::lround(x))); };
         switch (panning_) {
-        case Circular: return {amplitude_ * std::cos(angle), amplitude_ * std::sin(angle)};
-        case Gestation: return {amplitude_ * std::sin(angle), amplitude_ * std::sin(angle * 1.3f)};
-        case WavyX: return {hSpeed_ * time_, vSpeed_ * time_ + amplitude_ * std::sin(angle)};
-        case WavyY: return {hSpeed_ * time_ + amplitude_ * std::sin(angle), vSpeed_ * time_};
-        default: return {hSpeed_ * time_, vSpeed_ * time_};
+        case Circular: u_ = uPan_ + whole(amplitude_ * std::sin(f)), v_ = vPan_ + whole(amplitude_ * std::cos(f)); break;
+        case Gestation:
+            u_ = uPan_ + whole(amplitude_ * std::sin(f));
+            v_ = vPan_ + whole(amplitude_ * std::cos(frequency_ * clock_ * 0.0011f));
+            break;
+        case WavyX: u_ = uPan_ + whole(amplitude_ * std::sin(f) * 0.5f), v_ = vPan_; break;
+        case WavyY: u_ = uPan_, v_ = vPan_ + whole(amplitude_ * std::cos(f) * 0.5f); break;
+        default: u_ = uPan_, v_ = vPan_; break;
         }
     }
 
@@ -936,28 +970,30 @@ private:
 
     void render() {
         const int w = source_.w, h = source_.h;
-        const auto [ou, ov] = offset();
-        const int gx = int(std::floor(ou)), gy = int(std::floor(ov));
-        // The glass's offset, or the source's with MoveIce.
-        const int glassX = moveIce_ ? 0 : gx, glassY = moveIce_ ? 0 : gy;
-        const int srcX = moveIce_ ? gx : 0, srcY = moveIce_ ? gy : 0;
-        auto glassAt = [&](int x, int y) {
-            return brightness_[size_t(wrap(y + glassY, h)) * size_t(w) + size_t(wrap(x + glassX, w))];
-        };
+        const int u = int(std::lround(u_)), v = int(std::lround(v_));
+        drawnU_ = u;
+        drawnV_ = v;
         for (int y = 0; y < h; ++y)
             for (int x = 0; x < w; ++x) {
-                const int dx = std::clamp((glassAt(x + 1, y) - glassAt(x - 1, y)) / 4, -16, 16);
-                const int dy = std::clamp((glassAt(x, y + 1) - glassAt(x, y - 1)) / 4, -16, 16);
-                std::copy_n(source_.pixel(wrap(x + dx + srcX, w), wrap(y + dy + srcY, h)), 4, image_.pixel(x, y));
+                int sx, sy;
+                if (moveIce_) { // the source shifted
+                    sx = int(glass_[size_t(y) * size_t(w) + size_t(x)]) + x + u;
+                    sy = y + v;
+                } else { // the glass shifted
+                    sx = int(glass_[size_t(wrap(y + v, h)) * size_t(w) + size_t(wrap(x + u, w))]) + x;
+                    sy = y;
+                }
+                std::copy_n(source_.pixel(wrap(sx, w), wrap(sy, h)), 4, image_.pixel(x, y));
             }
     }
 
-    image::Image source_, glass_;
-    std::vector<int> brightness_;
+    image::Image source_;
+    std::vector<uint8_t> glass_;
     uint8_t panning_ = Linear;
-    float hSpeed_ = 0, vSpeed_ = 0, frequency_ = 0, amplitude_ = 0;
-    bool moveIce_ = false;
-    float time_ = 0;
+    bool realTime_ = false, moveIce_ = false;
+    float hSpeed_ = 0, vSpeed_ = 0, frequency_ = 1, amplitude_ = 1;
+    float clock_ = 0, uPan_ = 0, vPan_ = 0, u_ = 0, v_ = 0, held_ = 0;
+    int drawnU_ = 0, drawnV_ = 0;
     Pace pace_;
 };
 
@@ -1253,10 +1289,11 @@ std::unique_ptr<AnimatedTexture> openAnimatedTexture(const PackageSet& packages,
         return out ? std::move(out) : fail(err);
     }
     if (cls == "icetexture") {
-        image::Image source, glass;
+        image::Image source;
+        std::vector<uint8_t> glass;
         if (!scaledPicture(packages, package, t.props.object("SourceTexture"), t.width, t.height, source))
             return fail(what + ": its SourceTexture doesn't read");
-        if (!scaledPicture(packages, package, t.props.object("GlassTexture"), t.width, t.height, glass))
+        if (!scaledIndices(packages, package, t.props.object("GlassTexture"), t.width, t.height, glass))
             return fail(what + ": its GlassTexture doesn't read");
         return std::make_unique<Ice>(t.props, std::move(source), std::move(glass));
     }

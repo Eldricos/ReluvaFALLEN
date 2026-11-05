@@ -89,11 +89,17 @@ read too. Every texture has one frame more than its count: the "ring"
 frame, which turns the last frame back into the first, so after it play
 carries on from the second. Its `Flic` (a C3DFLIC object) is empty.
 
-Timing: length / frames is 1/30 s in every texture, so a frame shows
-for that divided by the rate (`Rate`, 0.014 to 1): the red blinker
-`FlcAnim.Redblink01` (rate 0.1) a third of a second a frame. That the
-rate divides is a guess from its saved `FrameTime` (0.058, more than
-1/30). Pixels go through the FLC's own palette chunks, starting from
+Timing, as Engine.dll's `UFliTexture::Tick` does it: `FrameTime` is
+the time from the start (0 to `Length`), moved on by each tick times
+`Rate` while `Mode` is once or looping (a tick longer than `Length`
+moves it not at all); past `Length` looping goes round (`FrameTime`
+modulo `Length`) and once stops (`Mode` 0) back at the start, or, with
+`bFinishAtEnd`, on its last frame (the engine steps one frame short of
+the ring frame and leaves `FrameNum` 0; Reluva leaves it on the last
+frame's number). `FrameNum` is 1 + 30 x `FrameTime` in whole frames: a
+frame shows 1/30 s at `Rate` 1 (length / frames is 1/30 s in every
+texture), so the red blinker `FlcAnim.Redblink01` (rate 0.1) a third of
+a second a frame. Pixels go through the FLC's own palette chunks, starting from
 the texture's palette; masked textures, and any on a masked surface, see
 through colour 0.
 
@@ -244,24 +250,34 @@ turn in 256 steps, 0-255.
 
 ### Ice (IceTexture)
 
-A `SourceTexture` seen through a `GlassTexture`, one sliding over the
-other (both scaled to the texture's size). Each pixel shows the source
-shifted by the slope of the glass's brightness there (a quarter of the
-difference either side, up to 16 pixels), like light bent by uneven
-glass. The glass slides, or with `MoveIce` the source does, as
-`PanningStyle` says (`PanningType` in Fire.u):
+As Fire.dll's `UIceTexture` makes it (`MoveIcePosition`, `RenderIce`,
+`BlitTexIce`, `BlitIceTex`): each pixel (x, y) shows the `SourceTexture`
+along its row by the `GlassTexture`'s palette index there, wrapping:
+without `MoveIce` the glass shifted by the position (U, V), source[y][x +
+glass[y + V][x + U]]; with it the source shifted, source[y + V][x + U +
+glass[y][x]]. The position:
 
-| Style | Movement |
-|---|---|
-| 0 Linear | `HorizPanSpeed`, `VertPanSpeed`: 128 still, each step either side a quarter of a pixel a second |
-| 1 Circular | round a circle of `Amplitude` / 4 pixels, `Frequency` / 64 turns a second |
-| 2 Gestation | to and fro on both axes, at slightly different rates |
-| 3 WavyX, 4 WavyY | linear, with a wobble across |
+- a clock (`MasterCount`) moving 120 a second;
+- a pan (`UDisplace`, `VDisplace`): U less 2 x (`HorizPanSpeed` - 128)
+  pixels a second, V plus 2 x (`VertPanSpeed` - 128);
+- by `PanningStyle` (`PanningType` in Fire.u), with a = `Amplitude` + 1
+  and f = (`Frequency` + 1) x clock x 0.0012 radians, added in whole
+  pixels to the pan:
 
-`TimeMethod` (frame-rate synced or real time) isn't used: it slides in
-real time, drawn as the frame rates above pace it. With no ice textures
-in The Fallen, this is Reluva's reading of the property names, tried
-only on the tests' made-up texture, and not checked against Fire.dll.
+| Style | U | V |
+|---|---|---|
+| 0 Linear | | |
+| 1 Circular | a sin f | a cos f |
+| 2 Gestation | a sin f | a cos (f x 0.0011 / 0.0012) |
+| 3 WavyX | a sin f / 2 | |
+| 4 WavyY | | a cos f / 2 |
+
+`TimeMethod` 0 (frame-rate synced) moves it a 120th of a second each
+time the texture is due (`UTexture::Tick`'s pacing, so with
+`MaxFrameRate` 0 a 120th each frame drawn); 1 (real time) by each tick's
+time. It's drawn again only when the position, rounded to whole pixels,
+changes. With no ice textures in The Fallen, tried only on the tests'
+made-up texture.
 
 ### Scripted (ScriptedTexture)
 

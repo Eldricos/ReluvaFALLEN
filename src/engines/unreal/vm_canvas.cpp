@@ -106,36 +106,47 @@ void ScriptLevel::trackFli(VmObject* tex) {
     flis_[tex] = f;
 }
 
-// An FliTexture played as the HUD has it (SetFlick, SetFlickSpeed): Mode
-// stopped (0) leaves it on its frame, once (1) plays to its end and stops
-// there, back on the first frame (the last turns into the first), looping
-// (2) goes round; a frame shows 1/30 s (its length over its frames) at
-// Rate 1, over Rate.
+// An FliTexture played as Engine.dll's UFliTexture::Tick plays it:
+// FrameTime is its time from the start (0 to Length), moved on by the
+// tick times Rate while Mode is once (1) or looping (2); a tick longer
+// than Length moves it not at all. Past Length, looping goes round
+// (FrameTime modulo Length); once stops (Mode 0) back at the start, or
+// with bFinishAtEnd on its last frame. FrameNum is 1 + 30 x FrameTime,
+// whole frames: a frame shows 1/30 s at Rate 1.
 void ScriptLevel::tickFlis(float seconds) {
     for (auto& [tex, f] : flis_) {
         Value* mode = prop(tex, "Mode");
-        if (!mode || mode->asInt() == 0 || f.frames <= 0)
+        if (!mode || f.frames <= 0)
+            continue;
+        const int m = mode->asInt();
+        if (m != 1 && m != 2)
             continue;
         Value* time = prop(tex, "FrameTime");
         Value* frame = prop(tex, "FrameNum");
         const Value* rate = prop(tex, "Rate");
+        const Value* lengthValue = prop(tex, "Length");
+        const Value* finish = prop(tex, "bFinishAtEnd");
         if (!time || !frame)
             continue;
+        const float length = lengthValue && lengthValue->asFloat() > 0 ? lengthValue->asFloat()
+                                                                       : float(f.frames) * f.frameSeconds;
+        if (seconds >= length)
+            seconds = 0;
         float t = time->asFloat() + seconds * (rate ? rate->asFloat() : 1);
-        int n = std::max(1, frame->asInt());
-        while (t >= f.frameSeconds) {
-            t -= f.frameSeconds;
-            if (++n > f.frames) {
-                n = 1;
-                if (mode->asInt() == 1) {
-                    *mode = Value::byteValue(0);
-                    t = 0;
-                    break;
-                }
+        bool hold = false;
+        if (t >= length) {
+            if (m == 1) {
+                t = 0;
+                *mode = Value::byteValue(0);
+                hold = finish && finish->asInt() != 0;
+            } else {
+                t = std::fmod(t, length);
             }
         }
         *time = Value::floatValue(t);
-        *frame = Value::intValue(n);
+        // Shown: its last frame when held at the end (Engine.dll steps one
+        // frame short of the ring frame and leaves FrameNum 0).
+        *frame = Value::intValue(hold ? f.frames : std::clamp(1 + int(std::floor(t * 30)), 1, f.frames));
     }
 }
 
