@@ -1663,7 +1663,12 @@ Each is worked out in the mesh's animation now:
 The natives:
 - `C3DGetJointWorldPos(Bone, out Location, out Rotation)`: a bone's place
   and axes. The cut-scene cameras aim at a speaker's `Bip01_Head`.
-  `C3DGetJointLocalPos` gives it from the actor's own location, unturned.
+  `C3DGetJointLocalPos` gives it in the skeleton's own space, with only
+  its axes swapped to Unreal's: no Location, PrePivot, Rotation,
+  DrawScale or mesh Scale, in the skeleton's units (Engine.dll's
+  `execC3DGetJointLocalPos`). A bone that isn't there, or an actor with
+  no skeleton, leaves the out values as they were (the original logs
+  "Bone doesn't exist").
   - **The axes are in the scripts' order:** X is the skeleton's -Z, Y its
     -X, and Z its Y. This was worked out from what the scripts do with
     them, and fits Kira's skeleton in every case:
@@ -1673,15 +1678,15 @@ The natives:
       `CTV_ColdBreath`);
     - a foot standing flat has Z along the ground's normal and X
       toward its toes (`CalcFootZ`).
-  The `Rel` forms are taken as relative to the bone's parent:
-  - `C3DGetJointWorldPosRel` is the step from the parent bone to this
-    one, in the world's axes. Its rotation is the bone's turn from the
-    parent's.
-  - `C3DGetJointLocalPosRel` is that step in the parent's own axes: the
-    skeleton's offset for the bone, as posed, times DrawScale. Both the
-    step and the turn use the scripts' order of axes.
-  - No script calls them, so what they're meant to give is a guess
-    from their names.
+  The `Rel` forms:
+  - `C3DGetJointLocalPosRel` (Engine.dll's) gives the same place as
+    `C3DGetJointLocalPos`. Its rotation is the bone's turn from its bind
+    pose (`Bind^-1 * Current`, in the skeleton's space), in Unreal's
+    axes. "Rel" is relative to the bind pose, not the parent.
+  - `C3DGetJointWorldPosRel` is taken as the step from the parent bone
+    to this one, in the world's axes, its rotation the bone's turn.
+    It wasn't read from Engine.dll.
+  - No script calls any of the three.
 - `C3DDoesBoneExist`.
 - `C3DGetAttachPtCoords(Name, out Pos, out Orientation)`: an attachment
   point in the world (`GunTip`, `FirePoint`, `KickPoint`...). On a
@@ -1738,7 +1743,16 @@ last until the scripts' next tick replaces them:
   turn away from its bind pose (the skeleton as modelled) apart into
   yaw, pitch and roll (roll first, then pitch, then yaw, in the
   skeleton's axes), drops those asked for, and puts the rest back: the
-  bone where it is, turned from its bind pose by what's left.
+  bone where it is, turned from its bind pose by what's left. As in
+  Engine.dll, there's no yaw when the bone's X row stands within 0.0001
+  of straight up. There's no roll when the cosine between the yawed X
+  and the turned X is 0.9999 or more (under about 0.8 degrees).
+- **Read from Engine.dll:** `C3DApplyRotation` (degrees, about the
+  bone's own axes, before its turn: pitch X, yaw Y, roll Z), and
+  `C3DApplyWorldRotation` (the rotator in the mesh's unturned frame,
+  through the fixed swap of axes, the actor's own Rotation left out).
+  Both match Reluva's. Their turns last until the pose is next worked
+  out from the animation, once a tick.
 - **The IK chains:** `C3DSetIkTargetPositionAbs` / `C3DSetIkTargetOrientationAbs`
   (in the world), and `C3DSetIkTargetPosition` / `C3DSetIkTargetOrientation`
   (from another actor's place and turn). Each takes a chain's name and a

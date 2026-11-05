@@ -339,42 +339,45 @@ bool ScriptLevel::boneAt(VmObject* a, NameId bone, BonePlace place, Vec& locatio
     if (!m || !m->poser)
         return false;
     const Value* seqValue = prop(a, "AnimSequence");
-    const Value* frameValue = prop(a, "AnimFrame");
     if (!seqValue || !seqValue->i)
         return false;
-    const std::string seq = vm_.nameText(seqValue->i), name = vm_.nameText(bone);
-    const float frame = frameValue ? frameValue->asFloat() : 0;
-    std::vector<std::string> names;
-    std::vector<LayeredPoser::Layer> layers;
-    LayeredPoser::Adjust adjust;
-    // With its layers and its scripts' bends, as it's drawn.
-    auto pose = [&] {
-        layers = posedLayers(a, *m, names);
-        adjust = adjustOf(a, *m);
-    };
-    const Value* scale = prop(a, "DrawScale");
-    const float ds = scale ? scale->asFloat() : 1;
-    if (place == BonePlace::InParent) {
-        pose();
-        // Its place in its parent bone, in the parent's axes (by DrawScale).
-        Vec origin{};
-        Axes axes{};
-        if (!m->poser->boneInParent(seq, frame, layers, name, origin, axes, &adjust))
-            return false;
-        // In the parent's axes as the scripts order them, and its own so.
-        Axes local{};
-        for (size_t k = 0; k < 3; ++k)
-            local[k] = inScriptAxes(axes[k]);
-        location = mul(inScriptAxes(origin), ds);
-        rotation = rotOf(scriptAxes(local));
-        return true;
-    }
+    const std::string name = vm_.nameText(bone);
     const std::vector<std::array<float, 12>>* posed = posedSkeleton(a, *m);
     if (!posed)
         return false;
     const std::vector<std::array<float, 12>>& worlds = *posed;
+    if (place == BonePlace::Local || place == BonePlace::InParent) {
+        // Engine.dll's: the bone in the skeleton's own space, only its axes
+        // swapped to Unreal's (no Location, Rotation, DrawScale, mesh Scale
+        // or PrePivot). LocalPosRel the same place, and its turn from its
+        // bind pose (Bind^-1 Current) for the rotation.
+        const int b = m->poser->boneIndex(name);
+        if (b < 0 || size_t(b) >= worlds.size())
+            return false;
+        const std::array<float, 12>& w = worlds[size_t(b)];
+        std::array<float, 12> r = w;
+        if (place == BonePlace::InParent) {
+            const std::vector<std::array<float, 12>> binds = m->poser->bindSkeleton();
+            if (size_t(b) >= binds.size())
+                return false;
+            const std::array<float, 12>& bind = binds[size_t(b)];
+            for (size_t row = 0; row < 3; ++row)
+                for (size_t c = 0; c < 3; ++c) {
+                    float sum = 0;
+                    for (size_t j = 0; j < 3; ++j)
+                        sum += bind[j * 3 + row] * w[j * 3 + c];
+                    r[row * 3 + c] = sum;
+                }
+        }
+        Axes axes{};
+        for (size_t k = 0; k < 3; ++k)
+            axes[k] = inScriptAxes({r[k * 3], r[k * 3 + 1], r[k * 3 + 2]});
+        location = inScriptAxes({w[9], w[10], w[11]});
+        rotation = rotOf(scriptAxes(axes));
+        return true;
+    }
     // The bone, and for FromParent its parent, where they are.
-    auto placed = [&](const std::string& which, Vec& at, Axes& axes, bool world) {
+    auto placed = [&](const std::string& which, Vec& at, Axes& axes) {
         const NameId key = vm_.name(which);
         auto found = m->boneIndex.find(key);
         if (found == m->boneIndex.end())
@@ -394,22 +397,19 @@ bool ScriptLevel::boneAt(VmObject* a, NameId bone, BonePlace place, Vec& locatio
         at = placeMeshVertex(m->mesh, origin);
         for (size_t k = 0; k < 3; ++k)
             axes[k] = unit(sub(placeMeshVertex(m->mesh, add(origin, packed[k])), at));
-        if (world)
-            toWorld(a, at, &axes);
-        else
-            at = mul(at, ds);
+        toWorld(a, at, &axes);
         return true;
     };
     Vec at{};
     Axes axes{};
-    if (!placed(name, at, axes, place != BonePlace::Local))
+    if (!placed(name, at, axes))
         return false;
     if (place == BonePlace::FromParent) {
         // From its parent, in the world's axes.
         Vec parent{};
         Axes parentAxes{};
         const std::string up = m->poser->parentOf(name);
-        if (!up.empty() && placed(up, parent, parentAxes, true))
+        if (!up.empty() && placed(up, parent, parentAxes))
             at = sub(at, parent);
     }
     location = at;
@@ -749,9 +749,11 @@ void registerAttachNatives(Vm& vm) {
         c.args[rot] = c.vm.rotatorValue(r[0], r[1], r[2]);
     };
     // C3DGetJointWorldPos(name Bone, out Vector Location, out Rotator Rotation): in the world;
-    // LocalPos from the actor, unturned; WorldPosRel from its parent bone, in the world's axes;
-    // LocalPosRel its place in its parent bone (none of the last three called by The Fallen's
-    // scripts: Reluva's reading of their names).
+    // LocalPos in the skeleton's space, in Unreal's axes; LocalPosRel the same place, turned as
+    // from its bind pose (both as Engine.dll's); WorldPosRel from its parent bone, in the
+    // world's axes (Reluva's reading of its name). None of the last three is called by The
+    // Fallen's scripts. A bone that isn't there leaves the out values as they were, as
+    // Engine.dll does (it logs "Bone doesn't exist").
     const std::pair<const char*, ScriptLevel::BonePlace> joints[] = {
         {"Actor.C3DGetJointWorldPos", ScriptLevel::BonePlace::World},
         {"Actor.C3DGetJointLocalPos", ScriptLevel::BonePlace::Local},
@@ -764,7 +766,8 @@ void registerAttachNatives(Vm& vm) {
             ScriptLevel::Vec at{};
             ScriptLevel::Rot r{};
             const bool found = c.vm.level && c.self && c.vm.level->boneAt(c.self, c.i(0), place, at, r);
-            answer(c, found, at, r, 1, 2, world);
+            if (found || place == ScriptLevel::BonePlace::World || place == ScriptLevel::BonePlace::FromParent)
+                answer(c, found, at, r, 1, 2, world);
         });
     }
     reg("Actor.C3DDoesBoneExist", [](NativeCall& c) {

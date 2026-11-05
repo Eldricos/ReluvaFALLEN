@@ -244,6 +244,8 @@ public:
     // there's none), for asking after many bones of one pose.
     bool skeleton(std::string_view base, float fraction, const std::vector<Layer>& layers,
                   std::vector<std::array<float, 12>>& worlds, const Adjust* adjust = nullptr) const;
+    // Every bone's place in the skeleton's space in its bind pose.
+    std::vector<std::array<float, 12>> bindSkeleton() const;
     int boneIndex(std::string_view name) const;
     std::string boneName(int index) const;
     // The bone that moves these vertices most (by their weights summed): a
@@ -253,11 +255,7 @@ public:
     bool boneInSkeleton(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
                         Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust = nullptr) const;
     bool hasBone(std::string_view name) const;
-    // Its place in its parent bone in the same pose (the bone's own units,
-    // the skeleton's: as placed vertices' before the mesh's turn), and its
-    // parent's name (empty for the root).
-    bool boneInParent(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
-                      Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust = nullptr) const;
+    // A bone's parent's name (empty for the root).
     std::string parentOf(std::string_view name) const;
 
     struct Impl;

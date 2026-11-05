@@ -2038,8 +2038,20 @@ void LayeredPoser::Impl::adjusted(std::vector<Mat43>& local, const Adjust& adjus
             rot[9] = rot[10] = rot[11] = 0;
             const Mat43 x = then(inverse, rot);
             float pitch = std::asin(std::clamp(-x[7], -1.0f, 1.0f));
-            float yaw = std::atan2(x[6], x[8]);
-            float roll = std::atan2(x[1], x[4]);
+            // Engine.dll's: no yaw when the X row is (nearly) straight up
+            // or down; the roll as the angle between the yawed X axis and
+            // the turned one, none under a cosine of 0.9999 (about 0.8
+            // degrees), signed by which side of the Z row it falls.
+            const float level = std::sqrt(x[6] * x[6] + x[8] * x[8]);
+            float yaw = level < 0.0001f ? 0 : std::atan2(x[6], x[8]);
+            const float v[3] = {std::cos(yaw), 0, -std::sin(yaw)};
+            const float d = v[0] * x[0] + v[1] * x[1] + v[2] * x[2];
+            float roll = 0;
+            if (d < 0.9999f) {
+                const float cross[3] = {v[1] * x[2] - v[2] * x[1], v[2] * x[0] - v[0] * x[2], v[0] * x[1] - v[1] * x[0]};
+                const float side = cross[0] * x[6] + cross[1] * x[7] + cross[2] * x[8];
+                roll = std::acos(std::clamp(d, -1.0f, 1.0f)) * (side < 0 ? -1.0f : 1.0f);
+            }
             if (op.remove[0])
                 pitch = 0;
             if (op.remove[1])
@@ -2367,27 +2379,6 @@ void LayeredPoser::Impl::addFaces(const std::vector<Face>& faces, const std::vec
     }
 }
 
-bool LayeredPoser::boneInParent(std::string_view base, float fraction, const std::vector<Layer>& layers,
-                                std::string_view name, Vec3f& origin, std::array<Vec3f, 3>& axes,
-                                const Adjust* adjust) const {
-    const Impl& m = *impl;
-    const std::string wanted = fs::toLower(name);
-    for (size_t i = 0; i < m.bones.size(); ++i) {
-        if (fs::toLower(m.bones[i].name) != wanted)
-            continue;
-        std::vector<Mat43> local;
-        if (!m.locals(base, fraction, layers, local, adjust))
-            return false;
-        for (size_t c = 0; c < 3; ++c) {
-            origin[c] = local[i][9 + c];
-            for (size_t row = 0; row < 3; ++row)
-                axes[row][c] = local[i][row * 3 + c];
-        }
-        return true;
-    }
-    return false;
-}
-
 std::string LayeredPoser::parentOf(std::string_view name) const {
     const std::string wanted = fs::toLower(name);
     for (const BoneRecord& b : impl->bones)
@@ -2411,6 +2402,13 @@ bool LayeredPoser::skeleton(std::string_view base, float fraction, const std::ve
         return false;
     worlds = impl->worlds(local);
     return true;
+}
+
+std::vector<std::array<float, 12>> LayeredPoser::bindSkeleton() const {
+    std::vector<Mat43> bind(impl->bones.size());
+    for (size_t k = 0; k < impl->bones.size(); ++k)
+        bind[k] = impl->bones[k].placement;
+    return impl->worlds(bind);
 }
 
 int LayeredPoser::boneIndex(std::string_view name) const { return impl->indexOf(name); }
