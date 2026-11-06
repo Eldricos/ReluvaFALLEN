@@ -68,7 +68,8 @@ check again:
 ./build/reluva-tool ue-run    "/path/to/DS9TheFallen" <map | -all> [seconds]
 ./build/reluva-tool ue-play   "/path/to/DS9TheFallen" <map> play wait 20 hold w 2 shot frame.ppm
 ./build/reluva-tool ue-points "/path/to/DS9TheFallen"     # attachment points against the meshes' precomputed places
-./build/reluva-tool ue-ledges "/path/to/DS9TheFallen" M01_KiraL2   # places to pull up onto a ledge or catch one
+./build/reluva-tool ue-ledges "/path/to/DS9TheFallen" M01_KiraL2   # places to pull up onto a ledge or catch one, duck under, swim into
+./build/reluva-tool ue-ledges "/path/to/DS9TheFallen" M01_KiraL2 ladders   # the ladders, their width, a foot in water
 ./build/reluva-tool ue-trace "/path/to/DS9TheFallen" M01_KiraL2 x y z x2 y2 z2 [ex ey ez]   # a box swept through the BSP
 ./build/reluva-tool ue-extract "/path/to/DS9TheFallen" <package> <export>   # a texture (.tga), sound or music
 ./build/reluva-tool video-frame "/path/to/DS9TheFallen/movies/intro.avi" <frame> frame.ppm

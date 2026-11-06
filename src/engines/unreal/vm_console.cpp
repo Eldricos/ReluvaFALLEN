@@ -62,8 +62,16 @@ std::string command(NativeCall& c, const std::string& text) {
     // class it names, as the engine writes a class.
     if (verb == "get" && w.size() >= 3) {
         const std::string section = sectionOf(c.vm, w[1]);
-        if (fs::toLower(w[2]) == "class" && section.find('.') != std::string::npos)
+        if (fs::toLower(w[2]) == "class" && section.find('.') != std::string::npos) {
+            // Reluva draws as the game's hardware drivers do, so the
+            // render device is Direct3D's even where the .ini (as shipped)
+            // names the software one: the scripts hide the flashlight,
+            // breather, armour belt and tricorder grid in software mode
+            // (Actor.InSoftwareMode).
+            if (fs::toLower(section) == "softdrv.softwarerenderdevice")
+                return "Class'D3DDrv.D3DRenderDevice'";
             return "Class'" + section + "'";
+        }
         if (const std::string* v = c.vm.configSetting(section, w[2]))
             return *v;
         // The engine's own settings no .ini here holds: the video options'

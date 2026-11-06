@@ -372,6 +372,9 @@ public:
     // A console command as the player types it (its ConsoleCommand), and
     // what it answers; ue-play's tests.
     std::string consoleCommand(const std::string& command);
+    // A live actor's event or function with no arguments run ("player":
+    // the player's pawn); ue-play's tests (BeginEvent: the use key).
+    bool callFunction(const std::string& actor, const std::string& function);
     // A live actor of that name: where it is, its state, physics and
     // collision, whether it's hidden ("no such actor" if there's none).
     std::string describeActor(const std::string& name);

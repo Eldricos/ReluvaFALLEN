@@ -811,10 +811,25 @@ bool MapViewer::teleportPlayer(const std::string& name, const Vec3f& offset, flo
                 *r = vm.rotatorValue(0, units, 0);
         if (Value* v = p->find(vm, "Velocity"))
             *v = vm.vectorValue(0, 0, 0);
-        if (Value* ph = p->find(vm, "Physics"))
-            ph->i = 2; // falling, onto whatever's under it
+        // Falling, onto whatever's under it, if walking (going into water
+        // has already set it swimming).
+        if (Value* ph = p->find(vm, "Physics"); ph && ph->i == 1)
+            ph->i = 2;
         return true;
     }
+    return false;
+}
+
+bool MapViewer::callFunction(const std::string& name, const std::string& function) {
+    if (!play_)
+        return false;
+    Vm& vm = play_->vm();
+    const bool player = fs::toLower(name) == "player";
+    for (VmObject* a : play_->level().actors())
+        if (!a->deleted && (player ? a == play_->player() : fs::toLower(vm.nameText(a->name)) == fs::toLower(name))) {
+            vm.callEvent(a, function.c_str());
+            return true;
+        }
     return false;
 }
 
@@ -889,8 +904,10 @@ std::string MapViewer::actorProperty(const std::string& name, const std::string&
     if (!play_)
         return "not playing";
     Vm& vm = play_->vm();
+    // "player": the player's pawn, whatever it's called.
+    const bool player = fs::toLower(name) == "player";
     for (VmObject* a : play_->level().actors())
-        if (!a->deleted && fs::toLower(vm.nameText(a->name)) == fs::toLower(name)) {
+        if (!a->deleted && (player ? a == play_->player() : fs::toLower(vm.nameText(a->name)) == fs::toLower(name))) {
             const Value* v = a->find(vm, property);
             if (!v)
                 return "no such property";

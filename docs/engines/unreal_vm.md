@@ -565,10 +565,31 @@ the player to face into the wall before asking its scripts'
     (`ledgeu`) and walks on 104 higher; back lets go. Held forward
     through the catch, she pulls up at once, as the hanging state's
     script asks.
+  - **Ducking under:** on M03_SiskoL2 at (1515, -1693), walking into a
+    low gap stops the player for 0.3 s, then the player crouches
+    (`CrchWalkF`, height 32.5) and goes on under it until the ceiling
+    slopes too low even for that. Walking back out, the player stands up
+    again.
+  - **Out of water:** on M01_KiraL1B at (-1589, -5514), swimming into a
+    rim 20 over the water floats the player up to it, then
+    `PlayerClambering` pulls up onto it. Into a wall with no room over
+    the water (M11_SiskoL1a), the player stays swimming.
+  - **A ladder's edges:** on TrainingRoom, walking into the 32-wide
+    ladder at (32, 1625) 15 off its middle puts the player 4 off it
+    (12 inside the edge), and 14 off the other way, 4 off that way.
+    Then up at 120 a second, over the top, and on.
+  - **A ladder from the water:** on M06_SiskoL1B the ladder at (2816,
+    -935) stands in shallow water. Wading into it climbs it. At its top
+    the player stays on it: the ladder's own top (-1118) is 2 over the
+    floor behind it, so the footing test, 2 under the ledge's top, finds
+    no floor (`TestForStrongLedgeFooting`), as Engine.dll's tests give.
   - `reluva-tool ue-ledges <game> <map>` lists places to try (a wall
     straight ahead, a flat top 30 to 110 over the floor to pull up onto,
-    or 115 to 160 to catch in a jump). `ue-trace` sweeps a box through a
-    level's BSP.
+    or 115 to 160 to catch in a jump), low gaps to duck under, and walls
+    to swim into (with the rim's height over the water). `ue-ledges
+    <game> <map> ladders` lists the ladder polygons (`TexTag`
+    TT_Ladder), their width, and whether their foot is in water.
+    `ue-trace` sweeps a box through a level's BSP.
 
 The input axes are 20 times the bindings' speeds (`aBaseY` 6000 for a
 held MoveForward), as UE1's input scales a held key's axis. The
@@ -1010,6 +1031,16 @@ Console commands (`ConsoleCommand`, `vm_console.cpp`):
 - `get Section Key` gives a setting (`ini:Engine.Engine.ViewportManager
   Brightness`: the section of the class the ini names), else a class's
   default; `get ... Class` the class it names.
+  - The render device (`get ini:Engine.Engine.GameRenderDevice Class`)
+    is Direct3D's (`D3DDrv.D3DRenderDevice`) where the `.ini` names the
+    software one, as the shipped `Default.ini` and `Unreal.ini` do.
+    Reluva draws as the hardware drivers do. The scripts ask for it
+    (`Actor.InSoftwareMode`) to hide the wrist flashlight, the breather,
+    the armour belt and the drill's inductor, and the tricorder grid, in
+    software mode. Until November 2026 they were all hidden. Now the
+    flashlight shows on the raised forearm (`C3DAttach(Player, 'Wrist',
+    'Arm')`), the breather at the mouth ('Face'), and the video options
+    name "Direct3D Support".
 - `set` changes one (above), and the class's property in its defaults and
   every object of it.
 - `KEYNAME n`, `KEYBINDING Key` and `SET Input Key Command` read and change

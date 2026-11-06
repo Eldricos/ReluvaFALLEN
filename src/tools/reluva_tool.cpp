@@ -160,6 +160,7 @@
 #include "engines/unreal/viewers.h"
 #include "tools/soft_renderer.h"
 #include "engines/unreal/collision.h"
+#include "engines/unreal/zones.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package_set.h"
 #include "engines/unreal/properties.h"
@@ -4806,13 +4807,14 @@ private:
 // (the player put by it, facing yaw degrees), where (the player's place,
 // state, physics and animation), camera <x> <y> <z> <yaw> <pitch> (the fly
 // camera put there, not playing), places <class part> (the live actors of
-// such classes and where they are),
+// such classes and where they are), prop <actor> <property> and call
+// <actor> <function> ("player": the player's pawn),
 // drag <dx> <dy>, click <x> <y> (the left button, there), shot <file.ppm>
 // (the next frame, saved).
 int cmdUePlay(int argc, char** argv) {
     if (argc < 4) {
         std::fprintf(stderr, "usage: reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | "
-                             "teleport <actor> <dx> <dy> <dz> <yaw> | camera <x> <y> <z> <yaw> <pitch> | places <class> | where | view | lines | actor <name> | prop <actor> <property> | console <command> | down <key> | up <key> | press <key> | travel <url> | saves <dir> | watch <actor> | "
+                             "teleport <actor> <dx> <dy> <dz> <yaw> | camera <x> <y> <z> <yaw> <pitch> | places <class> | where | view | lines | actor <name> | prop <actor> <property> | call <actor> <function> | console <command> | down <key> | up <key> | press <key> | travel <url> | saves <dir> | watch <actor> | "
                              "drag <dx> <dy> | click <x> <y> | shot <file.ppm>]...\n");
         return 2;
     }
@@ -4950,6 +4952,10 @@ int cmdUePlay(int argc, char** argv) {
         } else if (step == "console" && i + 1 < argc) {
             const std::string command = argv[++i];
             std::printf("console %s: %s\n", command.c_str(), page.consoleCommand(command).c_str());
+            frame();
+        } else if (step == "call" && i + 2 < argc) {
+            const std::string who = argv[++i], what = argv[++i];
+            std::printf("call %s.%s: %s\n", who.c_str(), what.c_str(), page.callFunction(who, what) ? "done" : "no such actor");
             frame();
         } else if (step == "actor" && i + 1 < argc) {
             const std::string who = argv[++i];
@@ -5451,6 +5457,70 @@ int cmdUeLedges(int argc, char** argv) {
         std::fprintf(stderr, "no level model in %s %s\n", argv[3], error.c_str());
         return 1;
     }
+    // The water zones (their ZoneInfo's class a water one), for walls to
+    // swim into.
+    ZoneVisibility zv;
+    zv.build(model);
+    uint64_t water = 0;
+    for (size_t z = 0; z < model.zones.size() && z < 64; ++z) {
+        const int32_t ref = model.zones[z].actor;
+        if (ref <= 0)
+            continue;
+        std::string cls = pkg->className(ref);
+        for (char& ch : cls)
+            ch = char(std::tolower(static_cast<unsigned char>(ch)));
+        if (cls.find("h20zone") != std::string::npos || cls.find("waterzone") != std::string::npos ||
+            cls.find("lavazone") != std::string::npos)
+            water |= uint64_t(1) << z;
+    }
+    auto wet = [&](const Vec3f& p) {
+        bool solid = false;
+        const int z = zv.zoneAt(p, &solid);
+        return !solid && z >= 0 && z < 64 && ((water >> z) & 1);
+    };
+    // "ladders": each upright polygon with a ladder texture (TexTag
+    // TT_Ladder), its width along the wall.
+    if (argc == 5 && std::string(argv[4]) == "ladders") {
+        std::map<std::pair<const Package*, int>, bool> isLadder;
+        int count = 0;
+        for (const BspNode& n : model.nodes) {
+            if (std::fabs(n.plane[2]) > 0.1f || n.vertexCount < 3 || n.surf < 0 || size_t(n.surf) >= model.surfs.size())
+                continue;
+            const ObjectRef t = set.resolve(*pkg, model.surfs[size_t(n.surf)].texture);
+            if (!t)
+                continue;
+            auto [it, fresh] = isLadder.try_emplace({t.package, t.exportIndex}, false);
+            if (fresh) {
+                std::vector<uint8_t> data;
+                if (!t.package->readExport(t.exportIndex, data)) {
+                    Reader r(data, size_t(t.package->exports()[size_t(t.exportIndex)].serialOffset));
+                    PropertyList props;
+                    if (!beginObject(*t.package, t.exportIndex, r, props))
+                        if (const Property* tag = props.find("TexTag"); tag && !tag->data.empty())
+                            it->second = tag->data[0] == 1; // a byte
+                }
+            }
+            if (!it->second)
+                continue;
+            Vec3f c{};
+            float lo = 1e30f, hi = -1e30f, zlo = 1e30f, zhi = -1e30f;
+            const Vec3f side{-n.plane[1], n.plane[0], 0};
+            for (int k = 0; k < n.vertexCount; ++k) {
+                const Vec3f& q = model.points[size_t(model.verts[size_t(n.vertPool + k)].point)];
+                for (size_t a = 0; a < 3; ++a)
+                    c[a] += q[a] / float(n.vertexCount);
+                const float d = q[0] * side[0] + q[1] * side[1];
+                lo = std::min(lo, d), hi = std::max(hi, d), zlo = std::min(zlo, q[2]), zhi = std::max(zhi, q[2]);
+            }
+            ++count;
+            const bool inWater = wet({c[0] + n.plane[0] * 20, c[1] + n.plane[1] * 20, zlo + 10});
+            std::printf("ladder %.1f %.1f %.1f normal %.2f %.2f width %.1f from %.1f to %.1f%s\n", double(c[0]), double(c[1]),
+                        double(c[2]), double(n.plane[0]), double(n.plane[1]), double(hi - lo), double(zlo), double(zhi),
+                        inWater ? ", its foot in water" : "");
+        }
+        std::printf("%d found\n", count);
+        return 0;
+    }
     const int most = argc == 5 ? std::atoi(argv[4]) : 40;
     LevelCollision col(model);
     const float R = 17, H = 49.5f;
@@ -5480,6 +5550,24 @@ int cmdUeLedges(int argc, char** argv) {
             const Vec3f dir{std::cos(yaw), std::sin(yaw), 0};
             const Vec3f far{foot[0] + dir[0] * 80, foot[1] + dir[1] * 80, foot[2]};
             const auto wall = col.trace(foot, far, stand);
+            // A low gap: the ducked box from the feet goes on where the
+            // standing one can't, onto floor.
+            if (wall.hit() && !wall.startSolid) {
+                const float D = 32.5f;
+                const Vec3f low{foot[0], foot[1], feet + D + 1};
+                const Vec3f lowFar{low[0] + dir[0] * 120, low[1] + dir[1] * 120, low[2]};
+                const auto under = col.trace(low, lowFar, {R, R, D + 1});
+                const auto floorThere = col.trace(lowFar, {lowFar[0], lowFar[1], lowFar[2] - 20}, {R, R, D + 1});
+                const float gap = std::sqrt((wall.location[0] - foot[0]) * (wall.location[0] - foot[0]) +
+                                            (wall.location[1] - foot[1]) * (wall.location[1] - foot[1]));
+                if (!under.hit() && !under.startSolid && floorThere.hit() && floorThere.normal[2] > 0.7f && gap < 60 &&
+                    seen.insert(std::make_tuple(int(foot[0] / 64), int(foot[1] / 64), 100 + d)).second) {
+                    ++found;
+                    std::printf("duck %.1f %.1f %.1f yaw %d wall %.1f\n", double(foot[0]), double(foot[1]), double(foot[2]),
+                                d * 45, double(gap));
+                    continue;
+                }
+            }
             if (!wall.hit() || std::fabs(wall.normal[2]) > 0.1f || -(wall.normal[0] * dir[0] + wall.normal[1] * dir[1]) < 0.9f)
                 continue;
             // The top: down from high over the wall, just past its face.
@@ -5488,6 +5576,20 @@ int cmdUeLedges(int argc, char** argv) {
             if (!top.hit() || top.normal[2] < 0.9f || top.startSolid)
                 continue;
             const float rise = top.location[2] - 1 - feet;
+            // In water, its top out of it: swum into.
+            if (wet(foot) && !wet({past[0], past[1], top.location[2] + 4}) && rise > 30 &&
+                seen.insert(std::make_tuple(int(foot[0] / 64), int(foot[1] / 64), 200 + d)).second) {
+                ++found;
+                float surface = feet;
+                while (surface < top.location[2] + 8 && wet({foot[0], foot[1], surface + 1}))
+                    surface += 1;
+                const Vec3f overWater{foot[0], foot[1], surface + 20};
+                const bool open = !col.solid(overWater, {R, R, 18});
+                std::printf("swim %.1f %.1f %.1f yaw %d rise %.1f over water %.1f%s\n", double(foot[0]), double(foot[1]),
+                            double(foot[2]), d * 45, double(rise), double(top.location[2] - surface),
+                            open ? "" : " (no room over the water)");
+                continue;
+            }
             const bool clamber = rise > 30 && rise < 110, hang = rise > 115 && rise < 160;
             if (!clamber && !hang)
                 continue;

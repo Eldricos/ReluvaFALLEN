@@ -173,7 +173,11 @@ Meshes are lit at each vertex, as the original's renderer does:
     engine looks again for each light 1 frame in 16).
   - **Fading:** each light fades in as it's taken and out as it isn't,
     a full fade in a third of a second (768 of 255 a second), and still
-    lights the actor as it fades out.
+    lights the actor as it fades out. Seen walking the player across
+    M05_SiskoL1a: each change of light goes 0.1 a frame at 30 frames a
+    second, the light let go fading out as the one taken fades in. Two
+    lights of nearly the same weight can swap back and forth, each swap
+    a fade, as the code gives.
 - **No cylinder case**: the vertex lighting treats a cylinder light as
   any other, from where it is (only distance fog, `LE_DistanceFog`, is
   set aside, to scale the light by the height below it).
