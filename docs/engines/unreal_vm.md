@@ -1745,9 +1745,11 @@ The natives:
     `C3DGetJointLocalPos`. Its rotation is the bone's turn from its bind
     pose (`Bind^-1 * Current`, in the skeleton's space), in Unreal's
     axes. "Rel" is relative to the bind pose, not the parent.
-  - `C3DGetJointWorldPosRel` is taken as the step from the parent bone
-    to this one, in the world's axes, its rotation the bone's turn.
-    It wasn't read from Engine.dll.
+  - `C3DGetJointWorldPosRel` (Engine.dll's) gives the same place as
+    `C3DGetJointWorldPos`. Its rotation is the bone's turn from its bind
+    pose (`Bind^-1 * Current`), carried into the world as `WorldPos`
+    carries the bone's own. It's relative to the bind pose too, not the
+    parent. A bone that isn't there leaves the out values as they were.
   - No script calls any of the three.
 - `C3DDoesBoneExist`.
 - `C3DGetAttachPtCoords(Name, out Pos, out Orientation)`: an attachment

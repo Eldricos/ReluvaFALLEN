@@ -364,7 +364,7 @@ public:
     using Rot = std::array<int32_t, 3>;
     // A bone: in the world, from the actor (unturned), from its parent
     // bone in the world's axes, or its place in its parent bone.
-    enum class BonePlace { World, Local, FromParent, InParent };
+    enum class BonePlace { World, Local, WorldRel, InParent };
     bool boneAt(VmObject* actor, NameId bone, BonePlace place, Vec& location, Rot& rotation);
     bool attachPointAt(VmObject* actor, NameId point, bool precomputed, bool world, Vec& location, Rot& rotation);
     bool hasBone(VmObject* actor, NameId bone);
