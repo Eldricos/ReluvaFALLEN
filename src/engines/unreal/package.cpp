@@ -121,7 +121,14 @@ Error Package::open(const std::filesystem::path& file) {
     std::ifstream in(file, std::ios::binary);
     if (!in)
         return Error::fail("Can't open " + file.string());
-    std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    // Read whole, at once (a byte at a time through stream iterators took
+    // a fifth of a level's start).
+    in.seekg(0, std::ios::end);
+    const std::streamoff size = in.tellg();
+    in.seekg(0, std::ios::beg);
+    std::vector<uint8_t> data(size > 0 ? size_t(size) : 0);
+    if (!data.empty() && !in.read(reinterpret_cast<char*>(data.data()), std::streamsize(data.size())))
+        return Error::fail("Can't read " + file.string());
     file_ = file;
     name_ = file.stem().string();
     memory_.clear();
