@@ -1107,13 +1107,13 @@ void ScriptLevel::physics(VmObject* a, float dt) {
         endClamber(a);
     steer(a, dt);
     // Turning, as the engine's performPhysics: an actor (not a pawn) only
-    // in PHYS_Rotating (and The Fallen's 23, 24); a pawn towards its
+    // in PHYS_Rotating (The Fallen's 23 and 24 turn one axis: fallenPhysics); a pawn towards its
     // DesiredRotation unless climbing walls (Spider); a player's pawn as
     // its input says (UpdateRotation).
     const bool pawn = vm_.isA(a, "Pawn");
     const Value* player = prop(a, "Player");
     if (pawn ? ((!player || !player->asObject()) && physics != 11)
-             : (physics == kPhysRotating || physics == 23 || physics == 24))
+             : physics == kPhysRotating)
         rotate(a, dt);
     if (pawn)
         if (Value* t = prop(a, "MoveTimer"))

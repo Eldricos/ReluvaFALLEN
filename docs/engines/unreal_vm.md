@@ -482,15 +482,15 @@ the rest are Reluva's reading of what the scripts set and leave undone.
 
 | Physics | What it does |
 |---|---|
-| Interpolating, CTVE_Interpolating | Along a path of interpolation points (`SpecialEvent`'s player paths, the intro's camera): from `Target` to its `Next` by `PhysAlpha`, at `PhysRate` times the point's `RateModifier`, placed and turned between them. At each point, `InterpolateEnd` on the point and the actor (their scripts end the path), then on to the next (past one with `bSkipNextPath`). No shipped map has interpolation points, so it isn't seen. |
-| Trailer | At its owner's place (and turned as it, with `bTrailerSameRotation`), as UE1's. |
+| Interpolating, CTVE_Interpolating | Along a path of interpolation points (`SpecialEvent`'s player paths, the intro's camera), as physPathing and CTVE_physPathing: from `Target` to its `Next` by `PhysAlpha`, at `PhysRate` times the two points' `RateModifier` blended by the way along (backward with a negative rate). With a point before and after, the place is a spline through the four (weights x^4/16 - x^2/2 + 1 at t+1, t, t-1, t-2, summing to 1), as is the turn (Interpolating: the rotators' numbers as they are; CTVE: slerped between the two); else straight. Past a point: `InterpolateEnd` on the point, then the actor, then on to the next (or the one before), past those with `bSkipNextPath`, with the time left over. A pawn's `ViewRotation` follows; the velocity is what it moved. Not done: the points' `GameSpeedModifier`, `FovModifier` and screen flash. |
+| Trailer | Through everything. A sprite: at its owner's place plus its `PrePivot` (`bTrailerPrePivot`), or its `Mass` behind the owner along its facing (`bTrailerSameRotation`), or the place. Anything else: at the place, turned as the owner (`bTrailerSameRotation`) or facing away from where the owner's going (straight up when it's still). |
 | Climbing | By its acceleration (the scripts': `aForward` x 0.02 up the view's Z, 120 a second), while a ladder is 1.6 radii ahead at the head going up (4 under it) or the feet going down (4 over them). Onto a floor: `Landed` (the scripts walk). At the top with no ladder at the head: 4 units on, and if that's blocked by a ledge (`TestForLedge`), `ChangePhysics(Clambering)`. At the bottom with none at the feet: `ChangePhysics(Falling)` (the scripts let go). Its velocity is what it moved. |
 | Hanging | Along the ledge by its acceleration (`aStrafe` x 0.008): a hand's box (`HandCollisionHeight`) swept over the ledge, moved only where there's a hand hold. No ledge under the hands (`TestForHangLedge`): the scripts' `Falling`. |
 | Clambering | Up at `DodgeClickTimer` units a second (its scripts' `PlayClambering` sets 100 or 130; Kira's 104 or 130) until the feet are over `LedgeHeight`, feeling 4 units forward; clear there (or 4 over), `Landed` with the normal of what it felt (none if clear), which sets the rise to 0. Then forward at 120 a second until stopped, when `ChangePhysics(Walking)`; its scripts' `AnimEnd` walks too. Blocked rising: `ChangePhysics(Falling)`. |
-| RotatingYaw, RotatingPitch | Turning about the one axis by `RotationRate`. |
-| Particle | No gravity: its velocity changed by its acceleration (a ship lifting off, debris settled), moved against the world, `Landed` or `HitWall`. One that makes copies stays where its scripts put it. |
-| Newtonian | Free flight by momentum (the Vulture, the Wraith, the Arachnid): its acceleration changes its velocity, up to `AirSpeed`; no gravity, no friction. |
-| Fish | Toward its goal at `AccelRate` up to `WaterSpeed`, against the water's friction, facing the way it swims; it can leave the water (its scripts send it back). |
+| RotatingYaw, RotatingPitch | Turning about the one axis by `RotationRate` a second, only with `bFixedRotationDir` (round and round) or `bRotateToDesired` (the shorter way to `DesiredRotation`, then `EndedRotation`). Before, Reluva turned them twice, so ARD_TortureMachine turned at double speed and never backward. |
+| Particle | No gravity: its velocity changed by its acceleration (a ship lifting off, debris settled), moved through everything, with no events. One that makes copies stays where its scripts put it. |
+| Newtonian | Free flight by momentum. An actor (a thrown drum) keeps its velocity, which only its scripts change, sliding along what it hits. A pawn (the Vulture, the Wraith, the Arachnid): its acceleration, at most `AccelRate`, changes its velocity, up to `AirSpeed` (times `DesiredSpeed` if not a player); no gravity, no friction; its velocity is then what it moved. |
+| Fish | As a swimmer: the zone's friction, buoyancy and current, up to `WaterSpeed`, facing the way it swims with no roll. (The engine works out a pull toward its `Destination` too, but keeps it in `LastSeenPos`.) |
 | EXP_Trail | An explosion's trail: by its velocity and acceleration, through everything. |
 | The rest | Only their copies move (see Effects). |
 
@@ -1226,40 +1226,86 @@ known.
   transporter's strips (`Texture = StripTexture`), impact flares.
   Before, they were drawn plain white: big white slabs over a beam-down,
   a white square where a rifle shot hit.
-- **Copies by physics mode** (`moveMultiMeshes`):
-  - Placed by their own natives or scripts, only aged: arcs (`Spark`),
-    beams (`BeamSustain`), the M4 rifle's gas cloud (`GasCloudM4`,
-    fading).
-  - Particle, Smoke, SteamJet: with a generator (`CTVE_Generator`, the
-    holder's owner), growing by its `DeltaSize` a second, fading with
-    `bFadeGlow`, shrinking away with `bFadeSize` if they don't grow,
-    blown by its `WindForce` when `bIsWindy`. A steam puff stops when
-    it has slowed to nothing and hangs there (`bUse`).
-  - Bubble: rising to the water's surface (the generator's
-    `SeedLocation`), where it pops: the generator's `bMMEvent` and
-    `MMEventLocation` (its scripts spawn a ripple).
-  - WaterRing: spreading by its `Angle` a second, fading.
-  - FanParticle: along the fan's axis from a point on its disc (`Phase`
-    -1 to 1 of its reach, the side the fan's `Acceleration.X` says, at
-    its `Acceleration.Z`), fading toward the end.
-  - SpiralJet: out along the steam's X axis on a widening, turning
-    circle; growing and fading by its base's `Use1` and `Use2`.
-  - ExhaustJet, PlasmaThrower, EXP_Smoke, EXP_Column, HotSpark,
-    CTVE_Sparks, DisintigrationPhaser: flying, growing and fading each
-    by its own fields (the exhaust's base `Use1`, the smoke's `Phase`,
-    the column's `Angle`...).
-  - EXP_Particle, EXP_Cinder: falling by the explosion's
-    `ParticleForces` (rising by the cinders' `wind`, jostled by their
-    chaos), fading; some flicker to the base's colour.
-  - EXP_Trail: fire's colour to smoke's (the base's `Vect1` to `Vect2`).
-  - EMPulseRifle: still, growing by the shot's power (its
-    `Acceleration.Z`, not an acceleration) and fading; EMPulseRifleQuad:
-    flaring and fading over its life.
-  - Fire_Gas: a fire's smoke, growing from nothing to the fire's size
-    as it rises, fading (half as bright: many overlap).
-  - FishInTank: each fish wanders to a place in the tank (the base's
-    `Vect1`-`Vect2` box) and on to another, darting while startled (the
-    base's `bUse`), facing the way it swims.
+- **Copies by physics mode** (`moveMultiMeshes`), as Engine.dll's
+  `phys*` functions for The Fallen's modes do it (read November 2026).
+  Each walks the copies from the base's `Next` itself. Most fade only
+  in a copy's last second (or half second) of `LifeSpan`, not over its
+  whole life. Some count a copy's life down only while it has one;
+  the explosions', the fire's and the plasma jet's count it down
+  always, so a copy given none is gone on its first tick.
+  - Left alone: arcs (`Spark`, placed by `ChainSparkTick`), beams
+    (`BeamSustain`).
+  - Particle: pushed by the generator's `Forces` and `WindForce`
+    (whatever `bIsWindy` says, and on top of the `Acceleration` its
+    scripts set), slowed by `DeltaSpeed`, growing by `DeltaSize`; in
+    its last second shrinking (`bFadeSize`) and fading to nothing from
+    `MaxScaleGlow` (`bFadeGlow`). Without a generator both fades.
+  - Smoke: pushed by `Forces` and wind, fading in its last second
+    (`ScaleGlow` = what's left). It doesn't grow.
+  - SteamJet: out and slowing, growing by `DeltaSize`; with a second
+    left, blown off (30 x a random way plus the jet's
+    `MMEventLocation`, back along it) and fading over half a second
+    from twice `MaxScaleGlow`.
+  - HotSpark: facing the way it flies, kicked somewhere new 3 ticks in
+    10 (500 a random way, falling; 200 out), flickering, fading in its
+    last half second.
+  - CTVE_Sparks: flickering in size (round its `Phase`, the size it
+    was given) and brightness, jittered, dragged across to 100 a second,
+    each leaving a trail of embers (a quarter its size, up to 0.6 s,
+    Style translucent) every 0.01 to 0.03 s.
+  - Bubble: rising at the speed it started with, the drift damped,
+    shrinking and dimming in its last second (half bright before). At
+    the surface (the generator's `SeedLocation.Z`) it becomes a pop (the
+    generator's `SpecialTexture`) for 0.08 s, and the generator's
+    `bMMEvent` is raised there; with no pop texture it's just gone.
+  - GasCloudM4, BeamFadeTail: a life of a second or more is spent at
+    once (the engine counts it down again until it's under a second);
+    then size and brightness go down 0.2 a second.
+  - FanParticle: along its line (`Phase`, slower in the middle) at the
+    generator's `Acceleration.Z`, flaring out toward both ends (`Vect1`
+    x (1 + 4 Phase^2) + `Vect2` x Phase), fading in the outer halves.
+  - SpiralJet: out along the axis (its `Phase` the distance), round a
+    circle widening with it at a turn a second, growing; fading in its
+    last second.
+  - PipePath: drawn toward its `Acceleration` (a point), pushed away
+    from it at 1.5 to 2 and 3.5 to 4 s left, damped; started again at
+    its end (`Vect1`, `Vect2`, `Use1`).
+  - SwarmObject: by velocity and acceleration. With no textures it
+    faces the way it flies; otherwise its texture steps a frame a tick
+    through the generator's `AnimTexture` (the fireflies' 8: frames 0
+    to 3, or 4 to 7 with `bUse`).
+  - FishInTank: each fish swims at 5 to 30 (at most 10) to a point
+    picked every 0.3 to 1.3 s, or half the time follows the fish before
+    it; triggered (the base's `bUse`), they go up to the top to feed.
+  - Fire_Gas, a fire's puffs (the fire's `DrawScale` S and `ScaleGlow`
+    G; its `ColorFilter.X` the chance of smoke, `.Z` 1 for a normal
+    fire, else plasma): stages (`Angle`) of `Phase` seconds, each
+    setting the growth, brightening, push and colour change. A white
+    flash up (0.2 s, 300 G up), yellow to orange or green (0.3 s), then
+    smoke (the holder's `Tex[0]`) greying and sinking away (0.5 s each),
+    or the flame shrinking out (0.5 s). A fire's `TweenRate`, if set,
+    caps the brightness (a dying fire's).
+  - EXP_Trail: fire's colour to smoke's over its life; its texture
+    picked again each tick from the explosion's `Tex`, `FadeTex` (in the
+    last 2 s, by what's left) or `TranslucentTex` (translucent ones).
+    EXP_Smoke (growing by its `Phase`; falling faster than 40, drawn
+    back up) and EXP_Column (growing by its `Phase`, at least 0.3) the
+    same.
+  - EXP_Cinder, EXP_Particle: flickering between the base's colours and
+    in brightness, curling about their `Vect2` (the base's `Angle`),
+    each leaving a trail of embers; cinders jostled now and then.
+  - PlasmaThrower: drawn onto the thrower's axis until 50 short of what
+    it hits (`MMEventLocation`), then bounced off it (`WindDir`, the
+    normal) and spread over it; green, growing.
+  - Lava: falling until under the generator, then still, shrinking away.
+  - DisintigrationPhaser: sinking at 30 a second, fading 0.5 a second.
+  - ExhaustJet: orange to red to pale, pulled back by the jet's own
+    `Velocity.Z`, growing and fading a unit a second.
+  - EMPulseRifle, EMPulseRifleQuad: brightening to 1, dimming in the
+    last half second; the rings grow by the shot's power (the actor's
+    `Acceleration.Z`, at most 1) plus a half.
+  - WaterRing: drifting, spreading by its `Angle` and fading by its
+    `Phase` a second; gone when dark.
   - SwarmObject, Lava, Weather and the rest: by their velocity and
     acceleration (the swarm's scripts steer each by its acceleration).
 - **Arcs** (`CTVE_ChainSpark`): `SpawnChain` makes `NumSegments` copies.

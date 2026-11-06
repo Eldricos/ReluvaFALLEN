@@ -319,7 +319,12 @@ void ScriptLevel::sparkTick(VmObject* sparks, float seconds) {
         set(mm, "Acceleration", vm_.vectorValue(gravity[0], gravity[1], gravity[2]));
         const auto rot = rotatorOf(v);
         set(mm, "Rotation", vm_.rotatorValue(rot[0], rot[1], rot[2]));
-        set(mm, "DrawScale", Value::floatValue(std::max(0.01f, vary(f("Size"), f("SizeVariance")))));
+        const float size = std::max(0.01f, vary(f("Size"), f("SizeVariance")));
+        set(mm, "DrawScale", Value::floatValue(size));
+        // Its size kept in Phase: the engine's spark physics flickers it
+        // round that (physCTVE_Sparks), its trail timer in Angle.
+        set(mm, "Phase", Value::floatValue(size));
+        set(mm, "Angle", Value::floatValue(0.01f + 0.02f * frand()));
         set(mm, "LifeSpan", Value::floatValue(life));
         set(mm, "ScaleGlow", Value::floatValue(f("MaxScaleGlow")));
     }
