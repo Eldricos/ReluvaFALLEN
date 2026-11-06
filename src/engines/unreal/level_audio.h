@@ -51,6 +51,15 @@ private:
     bool makeRoom(float priority);
     // A stream's loudness (at the music volume, twice the others').
     float streamLoudness(float volume) const;
+    // The pitch Doppler gives a sound at `at` moving at `velocity` (the
+    // listener's taken off), mixed flat (`flat`: the driver's own) or
+    // positional (its 3D provider's).
+    float doppler(const Vec3f& at, const Vec3f& velocity, bool flat) const;
+
+    LevelPlay::Room room_;            // where the listener is
+    audio::Mixer::Reverb reverb_;     // that room's reverb on a positional sound
+    Vec3f viewerVelocity_{};
+    float dopplerSpeed_ = 35000;
 
     audio::Mixer& mixer_;
     const PackageSet& packages_;
@@ -69,8 +78,9 @@ private:
         float radius = 0, volume = 1;
         bool everywhere = false; // a voice: not placed
         bool noOverride = false;
-        bool filtered = false; // mixed flat: quietened by walls in the way
-        float obstruction = 0;
+        bool filtered = false; // mixed flat (2D), not positional (3D)
+        bool speech = false;   // a voice: no Doppler
+        float obstruction = 0, pitch = 1;
         ObjectRef sound;
     };
     std::vector<Playing> playing_;

@@ -77,6 +77,19 @@ public:
     // gone), the actors' ambient sounds, and the music.
     std::vector<ScriptLevel::SoundRequest> takeSounds();
     bool locationOf(VmObject* actor, Vec3f& out);
+    // Its Velocity (false once it's gone).
+    bool velocityOf(VmObject* actor, Vec3f& out);
+    // The listener's velocity, as the audio driver takes it: the player's
+    // ViewTarget's, else the player's own.
+    Vec3f viewerVelocity();
+    // The reverb where the listener is, as the driver sets it from the
+    // zone: in water room 22 at 0.5, else the zone's ZoneRoomType at its
+    // ZoneRoomFactor (room 0: none).
+    struct Room {
+        int type = 0;
+        float level = 0;
+    };
+    Room roomAt(const Vec3f& at);
     // Whether the level's walls (its BSP, not movers) stand between two
     // points, short of the last 24 units to `to`.
     bool wallBetween(const Vec3f& from, const Vec3f& to);

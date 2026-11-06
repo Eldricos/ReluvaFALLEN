@@ -20,7 +20,59 @@ int volumeOf(float v) {
 
 float dot(const Vec3f& a, const Vec3f& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 
+// Miles' reverb filter's rooms (its EAX environments, by ZoneRoomType):
+// how much of it is wet, its time in seconds, its damping (0-1 of a
+// quarter of the output rate).
+struct RoomPreset {
+    float mix, seconds, damp;
+};
+constexpr RoomPreset kRooms[26] = {
+    {0, 1.493f, .5f},       {.25f, .1f, 0},          {.417f, .4f, .666f},    {.653f, 1.499f, .166f},
+    {.208f, .478f, 0},      {.5f, 2.309f, .888f},    {.403f, 4.279f, .5f},   {.5f, 3.961f, .5f},
+    {.5f, 2.886f, .888f},   {.361f, 7.284f, .332f},  {.5f, 10, .3f},         {.153f, .259f, .999f},
+    {.361f, 1.493f, 0},     {.444f, 2.697f, .638f},  {.25f, 1.752f, .776f},  {.111f, 3.145f, .472f},
+    {.111f, 2.767f, .224f}, {.194f, 7.841f, .472f},  {1, 1.499f, .5f},       {.097f, 2.767f, .224f},
+    {.208f, 1.652f, .999f}, {.652f, 2.886f, .25f},   {1, 1.499f, 0},         {.875f, 8.392f, .999f},
+    {.139f, 10, .666f},     {.486f, 7.563f, .806f},
+};
+
+// The room's reverb on a sound: the zone's level of the room's own mix
+// (a room with none, all of it), at the driver's 22,050 Hz for the
+// damping's cutoff.
+audio::Mixer::Reverb reverbOf(const LevelPlay::Room& room) {
+    audio::Mixer::Reverb r;
+    if (room.type <= 0 || room.type >= 26 || room.level <= 0)
+        return r;
+    const RoomPreset& p = kRooms[room.type];
+    constexpr float kQuarter = 22050.0f / 4;
+    r.mix = std::clamp(room.level * (p.mix <= 0.0001f ? 1 : p.mix), 0.0f, 1.0f);
+    r.seconds = p.seconds;
+    r.dampHz = std::clamp(kQuarter * p.damp, 200.0f, kQuarter);
+    return r;
+}
+
 } // namespace
+
+// Doppler, as the driver has it for a sound it mixes flat: 1 - the
+// sound's speed toward the listener / DopplerSpeed, within 0.5 to 2.
+// For a positional one its 3D provider's (Miles' fast 2D positional):
+// the whole speed (not along the line), a sound of 0.355 / 5.715e-6
+// units a second (about 62,100), lower moving away, higher toward.
+float LevelAudio::doppler(const Vec3f& at, const Vec3f& velocity, bool flat) const {
+    const Vec3f d{at[0] - listener_[0], at[1] - listener_[1], at[2] - listener_[2]};
+    const float speed2 = dot(velocity, velocity);
+    if (speed2 <= 0)
+        return 1;
+    if (flat) {
+        const float len = std::sqrt(dot(d, d));
+        if (len <= 0 || dopplerSpeed_ <= 0)
+            return 1;
+        return std::clamp(1 - dot(d, velocity) / len / dopplerSpeed_, 0.5f, 2.0f);
+    }
+    const Vec3f after{d[0] + velocity[0], d[1] + velocity[1], d[2] + velocity[2]};
+    const float s = std::sqrt(speed2) * 5.715e-6f * (dot(after, after) > dot(d, d) ? 1.0f : -1.0f);
+    return 0.355f / std::max(0.355f + s, 0.01f);
+}
 
 LevelAudio::LevelAudio(audio::Mixer& mixer, const PackageSet& packages) : mixer_(mixer), packages_(packages) {}
 
@@ -41,6 +93,8 @@ std::vector<std::string> LevelAudio::describe() const {
         line(a.music ? "ambient music" : "ambient", a.handle, name(a.sound.first, a.sound.second));
     for (const Playing& p : playing_)
         line(p.everywhere ? "voice" : "sound", p.handle, name(p.sound.package, p.sound.exportIndex));
+    out.push_back("room " + std::to_string(room_.type) + " at " + std::to_string(room_.level) + " (reverb mix " +
+                  std::to_string(reverb_.mix) + ")");
     std::string last = std::to_string(started_) + " started; last:";
     for (const std::string& r : recent_)
         last += " " + r;
@@ -155,7 +209,22 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
     };
     stereo_ = flag("UseStereo", true);
     reverse_ = flag("ReverseStereo", false);
-    const bool useFilter = flag("UseFilter", true);
+    {
+        const std::string v = play.audioSetting("DopplerSpeed");
+        dopplerSpeed_ = v.empty() ? 35000 : std::strtof(v.c_str(), nullptr);
+    }
+    viewerVelocity_ = play.viewerVelocity();
+    // The listener's zone's reverb (with UseReverb), on every positional
+    // sound; when the room changes, all of them.
+    room_ = flag("UseReverb", true) ? play.roomAt(listener) : LevelPlay::Room{};
+    reverb_ = reverbOf(room_);
+    // A sound's own velocity, the listener's taken off; a voice's none.
+    auto relative = [&](VmObject* actor, bool speech) {
+        Vec3f v{};
+        if (!actor || speech || !play.velocityOf(actor, v))
+            return Vec3f{};
+        return Vec3f{v[0] - viewerVelocity_[0], v[1] - viewerVelocity_[1], v[2] - viewerVelocity_[2]};
+    };
     {
         const std::string v = play.audioSetting("Channels");
         channels_ = v.empty() ? 16 : std::max(1, std::atoi(v.c_str()));
@@ -197,7 +266,12 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
         p.volume = std::clamp(r.volume, 0.0f, 2.0f);
         p.everywhere = !r.actor;
         p.noOverride = r.noOverride;
-        p.filtered = useFilter && (r.lowPass != 0 || r.highPass != 0);
+        // A sound filtered (LowPass, HighPass: the driver's filters, each
+        // in its one place, so a high-pass takes a low-pass's) is mixed
+        // flat; the rest positionally.
+        p.filtered = r.lowPass != 0 || r.highPass != 0;
+        p.speech = r.speech;
+        p.pitch = r.pitch;
         p.obstruction = r.obstruction;
         p.sound = r.sound;
         if (r.actor && !play.locationOf(r.actor, p.at))
@@ -223,6 +297,10 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
             continue;
         if (r.pitch != 1)
             mixer_.setPitch(p.handle, r.pitch);
+        if (r.highPass != 0)
+            mixer_.setFilter(p.handle, audio::Mixer::Filter::HighPass, r.highPass);
+        else if (r.lowPass != 0)
+            mixer_.setFilter(p.handle, audio::Mixer::Filter::LowPass, r.lowPass);
         if (r.startSeconds > 0)
             mixer_.seek(p.handle, double(r.startSeconds) * sound->rate);
         playing_.push_back(p);
@@ -231,20 +309,27 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
         if (recent_.size() > 12)
             recent_.erase(recent_.begin());
     }
-    // Those playing follow their actors (one gone is heard where it was).
-    // A filtered one is quietened by its ObstructionFactor when the level's
-    // walls stand between it and the listener; the others go through the
-    // driver's positional mixing, which doesn't.
+    // Those playing follow their actors (one gone is heard where it was),
+    // quietened by their ObstructionFactor when the level's walls stand
+    // between them and the listener. A positional one: in the room's
+    // reverb, at 71% from behind the listener (its 3D provider's), its
+    // Doppler the provider's; a flat one's the driver's.
     for (Playing& p : playing_) {
+        if (!p.filtered)
+            mixer_.setReverb(p.handle, reverb_);
         if (p.everywhere)
             continue;
         if (p.actor && !play.locationOf(p.actor, p.at))
             p.actor = nullptr;
         float loud = loudness(p.at, p.radius, p.volume);
-        if (p.filtered && p.obstruction > 0 && loud > 0 && play.wallBetween(listener_, p.at))
+        if (p.obstruction > 0 && loud > 0 && play.wallBetween(listener_, p.at))
             loud *= 1 - p.obstruction;
+        const Vec3f d{p.at[0] - listener_[0], p.at[1] - listener_[1], p.at[2] - listener_[2]};
+        if (!p.filtered && dot(d, forward_) < 0)
+            loud *= 0.71f;
         mixer_.setVolume(p.handle, volumeOf(loud));
         mixer_.setPan(p.handle, panOf(p.at, p.radius));
+        mixer_.setPitch(p.handle, p.pitch * doppler(p.at, relative(p.actor, p.speech), p.filtered));
     }
 
     // The ambient sounds: started when the listener comes within their
@@ -309,9 +394,20 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
                               : (am.streamed ? streamLoudness(loudness(a.at, a.radius, a.volume) * 127 / 100)
                                              : loudness(a.at, a.radius, a.volume));
         loud *= am.fade;
+        // An ambient sound is positional (not music, not streamed): the
+        // room's reverb, quieter from behind, and Doppler.
+        const bool positional = !am.music && !am.streamed;
+        float doppled = 1;
+        if (positional) {
+            const Vec3f d{a.at[0] - listener_[0], a.at[1] - listener_[1], a.at[2] - listener_[2]};
+            if (dot(d, forward_) < 0)
+                loud *= 0.71f;
+            doppled = doppler(a.at, relative(a.actor, false), false);
+        }
+        mixer_.setReverb(am.handle, positional ? reverb_ : audio::Mixer::Reverb{});
         mixer_.setVolume(am.handle, volumeOf(loud));
         mixer_.setPan(am.handle, am.music ? 0 : panOf(a.at, a.radius));
-        mixer_.setPitch(am.handle, a.pitch);
+        mixer_.setPitch(am.handle, a.pitch * doppled);
     }
     // Ambient music faded out, or whose actor is gone.
     for (auto it = ambient_.begin(); it != ambient_.end();) {

@@ -1157,13 +1157,44 @@ per-frame `Update`), as read from them; the code is Reluva's own.
     heard where it was.
   - **Looping:** a sound whose name has `LOOPING` (the `Looping` groups)
     goes round until something takes its slot.
-  - **The actor's sound filter** (The Fallen's `LowPass` and `HighPass`)
-    goes with it. The driver mixes a filtered sound flat, and then the
-    level's walls between it and the camera take its `ObstructionFactor`
-    off (Pawn 0.4, CTVE_Pawn 0.7). The others go through Miles'
-    positional mixing, whose obstruction does nothing without EAX. The
-    filters themselves (a voice on the communicator is high-passed at
-    600 Hz) aren't applied: the mixer has no high-pass.
+  - **Flat or positional.** A sound whose actor has a `LowPass` or
+    `HighPass` (Hz) goes through the driver's flat (2D) mixing with Miles'
+    filter on it: a 2nd-order Butterworth low-pass or high-pass, both in
+    the one place, so a high-pass takes a low-pass's. The rest go
+    through Miles' positional (3D) provider, "Miles Fast 2D Positional
+    Audio" (`Mssfast.m3d`, from the install's `redist`). A voice on the
+    communicator (`DS9_Hud_Mesh_Actor`) is high-passed at 600 Hz and
+    1.3 times as loud; `PlaySpeech`'s `bForceNoReverb` high-passes it at
+    20 Hz only to put it on the flat path, out of the reverb. (`UseFilter`
+    doesn't decide it.)
+  - **Walls:** either kind is quietened by its actor's
+    `ObstructionFactor` (Pawn 0.4, CTVE_Pawn 0.7) while the level's walls
+    stand between it and the camera. A positional one behind the camera
+    is at 71% (the provider's; fairly sure). The provider's own distance
+    falloff never comes in (the driver sets its near and far both to
+    twice the radius).
+  - **Doppler:** its actor's `Velocity` less the listener's (the
+    player's `ViewTarget`'s, else the player's); none for a voice. A
+    flat sound's pitch is the driver's: times 1 − its speed toward the
+    camera / `DopplerSpeed` (35,000), within 0.5 to 2. A positional
+    one's is the provider's: the whole speed, not along the line, over
+    a speed of sound of about 62,100 a second (0.355 / (0.355 ± speed ×
+    5.715e-6), lower moving away), unclamped.
+  - **Reverb** (`UseReverb`): the room where the camera is: in a water
+    zone room 22 (Underwater) at 0.5, else the zone's `ZoneRoomType` at
+    its `ZoneRoomFactor` (which the zone's script caps at 0.2; room 0
+    none). Every positional sound goes through Miles' reverb filter
+    (`Reverb3.flt`) with that room's settings, its wet share the zone's
+    level of the room's own mix: a Schroeder reverb, the sound (a
+    stereo one's sides summed) low-passed at the room's damping (of a
+    quarter of 22,050 Hz, at least 200), through four combs side by side
+    (29.7, 37.1, 41.1, 43.7 ms, each fed back at 0.001^(delay / the
+    room's time)), then all-passes of 5 ms and 1.7 ms (0.7), the second
+    fed a quarter of the first on the left, 0.15 on the right. The
+    rooms are EAX 1's 26 (Room: 0.417 wet, 0.4 s; Hangar: 0.5, 10 s;
+    Underwater: 1, 1.5 s, all damped). The zones' `bReverbZone`,
+    `MasterGain`, `CutoffHz`, `Delay` and `Gain` aren't read. A flat
+    sound and the music have none. `ue-play`'s `sounds` says the room.
   - **The AI hears it** unless `bNoHearNoise`, or the sound is played
     from a function declared `simulated` (the function calling, not
     the actor's `Role`; state code isn't one), or on a network client
@@ -1247,11 +1278,6 @@ per-frame `Update`), as read from them; the code is Reluva's own.
   loop, start to last frame). Five of the game's sounds have one
   (`ue-check`): the cantina's and a big fire's loops, the underwater
   sound and the two breathing sounds.
-- **Not done:** the driver's Doppler (at its `DopplerSpeed` of 35,000 a
-  change of about 1%), the zones' reverb (Miles' room types, by the
-  camera's zone's `ZoneRoomType`; under water room 22), the high- and
-  low-pass filters, and the AI not hearing a sound played from a
-  `simulated` function.
 
 On M04_KiraL1, in the first seconds:
 - the vents' and engines' hums and the lights' buzz (37 ambient sounds);

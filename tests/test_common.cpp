@@ -235,6 +235,36 @@ static void testMixer() {
     m.mix(big.data(), 2000);
     CHECK(std::abs(big[3000] - 1000) < 5);
     m.stopAll();
+    // The Butterworth filters: a low-pass at 1 kHz takes the top of the
+    // band away, a high-pass at 600 Hz a steady level; the other way
+    // round each passes it.
+    const SoundHandle lp = m.play(make(22050, 1, high), SoundType::Effects);
+    m.setFilter(lp, Mixer::Filter::LowPass, 1000);
+    m.mix(big.data(), 2000);
+    CHECK(std::abs(big[3000]) < 5 && std::abs(big[3002]) < 5);
+    const SoundHandle hp = m.play(make(22050, 1, steady), SoundType::Effects);
+    m.setFilter(hp, Mixer::Filter::HighPass, 600);
+    m.mix(big.data(), 2000);
+    CHECK(std::abs(big[3000]) < 5);
+    const SoundHandle lp2 = m.play(make(22050, 1, steady), SoundType::Effects);
+    m.setFilter(lp2, Mixer::Filter::LowPass, 1000);
+    m.mix(big.data(), 2000);
+    CHECK(std::abs(big[3000] - 1000) < 5);
+    m.stopAll();
+    // The reverb: a click, then its echoes from the first comb (29.7 ms,
+    // 655 frames) on; dry before, and the dry part weighed by 1 - mix.
+    std::vector<int16_t> click(3000, 0);
+    click[0] = 10000;
+    const SoundHandle rv = m.play(make(22050, 1, click), SoundType::Effects);
+    m.setReverb(rv, {0.5f, 1.5f, 5000, 0});
+    std::vector<int16_t> tail(6000);
+    m.mix(tail.data(), 3000);
+    CHECK(tail[0] == 5000 && tail[2 * 300] == 0);
+    int echoes = 0;
+    for (size_t k = 2 * 640; k < tail.size(); k += 2)
+        echoes += tail[k] != 0;
+    CHECK(echoes > 100 && tail[2 * 700] != tail[2 * 700 + 1]); // left and right differ
+    m.stopAll();
     // Nothing to play.
     CHECK(m.play(nullptr, SoundType::Effects) == kNoSound && m.play(make(22050, 1, {}), SoundType::Effects) == kNoSound);
 }

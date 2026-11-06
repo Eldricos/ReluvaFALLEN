@@ -229,6 +229,43 @@ bool LevelPlay::locationOf(VmObject* actor, Vec3f& out) {
     return true;
 }
 
+bool LevelPlay::velocityOf(VmObject* actor, Vec3f& out) {
+    if (!actor || actor->deleted)
+        return false;
+    const Value* v = actor->find(*vm_, "Velocity");
+    if (!v)
+        return false;
+    const auto l = Vm::vectorOf(*v);
+    out = {l[0], l[1], l[2]};
+    return true;
+}
+
+Vec3f LevelPlay::viewerVelocity() {
+    Vec3f out{};
+    if (!player_)
+        return out;
+    const Value* target = player_->find(*vm_, "ViewTarget");
+    VmObject* viewer = target && target->asObject() ? target->asObject() : player_;
+    velocityOf(viewer, out);
+    return out;
+}
+
+LevelPlay::Room LevelPlay::roomAt(const Vec3f& at) {
+    Room room;
+    const Value region = level_->regionAt({at[0], at[1], at[2]});
+    VmObject* zone = !region.fields.empty() ? region.fields[0].asObject() : nullptr;
+    if (!zone)
+        return room;
+    const Value* water = zone->find(*vm_, "bWaterZone");
+    if (water && water->asBool())
+        return {22, 0.5f};
+    const Value* type = zone->find(*vm_, "ZoneRoomType");
+    const Value* factor = zone->find(*vm_, "ZoneRoomFactor");
+    room.type = type ? type->asInt() : 0;
+    room.level = room.type && factor ? factor->asFloat() : 0;
+    return room;
+}
+
 // Each actor with an AmbientSound and a SoundVolume above 0, as the audio
 // driver takes them: heard as far as 25 x (SoundRadius + 1) units, at
 // 2 x SoundVolume x AmbientFactor / 255 (the .ini's, 0.7), a Keypoint's
