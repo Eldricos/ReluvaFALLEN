@@ -37,8 +37,10 @@ Mipmaps: a compact count, then each, largest first:
 When the `bHasComp` property is set, a second list of mipmaps in the same
 layout follows the first, in the format `CompFormat` gives (DXT1 when
 absent); Reluva uses it when the first list's top mipmap has no pixels.
-A texture with neither (no pixels, no `bHasComp`) is reported as such:
-which of The Fallen's are like that, and why, is still to be checked.
+A texture with neither (no pixels, no `bHasComp`) is reported as such.
+The Fallen has none (`ue-check`, November 2026): every texture of the
+class Texture stores its pixels, none needs its compressed copy, and
+the only ones with no pixels are the 519 procedural ones (below).
 
 Procedural textures (FireTexture, WaterTexture, WetTexture, WaveTexture,
 IceTexture, ScriptedTexture, and The Fallen's FliTexture) are laid out

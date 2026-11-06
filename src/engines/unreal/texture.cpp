@@ -156,6 +156,7 @@ static Error decodeAt(const PackageSet& packages, const Package& package, int in
     if ((!mip || mip->size == 0) && !compMips.empty()) {
         mip = &compMips[0];
         ti.format = props.byte("CompFormat", uint8_t(TextureFormat::DXT1));
+        ti.fromComp = true;
     }
     ti.mipCount = int(mips.size());
     if (!mip)

@@ -4553,6 +4553,21 @@ int cmdUeProps(int argc, char** argv) {
     const Export& e = pkg.exports()[size_t(index)];
     std::printf("%d: %s %s, %d bytes at %d, flags %08x\n", index, pkg.className(index + 1).c_str(),
                 pkg.path(index + 1).c_str(), e.serialSize, e.serialOffset, e.flags);
+    // A class: its own layout (script.md), its defaults read with it.
+    if (e.classRef == 0) {
+        ScriptObject o;
+        if (reluva::Error err = readScriptObject(pkg, index, o)) {
+            std::printf("Class: %s\n", err.message.c_str());
+            return 1;
+        }
+        std::printf("  class flags %08x, within %s, config %s; defaults:\n", o.classFlags,
+                    o.within ? pkg.path(o.within).c_str() : "-", o.configName ? pkg.name(o.configName).c_str() : "-");
+        for (const Property& p : o.defaults.items)
+            std::printf("  %s%s (%s) = %s\n", p.name.c_str(),
+                        p.arrayIndex ? ("[" + std::to_string(p.arrayIndex) + "]").c_str() : "",
+                        p.structName.empty() ? typeName(p.type) : p.structName.c_str(), describe(pkg, p).c_str());
+        return 0;
+    }
     Reader r(data, size_t(e.serialOffset));
     PropertyList props;
     if (reluva::Error err = beginObject(pkg, index, r, props))
@@ -5834,6 +5849,8 @@ int cmdUeCheck(int argc, char** argv) {
                 reluva::image::Image img;
                 TextureInfo info;
                 const reluva::Error err = decodeTexture(set, *pkg, int(i), img, &info);
+                if (!err && info.fromComp)
+                    ++tallies["textures (from their compressed copy)"].ok;
                 if (!err && !info.standIn.empty())
                     ++tallies["textures (procedural, stand-in shown)"].ok;
                 else

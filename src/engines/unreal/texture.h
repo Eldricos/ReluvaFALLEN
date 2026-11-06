@@ -54,6 +54,9 @@ struct TextureInfo {
     // Set when the texture stores no pixels (a procedural texture, made
     // while the game runs) and a stand-in was decoded instead: what it is.
     std::string standIn;
+    // Its pixels came from the compressed copy (bHasComp, CompFormat), the
+    // first list's top mipmap being empty.
+    bool fromComp = false;
 };
 
 // Decodes a texture's first mipmap to RGBA. The palette is looked up

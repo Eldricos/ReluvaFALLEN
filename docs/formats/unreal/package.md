@@ -101,8 +101,10 @@ Objects that aren't classes start with:
 3. **The class's own data**, laid out by the class: see
    [texture.md](texture.md), [sound.md](sound.md), [model.md](model.md).
 
-Classes (class reference 0) are laid out differently (their script and
-defaults); not read yet.
+Classes (class reference 0) are laid out differently: their script
+tree's fields, then their defaults as tagged properties. The script
+reader reads them ([script.md](script.md)), which the VM and
+`ue-script` use; `ue-props` on a class prints its flags and defaults.
 
 ## Writing one
 
