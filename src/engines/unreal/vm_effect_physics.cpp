@@ -305,10 +305,57 @@ void ScriptLevel::moveMultiMeshes(VmObject* actor, float dt) {
     const bool generator = owner && vm_.isA(owner, "CTVE_Generator");
 
     switch (physics) {
-    // Placed by their scripts or natives each tick (arcs, beams): left be.
-    case kPhysSpark:
+    // Beams: placed by their scripts each tick, left be.
     case kPhysBeamSustain:
         return;
+    // An arc's segments (physSpark, CTVE_ChainSpark): laid on its curve
+    // again when it's updated (the base copy's: from Vect2, weights
+    // 3t(1-t)^2, 3t^2(1-t), t^3 on its Location, Velocity and
+    // Acceleration, t on by its Phase a copy; a wave of AxisScale x
+    // sin(Angle t) with bUse); then every tick each is jolted a random way
+    // by its Use1 (the ends Use2), as bright as the arc, and the rest
+    // turned to the one before and stretched to it; the tip is the last.
+    case kPhysSpark: {
+        if (!vm_.isA(actor, "CTVE_ChainSpark"))
+            return;
+        if (b(actor, "bUpdate")) {
+            setBool(actor, "bUpdate", false);
+            float t = 0;
+            const Vec from = vec(base, "Vect2"), p1 = vec(base, "Location"), p2 = vec(base, "Velocity"),
+                      p3 = vec(base, "Acceleration"), wave = vec(base, "AxisScale");
+            const bool waves = b(base, "bUse");
+            const float step = f(base, "Phase"), freq = f(base, "Angle");
+            for (VmObject* mm : copies) {
+                const float u = 1 - t;
+                Vec at = add(from, add(add(mul(p1, 3 * t * u * u), mul(p2, 3 * t * t * u)), mul(p3, t * t * t)));
+                if (waves)
+                    at = add(at, mul(wave, std::sin(freq * t)));
+                setv(mm, "Vect1", at);
+                t += step;
+            }
+        }
+        const int last = (prop(actor, "NumSegments") ? prop(actor, "NumSegments")->asInt() : int(copies.size())) - 1;
+        const float glow = f(actor, "ScaleGlow", 1);
+        VmObject* before = nullptr;
+        int k = 0;
+        for (VmObject* mm : copies) {
+            set(mm, "ScaleGlow", glow);
+            const float jolt = (k == 0 || k == last) ? f(mm, "Use2") : f(mm, "Use1");
+            setv(mm, "Location", add(vec(mm, "Vect1"), mul(vrand(), jolt)));
+            if (before) {
+                const Vec d = sub(vec(before, "Location"), vec(mm, "Location"));
+                setRot(mm, facing(d));
+                Vec scale = vec(mm, "AxisScale");
+                scale[0] = length(d);
+                setv(mm, "AxisScale", scale);
+            }
+            before = mm;
+            ++k;
+        }
+        if (before)
+            setv(actor, "TipLocation", vec(before, "Location"));
+        return;
+    }
     // Particle (physParticle): pushed by the generator's Forces and wind
     // (on top of the Acceleration its scripts set), slowed by DeltaSpeed,
     // growing by DeltaSize; in its last second shrinking (bFadeSize) and

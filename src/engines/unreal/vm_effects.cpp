@@ -70,16 +70,13 @@ std::vector<VmObject*> ScriptLevel::multiMeshes(VmObject* actor) {
     return out;
 }
 
-// An arc of sparks (CTVE_ChainSpark): a curve from StartLoc to FinishLoc,
-// leaving along startPath and arriving along FinishPath (a cubic Bezier
-// through StartLoc + startPath and FinishLoc + FinishPath, kept in P1-P3),
-// cut into its segments, each a copy of its mesh (DS9_Spark: a unit long
-// along X) from one point to the next, Thickness wide. The points between
-// are jolted aside by up to SpikeMag (EndSpikeMag at the ends) each tick it
-// updates; with bSinVariation they wave Amplitude to each side WaveLengths
-// times along it. With bGrows it grows from the start at GrowthRate a
-// second. It fades with bFade (FadeSpeed a second, gone at nothing), or
-// glows up and down between MinGlow and MaxGlow (bCycleFade).
+// An arc of sparks (CTVE_ChainSpark), as Engine.dll's ChainSparkTick: it
+// grows along its length (bGrows, GrowthRate a second, to 1), travels
+// (bTravels: StartLoc and FinishLoc by StartVelocity and FinishVelocity),
+// fades (bFade, FadeSpeed a second, its light with it; gone below 0) or
+// glows up and down between MinGlow and MaxGlow (bCycleFade); with
+// bUpdate it's laid out again (chainSparkUpdate). Its copies are moved by
+// its physics (Spark: moveMultiMeshes).
 void ScriptLevel::chainSparkTick(VmObject* spark, float seconds) {
     auto f = [&](const char* name) {
         const Value* v = prop(spark, name);
@@ -93,100 +90,125 @@ void ScriptLevel::chainSparkTick(VmObject* spark, float seconds) {
         const Value* v = prop(spark, name);
         return v ? Vm::vectorOf(*v) : Vec{};
     };
-    auto setVec = [&](VmObject* o, const char* name, const Vec& v) {
-        if (Value* p = prop(o, name))
-            vm_.setVector(*p, v[0], v[1], v[2]);
-    };
-    auto setFloat = [&](VmObject* o, const char* name, float v) {
-        if (Value* p = prop(o, name))
+    auto setFloat = [&](const char* name, float v) {
+        if (Value* p = prop(spark, name))
             *p = Value::floatValue(v);
     };
-    // How bright: fading out, or glowing up and down.
-    float glow = f("ScaleGlow");
+    auto setBool = [&](const char* name, bool v) {
+        if (Value* p = prop(spark, name))
+            *p = Value::boolValue(v);
+    };
+    auto setVec = [&](const char* name, const Vec& v) {
+        if (Value* p = prop(spark, name))
+            vm_.setVector(*p, v[0], v[1], v[2]);
+    };
+    if (b("bGrows")) {
+        float g = f("Growth") + seconds * f("GrowthRate");
+        if (g > 1) {
+            g = 1;
+            setBool("bGrows", false);
+        }
+        setFloat("Growth", g);
+        setBool("bUpdate", true);
+    } else {
+        setFloat("Growth", 1);
+    }
+    if (b("bTravels")) {
+        setVec("StartLoc", add(vec("StartLoc"), mul(vec("StartVelocity"), seconds)));
+        setVec("FinishLoc", add(vec("FinishLoc"), mul(vec("FinishVelocity"), seconds)));
+        setBool("bUpdate", true);
+    }
     if (b("bFade")) {
-        glow -= f("FadeSpeed") * seconds;
-        if (glow <= 0) {
+        const float glow = f("ScaleGlow") - seconds * f("FadeSpeed");
+        setFloat("ScaleGlow", glow);
+        if (Value* l = prop(spark, "LightBrightness"))
+            *l = Value::byteValue(uint8_t(std::clamp(int(glow * 100), 0, 255)));
+        if (glow < 0) {
             destroy(spark);
             return;
         }
     } else if (b("bCycleFade")) {
-        const float lo = f("MinGlow"), hi = std::max(lo, f("MaxGlow"));
-        const bool up = b("bFadePlus");
-        glow += (up ? 1 : -1) * f("FadeSpeed") * seconds;
-        if (glow >= hi || glow <= lo)
-            if (Value* p = prop(spark, "bFadePlus"))
-                *p = Value::boolValue(glow <= lo);
-        glow = std::clamp(glow, lo, hi);
+        float glow = f("ScaleGlow");
+        if (b("bFadePlus")) {
+            glow += seconds * f("FadeSpeed");
+            if (glow > f("MaxGlow")) {
+                glow = f("MaxGlow");
+                setBool("bFadePlus", false);
+            }
+        } else {
+            glow -= seconds * f("FadeSpeed");
+            if (glow < f("MinGlow")) {
+                glow = f("MinGlow");
+                setBool("bFadePlus", true);
+            }
+        }
+        setFloat("ScaleGlow", glow);
     }
-    setFloat(spark, "ScaleGlow", glow);
-    float growth = 1;
-    if (b("bGrows")) {
-        growth = std::min(1.0f, f("Growth") + f("GrowthRate") * seconds);
-        setFloat(spark, "Growth", growth);
-    }
+    if (b("bUpdate"))
+        chainSparkUpdate(spark);
+}
 
-    const std::vector<VmObject*> segments = multiMeshes(spark);
-    if (segments.empty())
+// Laying the arc out (ChainSpark.Update, ForceUpdate): its base copy
+// holds the curve for its physics. Location startPath, Velocity FinishLoc
+// + FinishPath - StartLoc, Acceleration FinishLoc - StartLoc, Vect2
+// StartLoc (a cubic from StartLoc, as the curve's weights take them),
+// Phase the step along it from one copy to the next (Growth over
+// NumSegments - 1); with bSinVariation (bUse) a wave across it, AxisScale
+// a random way across (Amplitude long) and Angle its frequency
+// (WaveLengths x 6.28). The actor goes to the arc's middle.
+void ScriptLevel::chainSparkUpdate(VmObject* spark) {
+    const Value* head = prop(spark, "MultiMesh");
+    VmObject* base = head ? head->asObject() : nullptr;
+    if (!base)
         return;
-    const Vec p0 = vec("StartLoc"), p3 = vec("FinishLoc");
-    const Vec p1 = add(p0, vec("startPath")), p2 = add(p3, vec("FinishPath"));
-    setVec(spark, "P1", p1);
-    setVec(spark, "P2", p2);
-    setVec(spark, "P3", p3);
-    const bool update = b("bUpdate") || f("TimeStep") == 0;
-    setFloat(spark, "TimeStep", f("TimeStep") + seconds);
-    const size_t n = segments.size();
-    const Vec along = normal(sub(p3, p0));
-    Vec side = cross(along, Vec{0, 0, 1});
-    if (length(side) < 1e-3f)
-        side = Vec{1, 0, 0};
-    side = normal(side);
-    const Vec up = cross(side, along);
-    std::vector<Vec> points(n + 1);
-    for (size_t k = 0; k <= n; ++k) {
-        const float t = growth * float(k) / float(n), u = 1 - t;
-        Vec p = add(add(mul(p0, u * u * u), mul(p1, 3 * u * u * t)), add(mul(p2, 3 * u * t * t), mul(p3, t * t * t)));
-        if (b("bSinVariation")) {
-            const Value* waves = prop(spark, "WaveLengths");
-            const float n = float(std::max(1, waves ? waves->asInt() : 1));
-            p = add(p, mul(side, f("Amplitude") * std::sin(t * 6.2831853f * n)));
-        }
-        points[k] = p;
+    auto f = [&](const char* name) {
+        const Value* v = prop(spark, name);
+        return v ? v->asFloat() : 0.0f;
+    };
+    auto vec = [&](const char* name) {
+        const Value* v = prop(spark, name);
+        return v ? Vm::vectorOf(*v) : Vec{};
+    };
+    auto setVec = [&](const char* name, const Vec& v) {
+        if (Value* p = prop(base, name))
+            vm_.setVector(*p, v[0], v[1], v[2]);
+    };
+    auto setFloat = [&](const char* name, float v) {
+        if (Value* p = prop(base, name))
+            *p = Value::floatValue(v);
+    };
+    const Vec start = vec("StartLoc"), finish = vec("FinishLoc");
+    setVec("Location", vec("startPath"));
+    setVec("Velocity", sub(add(finish, vec("FinishPath")), start));
+    setVec("Acceleration", sub(finish, start));
+    setVec("Vect2", start);
+    const Value* count = prop(spark, "NumSegments");
+    const int n = count ? count->asInt() : 0;
+    setFloat("Phase", n > 1 ? f("Growth") / float(n - 1) : 0);
+    const Value* sinVar = prop(spark, "bSinVariation");
+    const bool wave = sinVar && sinVar->asBool();
+    if (Value* u = prop(base, "bUse"))
+        *u = Value::boolValue(wave);
+    if (wave) {
+        // Across the line from P1 to P3 (which nothing sets: the world's
+        // Y and Z), a random way, Amplitude long.
+        const Vec d = sub(vec("P3"), vec("P1"));
+        const auto rot = rotatorOf(d);
+        const auto r3 = rotationAxes({rot[0], rot[1], rot[2]});
+        const Vec ax[3] = {{r3[0][0], r3[0][1], r3[0][2]}, {r3[1][0], r3[1][1], r3[1][2]}, {r3[2][0], r3[2][1], r3[2][2]}};
+        Vec alter = add(mul(ax[1], frand() * 2 - 1), mul(ax[2], frand() * 2 - 1));
+        if (length(alter) > 0)
+            alter = mul(normal(alter), f("Amplitude"));
+        const Value* waves = prop(spark, "WaveLengths");
+        const float sinScale = float(waves ? waves->asInt() : 0) * 6.28f;
+        if (Value* p = prop(spark, "Alter"))
+            vm_.setVector(*p, alter[0], alter[1], alter[2]);
+        if (Value* p = prop(spark, "SinScale"))
+            *p = Value::floatValue(sinScale);
+        setVec("AxisScale", alter);
+        setFloat("Angle", sinScale);
     }
-    const float thickness = std::max(0.1f, f("Thickness"));
-    const Value* style = prop(spark, "Style");
-    const Value* texture = prop(spark, "Texture");
-    for (size_t k = 0; k < n; ++k) {
-        VmObject* seg = segments[k];
-        Vec from = points[k], to = points[k + 1];
-        if (update) {
-            // Jolted aside, the ends less: each tick the arc flickers.
-            auto jolt = [&](size_t i) {
-                if (i == 0 || i == n)
-                    return Vec{};
-                const float mag = (i == 1 || i == n - 1) ? f("EndSpikeMag") : f("SpikeMag");
-                return add(mul(side, (frand() * 2 - 1) * mag), mul(up, (frand() * 2 - 1) * mag));
-            };
-            from = add(from, jolt(k));
-            to = add(to, jolt(k + 1));
-        } else if (const Value* loc = prop(seg, "Location")) {
-            from = Vm::vectorOf(*loc);
-        }
-        const Vec d = sub(to, from);
-        setVec(seg, "Location", from);
-        if (Value* r = prop(seg, "Rotation")) {
-            const auto rot = rotatorOf(d);
-            *r = vm_.rotatorValue(rot[0], rot[1], rot[2]);
-        }
-        setVec(seg, "AxisScale", {length(d), thickness, thickness});
-        setFloat(seg, "ScaleGlow", glow);
-        if (Value* s = prop(seg, "Style"); s && style)
-            *s = Value::intValue(style->asInt());
-        if (Value* t = prop(seg, "Texture"); t && texture)
-            *t = *texture;
-    }
-    // Where the arc ends, for the scripts.
-    setVec(spark, "TipLocation", points[n]);
+    setLocation(spark, mul(add(start, finish), 0.5f));
 }
 
 // A beam's sections (CTVE_BeamFX: copies of its mesh, made and cut by its
@@ -553,16 +575,36 @@ VmObject* ScriptLevel::attachDecal(VmObject* decal, float distance, const Vec& d
 void registerEffectNatives(Vm& vm) {
     auto reg = [&](const char* name, NativeFn fn) { vm.registerNative(name, std::move(fn)); };
     // SpawnChain(): the arc's segments, NumSegments copies of it
-    // (NewMultiMesh), laid out at once.
+    // (NewMultiMesh), each with SpikeMag (Use1) and EndSpikeMag (Use2) to
+    // jitter by, SparkColor, translucent; then laid out.
     reg("CTVE_ChainSpark.SpawnChain", [](NativeCall& c) {
         if (!c.vm.level || !c.self)
             return;
         const Value* n = c.self->find(c.vm, "NumSegments");
         const int count = std::clamp(n ? n->asInt() : 0, 1, 256);
         VmFunction* make = c.vm.findFunction(c.self, c.vm.name("NewMultiMesh"));
-        for (int k = 0; make && k < count; ++k)
-            c.vm.invoke(make, c.self, {});
-        c.vm.level->chainSparkTick(c.self, 0);
+        auto get = [&](const char* name) { return c.self->find(c.vm, name); };
+        for (int k = 0; make && k < count; ++k) {
+            VmObject* mm = c.vm.invoke(make, c.self, {}).asObject();
+            if (!mm)
+                break;
+            auto set = [&](const char* name, const Value& v) {
+                if (Value* p = mm->find(c.vm, name))
+                    *p = v;
+            };
+            if (const Value* v = get("SpikeMag"))
+                set("Use1", *v);
+            if (const Value* v = get("EndSpikeMag"))
+                set("Use2", *v);
+            if (const Value* v = get("SparkColor"))
+                set("ColorFilter", *v);
+            if (const Value* v = get("AxisScale"))
+                set("AxisScale", *v);
+            set("Style", Value::intValue(3));
+            set("DrawScale", Value::floatValue(1));
+            set("ScaleGlow", Value::floatValue(1));
+        }
+        c.vm.level->chainSparkUpdate(c.self);
     });
     // ChainSparkTick(float DeltaTime): ScriptLevel::chainSparkTick.
     reg("CTVE_ChainSpark.ChainSparkTick", [](NativeCall& c) {
@@ -572,7 +614,7 @@ void registerEffectNatives(Vm& vm) {
     // ForceUpdate(): laid out again now.
     reg("CTVE_ChainSpark.ForceUpdate", [](NativeCall& c) {
         if (c.vm.level && c.self)
-            c.vm.level->chainSparkTick(c.self, 0);
+            c.vm.level->chainSparkUpdate(c.self);
     });
     // UpdateBeamSections(float DeltaTime): ScriptLevel::updateBeamSections.
     reg("Actor.UpdateBeamSections", [](NativeCall& c) {

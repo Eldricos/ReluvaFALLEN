@@ -1237,8 +1237,12 @@ known.
   whole life. Some count a copy's life down only while it has one;
   the explosions', the fire's and the plasma jet's count it down
   always, so a copy given none is gone on its first tick.
-  - Left alone: arcs (`Spark`, placed by `ChainSparkTick`), beams
-    (`BeamSustain`).
+  - Left alone: beams (`BeamSustain`).
+  - Spark (an arc's segments): laid on the arc's curve again when it's
+    updated (the base copy holds it, below), then every tick each jolted
+    a random way by its `Use1` (the two ends `Use2`), as bright as the
+    arc, turned to the one before and stretched to it; `TipLocation` the
+    last.
   - Particle: pushed by the generator's `Forces` and `WindForce`
     (whatever `bIsWindy` says, and on top of the `Acceleration` its
     scripts set), slowed by `DeltaSpeed`, growing by `DeltaSize`; in
@@ -1312,14 +1316,27 @@ known.
     `Phase` a second; gone when dark.
   - SwarmObject, Lava, Weather and the rest: by their velocity and
     acceleration (the swarm's scripts steer each by its acceleration).
-- **Arcs** (`CTVE_ChainSpark`): `SpawnChain` makes `NumSegments` copies.
-  `ChainSparkTick` lays them along a cubic Bezier from `StartLoc` to
-  `FinishLoc`, leaving along `startPath` and arriving along
-  `FinishPath`. Each tick the points between are jolted aside by up to
-  `SpikeMag` (`EndSpikeMag` next to the ends), with a sine wave on top
-  for `bSinVariation`. It grows (`bGrows`) and fades or glows up and down
-  (`bFade`, `bCycleFade`). Each segment is the spark mesh stretched from
-  one point to the next, `Thickness` wide.
+- **Arcs** (`CTVE_ChainSpark`), as Engine.dll's natives (read November
+  2026):
+  - `SpawnChain` makes `NumSegments` copies, each with `SpikeMag`
+    (`Use1`) and `EndSpikeMag` (`Use2`) to jitter by, `SparkColor`,
+    translucent, the arc's `AxisScale` (its `SetSparkThickness`), then
+    lays it out.
+  - Laying it out (`Update`, `ForceUpdate`): the base copy gets the
+    curve, a cubic from `StartLoc` leaving along `startPath` and arriving
+    at `FinishLoc` along `FinishPath`, and the step along it from one copy
+    to the next (`Growth` over `NumSegments` - 1). With `bSinVariation` a
+    wave across it: a random way (`Alter`, `Amplitude` long, across the
+    world's Y and Z, as nothing sets `P1`-`P3`), `WaveLengths` x 6.28
+    (`SinScale`). The arc goes to its middle.
+  - `ChainSparkTick`: grows (`bGrows`, `GrowthRate` a second, then off at
+    1), travels (`bTravels`: `StartLoc`, `FinishLoc` by `StartVelocity`,
+    `FinishVelocity`), fades (`bFade`, its `LightBrightness` with it; gone
+    below 0) or glows up and down (`bCycleFade`, turning at `MaxGlow` and
+    `MinGlow`). Growing or travelling sets `bUpdate`; with it, it's laid
+    out again. Its physics (Spark) then places the segments.
+  - Before, Reluva laid the segments itself each tick, jolting them only
+    on updates, so an arc held still between them.
 - **Beams** (`UpdateBeamSections`): the sections start at `BeamOrigin`,
   each `BeamSectionAxesX` further on, turned as the beam, with a wave if
   it has one. Their thickness jitters by `SectionAxisYZRandomFactor`. The

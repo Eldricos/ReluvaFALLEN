@@ -539,6 +539,7 @@ public:
     void fallenPhysics(VmObject* a, int physics, float dt);
     void interpolate(VmObject* a, float dt);
     void chainSparkTick(VmObject* spark, float seconds);
+    void chainSparkUpdate(VmObject* spark);
     void updateBeamSections(VmObject* beam, float seconds);
     void sparkTick(VmObject* sparks, float seconds);
     void weatherTick(VmObject* weather, float seconds, bool fill);
