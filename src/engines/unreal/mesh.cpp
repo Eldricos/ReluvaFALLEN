@@ -8,6 +8,8 @@
 #include "common/fs.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -339,6 +341,9 @@ struct BoneRecord {
     std::vector<Clip> clipList; // when they read
     size_t start = 0;   // where its record starts (its name)
     size_t end = 0;     // past its own fields (before its children); 0: its clips didn't read
+    // Its joint limits for the IK, in radians, from its bind pose: about
+    // its Y (min, max), X and Z (the engine's default +-30 degrees).
+    std::array<float, 6> limits{-0.5236f, 0.5236f, -0.5236f, 0.5236f, -0.5236f, 0.5236f};
 };
 
 struct BoneReader {
@@ -513,6 +518,13 @@ struct BoneReader {
                 if (!failedAt)
                     failedAt = p;
                 return 0;
+            }
+            // The 10 floats after the i32 7: two of +-1e38, two more, then
+            // the joint limits (min and max about Y, X and Z).
+            for (size_t k = 0; k < 6; ++k) {
+                const float v = f32(p + 68 + 4 * k);
+                if (std::isfinite(v) && std::fabs(v) < 10)
+                    out[size_t(i)].limits[k] = v;
             }
             p += 92;
             for (int a = 0; a < 2; ++a) {
@@ -1278,10 +1290,91 @@ Error readMesh(const Package& package, int index, Mesh& out) {
     return Error::success();
 }
 
+// The IK chains a skeleton keeps (Engine.dll's C3DIKCHAIN; only
+// Shared.Male's has them, and the player takes them through its alt
+// meshes): after the body parts' names, (n, n, 10) and per chain its name,
+// its root and end bones (u16-long strings), a 4x3 matrix and its flags
+// (the effector, in the end bone's axes; 7 the identity), (s, s, 10) steps
+// of a bone and the axis it turns about (0 Y, 1 X, 2 Z), the iterations
+// and a tolerance. Each step's bone limits are its own skeleton's.
+struct IkChain {
+    std::string name, root, end;
+    Mat43 effector{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+    std::vector<std::pair<std::string, int>> steps;
+    std::vector<std::array<float, 6>> limits; // per step
+    int iterations = 0;
+    float tolerance = 0;
+};
+
+std::vector<IkChain> findIkChains(const BoneReader& r, const std::vector<BoneRecord>& bones) {
+    std::vector<IkChain> out;
+    auto limitsOf = [&](const std::string& bone) {
+        for (const BoneRecord& b : bones)
+            if (fs::toLower(b.name) == fs::toLower(bone))
+                return b.limits;
+        return BoneRecord{}.limits;
+    };
+    auto known = [&](const std::string& bone) {
+        return std::any_of(bones.begin(), bones.end(),
+                           [&](const BoneRecord& b) { return fs::toLower(b.name) == fs::toLower(bone); });
+    };
+    for (size_t at = r.from; at + 12 < r.to; ++at) {
+        uint32_t n = 0, flags = 0;
+        if (!r.header(at, n, flags) || flags != 10 || n == 0 || n > 32)
+            continue;
+        std::vector<IkChain> chains;
+        size_t p = at + 12;
+        bool ok = true;
+        auto str = [&](std::string& s) {
+            if (!r.name(p, s) || s.empty())
+                return false;
+            p += 2 + s.size();
+            return true;
+        };
+        for (uint32_t c = 0; ok && c < n; ++c) {
+            IkChain k;
+            ok = str(k.name) && str(k.root) && str(k.end) && known(k.root) && known(k.end) && p + 52 + 12 <= r.to;
+            if (!ok)
+                break;
+            const uint32_t matFlags = r.u32(p + 48);
+            if (matFlags != 7)
+                for (size_t i = 0; i < 12; ++i)
+                    k.effector[i] = r.f32(p + 4 * i);
+            p += 52;
+            uint32_t steps = 0, sf = 0;
+            ok = r.header(p, steps, sf) && steps <= 64;
+            p += 12;
+            for (uint32_t i = 0; ok && i < steps; ++i) {
+                std::string bone;
+                ok = str(bone) && known(bone) && p + 4 <= r.to;
+                if (!ok)
+                    break;
+                const int axis = int(r.u32(p));
+                p += 4;
+                ok = axis >= 0 && axis <= 2;
+                k.steps.emplace_back(bone, axis);
+                k.limits.push_back(limitsOf(bone));
+            }
+            ok = ok && p + 8 <= r.to;
+            if (!ok)
+                break;
+            k.iterations = int(r.u32(p));
+            k.tolerance = r.f32(p + 4);
+            p += 8;
+            ok = k.iterations > 0 && k.iterations <= 64 && std::isfinite(k.tolerance);
+            chains.push_back(std::move(k));
+        }
+        if (ok && chains.size() == n)
+            return chains;
+    }
+    return out;
+}
+
 struct AnimationSet::Impl {
     std::vector<uint8_t> data;
     size_t base = 0, from = 0, to = 0;
     std::vector<BoneRecord> bones;
+    std::vector<IkChain> chains;
     std::vector<int> clipStart, clipFrames; // per clip
     std::vector<std::string> clipNames;     // lower case, if it names them
     BoneReader reader() const { return BoneReader{data, base, from, to}; }
@@ -1356,6 +1449,7 @@ Error readAnimationSet(const Package& package, int index, AnimationSet& out) {
         impl->clipNames.push_back(fs::toLower(c.name));
     if (impl->clipNames.size() != clips)
         impl->clipNames.clear();
+    impl->chains = findIkChains(r, impl->bones);
     out.impl = std::move(impl);
     return Error::success();
 }
@@ -1653,6 +1747,13 @@ struct LayeredPoser::Impl {
     std::vector<uint8_t> data;
     size_t base = 0, from = 0;
     std::vector<BoneRecord> bones;
+    std::vector<IkChain> chains; // its own, else its shared sets' (Male's)
+    const IkChain* chain(const std::string& name) const {
+        for (const IkChain& c : chains)
+            if (fs::toLower(c.name) == fs::toLower(name))
+                return &c;
+        return nullptr;
+    }
     std::vector<int> clipStart; // the mesh's own clips: where each one's frames start
     Mesh mesh;                  // its tables (frames dropped)
     const std::vector<AnimationSet>* sets = nullptr;
@@ -1687,6 +1788,8 @@ struct LayeredPoser::Impl {
     bool locals(std::string_view base, float fraction, const std::vector<Layer>& layers,
                 std::vector<std::array<float, 12>>& out, const Adjust* adjust = nullptr) const;
     void adjusted(std::vector<Mat43>& local, const Adjust& adjust) const;
+    void solveChains(std::vector<Mat43>& local, const Adjust::Reach& r, const IkChain& place,
+                     const IkChain* turn) const;
     void addFaces(const std::vector<Face>& faces, const std::vector<Mat43>& world, std::vector<Vec3f>& out) const;
     // Each bone's place in the skeleton (its parents' placements and its own).
     std::vector<Mat43> worlds(const std::vector<Mat43>& local) const {
@@ -1762,6 +1865,10 @@ std::unique_ptr<LayeredPoser> LayeredPoser::open(const Package& package, int ind
     impl->base = size_t(package.exports()[size_t(index)].serialOffset);
     impl->sets = &sets;
     const BoneReader r = impl->reader();
+    impl->chains = findIkChains(r, impl->bones);
+    for (size_t k = 0; impl->chains.empty() && k < sets.size(); ++k)
+        if (sets[k].impl && !sets[k].impl->chains.empty())
+            impl->chains = sets[k].impl->chains;
     const BonePoser poser{r, impl->bones};
     int start = 0;
     for (size_t c = 0; c < impl->bones[0].clipList.size(); ++c) {
@@ -1908,8 +2015,11 @@ bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const
     if (adjust) {
         after = *adjust;
         after.reaches.clear();
+        // A reach of the skeleton's own chains is done after the layers
+        // (OnBasePose there resets the chain's bones instead); Reluva's
+        // stand-in for others reaches from the base animation.
         for (const Adjust::Reach& reach : adjust->reaches)
-            (reach.onBase ? onBase : after).reaches.push_back(reach);
+            (reach.onBase && !chain(reach.placeChain) ? onBase : after).reaches.push_back(reach);
         if (!onBase.reaches.empty())
             adjusted(base, onBase);
     }
@@ -2093,6 +2203,10 @@ void LayeredPoser::Impl::adjusted(std::vector<Mat43>& local, const Adjust& adjus
         turnInPlace(size_t(i), turn);
     }
     for (const Adjust::Reach& r : adjust.reaches) {
+        if (const IkChain* c = chain(r.placeChain); c && (r.placeWeight > 0 || r.turnWeight > 0)) {
+            solveChains(local, r, *c, chain(r.turnChain));
+            continue;
+        }
         const int end = indexOf(r.bone);
         const int middle = end >= 0 ? bones[size_t(end)].parent : -1;
         const int upper = middle >= 0 ? bones[size_t(middle)].parent : -1;
@@ -2164,6 +2278,194 @@ void LayeredPoser::Impl::adjusted(std::vector<Mat43>& local, const Adjust& adjus
                 setRow(w, k, axes[k]);
             local[size_t(end)] = inParent(size_t(end), w, world);
         }
+    }
+}
+
+namespace {
+
+// Turns about one axis as Engine.dll's C3D code makes them (row vectors):
+// k 0 about Y, 1 about X, 2 about Z.
+Mat43 axisTurn(int k, float a) {
+    const float c = std::cos(a), s = std::sin(a);
+    if (k == 0)
+        return {c, 0, -s, 0, 1, 0, s, 0, c, 0, 0, 0};
+    if (k == 1)
+        return {1, 0, 0, 0, c, s, 0, -s, c, 0, 0, 0};
+    return {c, s, 0, -s, c, 0, 0, 0, 1, 0, 0, 0};
+}
+// Its Euler angles (about Y, X, Z) for E = Rz(c) Rx(b) Ry(a), and back.
+std::array<float, 3> eulerOf(const Mat43& m) {
+    const float b = std::asin(std::clamp(-m[7], -1.0f, 1.0f));
+    return {std::atan2(m[6], m[8]), b, std::atan2(m[1], m[4])};
+}
+Mat43 fromEuler(const std::array<float, 3>& e) {
+    return then(then(axisTurn(2, e[2]), axisTurn(1, e[1])), axisTurn(0, e[0]));
+}
+std::array<float, 4> quatOf(const Mat43& m) {
+    // The inverse of rotation(): its matrix taken as the usual one of q.
+    const float t = m[0] + m[4] + m[8];
+    std::array<float, 4> q{};
+    if (t > 0) {
+        const float s = std::sqrt(t + 1) * 2;
+        q = {(m[7] - m[5]) / s, (m[2] - m[6]) / s, (m[3] - m[1]) / s, s / 4};
+    } else if (m[0] > m[4] && m[0] > m[8]) {
+        const float s = std::sqrt(1 + m[0] - m[4] - m[8]) * 2;
+        q = {s / 4, (m[1] + m[3]) / s, (m[2] + m[6]) / s, (m[7] - m[5]) / s};
+    } else if (m[4] > m[8]) {
+        const float s = std::sqrt(1 + m[4] - m[0] - m[8]) * 2;
+        q = {(m[1] + m[3]) / s, s / 4, (m[5] + m[7]) / s, (m[2] - m[6]) / s};
+    } else {
+        const float s = std::sqrt(1 + m[8] - m[0] - m[4]) * 2;
+        q = {(m[2] + m[6]) / s, (m[5] + m[7]) / s, s / 4, (m[3] - m[1]) / s};
+    }
+    return q;
+}
+
+} // namespace
+
+// An arm's or leg's reach, as Engine.dll's C3D solver (0x1048d930): the
+// chain's steps in order, `iterations` times, each turning one bone about
+// one of its axes. A bone's turn from its bind pose (M0 = local x
+// Bind^-1) is taken as Euler angles about Y, X and Z (E = Rz Rx Ry), and
+// the step's angle set afresh to bring the end bone's origin (the
+// effector; its matrix moves it by its translation) round toward the
+// target, kept within the bone's limits for that axis (X also to +-90
+// degrees). Done from the pose as animated, or from the bind pose with
+// `onBase` (C3DApplyIKOnBasePose). Then each of the chain's bones is
+// turned that much of the way from where it was by the weight (a
+// quaternion's slerp). The hand's or foot's chain then sets that bone's
+// turn outright (its effector's turn undone), blended the same way.
+void LayeredPoser::Impl::solveChains(std::vector<Mat43>& local, const Adjust::Reach& r, const IkChain& place,
+                                     const IkChain* turn) const {
+    const int root = indexOf(place.root), end = indexOf(place.end);
+    if (root < 0 || end < 0)
+        return;
+    std::vector<size_t> chainBones;
+    for (int b = end; b >= 0; b = bones[size_t(b)].parent) {
+        chainBones.push_back(size_t(b));
+        if (b == root)
+            break;
+    }
+    if (r.placeWeight > 0) {
+        std::vector<Mat43> saved(chainBones.size());
+        for (size_t i = 0; i < chainBones.size(); ++i)
+            saved[i] = local[chainBones[i]];
+        if (r.onBase)
+            for (size_t b : chainBones)
+                local[b] = bones[b].placement;
+        const Vec3f target = r.at;
+        const Vec3f effOffset = rowOf(place.effector, 3);
+        for (int it = 0; it < place.iterations; ++it) {
+            bool done = false;
+            for (size_t s = 0; s < place.steps.size() && !done; ++s) {
+                const int n = indexOf(place.steps[s].first);
+                const int k = place.steps[s].second;
+                if (n < 0)
+                    continue;
+                const size_t b = size_t(n);
+                std::vector<Mat43> world = worlds(local);
+                const Mat43& bind = bones[b].placement;
+                Mat43 m0 = then(local[b], inverseOf(bind));
+                const Vec3f m0t = rowOf(m0, 3);
+                m0[9] = m0[10] = m0[11] = 0;
+                std::array<float, 3> e = eulerOf(m0);
+                // The frame the bone's own turn is done in: its bind
+                // placement in its parent.
+                Mat43 frame = bind;
+                for (size_t c = 0; c < 3; ++c)
+                    frame[9 + c] += m0t[0] * bind[c] + m0t[1] * bind[3 + c] + m0t[2] * bind[6 + c];
+                if (bones[b].parent >= 0)
+                    frame = then(frame, world[size_t(bones[b].parent)]);
+                // The effector and the target in the bone's own space.
+                Vec3f effWorld = rowOf(world[size_t(end)], 3);
+                for (size_t q = 0; q < 3; ++q)
+                    effWorld = vadd(effWorld, vmul(rowOf(world[size_t(end)], q), effOffset[q]));
+                const Mat43 own = then(m0, frame);
+                const Mat43 ownInv = inverseOf(own);
+                auto pointIn = [](const Mat43& m, const Vec3f& v) {
+                    return Vec3f{v[0] * m[0] + v[1] * m[3] + v[2] * m[6] + m[9], v[0] * m[1] + v[1] * m[4] + v[2] * m[7] + m[10],
+                                 v[0] * m[2] + v[1] * m[5] + v[2] * m[8] + m[11]};
+                };
+                // u: the effector before the bone's own turn; t: the target
+                // in the frame, before it.
+                const Vec3f u = pointIn(ownInv, effWorld);
+                const Vec3f t = pointIn(inverseOf(frame), target);
+                // E = Rz Rx Ry: the turns before the step's axis and after it.
+                Mat43 pre{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, post = pre;
+                if (k == 0)
+                    pre = then(axisTurn(2, e[2]), axisTurn(1, e[1]));
+                else if (k == 1) {
+                    pre = axisTurn(2, e[2]);
+                    post = axisTurn(0, e[0]);
+                } else
+                    post = then(axisTurn(1, e[1]), axisTurn(0, e[0]));
+                const Vec3f x = pointIn(pre, u);
+                const Vec3f y = pointIn(inverseOf(post), t);
+                // In the plane square to the axis: the angle from x to y.
+                const size_t i0 = k == 0 ? 2 : k == 1 ? 1 : 0, i1 = k == 0 ? 0 : k == 1 ? 2 : 1;
+                const float ax = std::atan2(x[i1], x[i0]), ay = std::atan2(y[i1], y[i0]);
+                float angle = ay - ax;
+                // The sign as axisTurn turns: try both, keep the closer.
+                auto miss = [&](float a) {
+                    const Vec3f z = pointIn(axisTurn(k, a), x);
+                    return (z[i0] - y[i0]) * (z[i0] - y[i0]) + (z[i1] - y[i1]) * (z[i1] - y[i1]);
+                };
+                if (miss(-angle) < miss(angle))
+                    angle = -angle;
+                const std::array<float, 6>& lim = place.limits[s];
+                float lo = lim[size_t(2 * k)], hi = lim[size_t(2 * k + 1)];
+                if (k == 1) {
+                    lo = std::max(lo, -1.5708f);
+                    hi = std::min(hi, 1.5708f);
+                }
+                e[size_t(k)] = std::clamp(angle, std::min(lo, hi), std::max(lo, hi));
+                Mat43 turned = fromEuler(e);
+                for (size_t c = 0; c < 3; ++c)
+                    turned[9 + c] = m0t[c];
+                local[b] = then(turned, bind);
+                // Close enough (the chains' tolerance is 0: never early).
+                world = worlds(local);
+                Vec3f now = rowOf(world[size_t(end)], 3);
+                for (size_t q = 0; q < 3; ++q)
+                    now = vadd(now, vmul(rowOf(world[size_t(end)], q), effOffset[q]));
+                done = vlen(vsub(now, target)) < place.tolerance;
+            }
+            if (done)
+                break;
+        }
+        // Blended back toward the pose by the weight.
+        const float w = std::clamp(r.placeWeight, 0.0f, 1.0f);
+        for (size_t i = 0; i < chainBones.size(); ++i) {
+            const size_t b = chainBones[i];
+            Mat43 out = rotation(slerp(quatOf(saved[i]), quatOf(local[b]), w));
+            for (size_t c = 0; c < 3; ++c)
+                out[9 + c] = saved[i][9 + c];
+            local[b] = out;
+        }
+    }
+    if (r.turnWeight > 0) {
+        // The hand's (or foot's) turn outright: the wanted axes, its
+        // effector's turn undone; then blended by the weight.
+        const IkChain* tc = turn;
+        const int hb = tc ? indexOf(tc->root) : end;
+        if (hb < 0)
+            return;
+        const size_t h = size_t(hb);
+        std::vector<Mat43> world = worlds(local);
+        Mat43 wanted{};
+        for (size_t k = 0; k < 3; ++k)
+            setRow(wanted, k, r.axes[k]);
+        if (tc) {
+            Mat43 eff = tc->effector;
+            eff[9] = eff[10] = eff[11] = 0;
+            wanted = then(inverseOf(eff), wanted);
+        }
+        Mat43 nowRot = world[h];
+        nowRot[9] = nowRot[10] = nowRot[11] = 0;
+        Mat43 w = rotation(slerp(quatOf(nowRot), quatOf(wanted), std::clamp(r.turnWeight, 0.0f, 1.0f)));
+        for (size_t c = 0; c < 3; ++c)
+            w[9 + c] = world[h][9 + c];
+        local[h] = inParent(h, w, world);
     }
 }
 
@@ -2412,6 +2714,8 @@ std::vector<std::array<float, 12>> LayeredPoser::bindSkeleton() const {
 }
 
 int LayeredPoser::boneIndex(std::string_view name) const { return impl->indexOf(name); }
+
+bool LayeredPoser::hasChain(const std::string& name) const { return impl->chain(name) != nullptr; }
 
 std::string LayeredPoser::boneName(int index) const {
     return index >= 0 && size_t(index) < impl->bones.size() ? impl->bones[size_t(index)].name : std::string();

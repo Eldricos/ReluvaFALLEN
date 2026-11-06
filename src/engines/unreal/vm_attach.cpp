@@ -64,9 +64,10 @@ const MeshAttachPoint* findPoint(const std::vector<MeshAttachPoint>& points, con
 } // namespace
 
 // The limbs the IK chains move: the chains' names (its place, its turn),
-// the end bone and the attachment point on it that's meant to reach (the
-// player's RightHand meets the gun's RightHand, as C3DAttach would put
-// them). Not in the meshes: The Fallen's engine knows them by name.
+// the end bone, and for a skeleton without the chains (Reluva's stand-in
+// solve) the attachment point on it that reaches. Skeletons with them
+// (Shared.Male's, which the player borrows) reach from the end bone's
+// origin, as Engine.dll's solver does (mesh.cpp).
 struct Limb {
     const char* placeChain;
     const char* turnChain;
@@ -658,6 +659,16 @@ LayeredPoser::Adjust ScriptLevel::adjustOf(VmObject* a, ActorMesh& m) {
     // The limbs' points, once a tick: from the pose without the reaches,
     // then again with them (where the skin at the wrist puts them once the
     // arm's bent), and the reaches worked out again from that.
+    // With the skeleton's own chains (Engine.dll's), the effector is the
+    // end bone's origin and its axes as the scripts take them.
+    for (size_t l = 0; l < 4; ++l)
+        if ((b.limbs[l].place || b.limbs[l].turn) && m.poser->hasChain(kLimbs[l].placeChain)) {
+            Bends::Effector& e = b.effectors[l];
+            e.tick = ticks_ + 1;
+            e.offset = {};
+            for (size_t k = 0; k < 3; ++k)
+                e.axes[k] = {kScriptAxes[k][0], kScriptAxes[k][1], kScriptAxes[k][2]};
+        }
     bool measured = false;
     for (size_t l = 0; l < 4 && !measured; ++l)
         if ((b.limbs[l].place || b.limbs[l].turn) && b.effectors[l].tick != ticks_ + 1) {
@@ -714,6 +725,8 @@ LayeredPoser::Adjust ScriptLevel::adjustOf(VmObject* a, ActorMesh& m) {
             continue;
         LayeredPoser::Adjust::Reach r;
         r.bone = kLimbs[l].bone;
+        r.placeChain = kLimbs[l].placeChain;
+        r.turnChain = kLimbs[l].turnChain;
         r.offset = vec3(e.offset);
         r.onBase = ik.onBase;
         if (ik.place) {

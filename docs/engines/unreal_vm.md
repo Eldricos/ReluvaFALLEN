@@ -1859,18 +1859,38 @@ Not done:
   natives: the order of a bone's axes, the axes `C3DApplyRotation` turns
   about, the actor's axes for `C3DApplyWorldRotation`, and what reaches
   in an IK chain.
-- `C3DApplyIKOnBasePose(IkChain, Val)` is a reading of its name, as no
-  script calls it: with `Val` not 0, the chain's reach is done to the
-  actor's own animation, before the layers go over it.
-- The engine's IK chains are kept with the mesh (`CCD` solving, each
-  bone's limits); Reluva's two-bone solve above stands in for them, and
-  layers are placed by a group's first bone rather than the mesh's own
-  per-bone group lists.
-- The IK chains' ends (where a hand reaches from) are still Reluva's
-  reading: the hand's point from its triangle's middle, in the axes of
-  the bone the triangle moves with. How Engine.dll's IK takes them
-  wasn't read, and the natives' frame above moves the arms. Points from
-  the origin are in the skeleton's units
+- **The IK, as Engine.dll's** (`C3DApplyIK` and its solver, read November
+  2026):
+  - **The chains are data.** Shared.u's `Male` keeps eight (the player
+    takes them through its alt meshes; only `CTV_Player` sets IK
+    targets): RightArm and LeftArm (clavicle to hand), RightLeg and
+    LeftLeg (thigh to foot), and a hand's or foot's own. Each names its
+    root and end bones, a 4x3 effector matrix in the end bone's axes
+    (identity but for RightHand, about 7 degrees), steps of a bone and
+    an axis (the arms': forearm Y, upper arm Z, upper arm X, forearm Y,
+    clavicle X), 4 iterations and a tolerance of 0.
+  - **The bones' joint limits** are the 10 floats after each bone's
+    children: two of +-1e38, two more, then min and max about Y, X and Z
+    in radians (Male's right forearm 4 to 147 degrees about Y, about 1
+    about X; a default of +-30). Read into each bone's record.
+  - **The solve:** each step turns its bone about its one axis. The
+    bone's turn from its bind pose (`M0 = local x Bind^-1`) is taken as
+    Euler angles for `E = Rz Rx Ry`, and that axis's angle is set afresh
+    to bring the end bone's origin (the effector: no attachment point)
+    round toward the target. It's kept within the bone's limit for that
+    axis, and X also within +-90 degrees. Then each of the chain's bones
+    is slerped from where it was by the chain's weight. On Sisko and
+    Kira holding the rifle, the hands come within 0.02 to 0.3 units of
+    their targets.
+  - **The hand's or foot's chain** sets that bone's turn outright (the
+    wanted axes with the chain's effector turn undone), slerped by its
+    weight.
+  - **`C3DApplyIKOnBasePose(IkChain, Val)`**: with `Val` not 0, the
+    chain's bones go back to their bind pose before the solve. It isn't
+    "before the layers": the solve is always after them.
+  - A skeleton with no chains of its own or borrowed keeps Reluva's
+    earlier two-bone solve. No other script sets IK.
+- Points from the origin are in the skeleton's units
   ([mesh.md](../formats/unreal/mesh.md), `reluva-tool ue-points`). With them, Kira holds the phaser rifle at
   her hip, the right hand on its grip at the back and the left under the
   barrel. That needed `Rotator * Rotator` (The Fallen's own operator,

@@ -192,6 +192,9 @@ public:
         // are `axes`; each blended in by its weight (0 none, 1 all).
         struct Reach {
             std::string bone;
+            // The skeleton's IK chains it is, if it has them: the reach's
+            // (an arm's or leg's) and the turn's (a hand's or foot's).
+            std::string placeChain, turnChain;
             float placeWeight = 0, turnWeight = 0;
             Vec3f at{}, offset{};
             std::array<Vec3f, 3> axes{};
@@ -247,6 +250,8 @@ public:
     // Every bone's place in the skeleton's space in its bind pose.
     std::vector<std::array<float, 12>> bindSkeleton() const;
     int boneIndex(std::string_view name) const;
+    // Whether it has (or borrows from its shared sets) the IK chain.
+    bool hasChain(const std::string& name) const;
     std::string boneName(int index) const;
     // The bone that moves these vertices most (by their weights summed): a
     // triangle's, which its attachment point turns with. -1 if none.
