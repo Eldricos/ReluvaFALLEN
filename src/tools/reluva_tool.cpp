@@ -5186,6 +5186,20 @@ int cmdUeProbe(int argc, char** argv) {
         if (!err && m.keyFrames)
             std::printf("  %d of its %d frames of vertices found (the first is shown for all)\n", m.keyFrames,
                         m.animFrames);
+        if (!err && m.framesFromClips) {
+            // How many of its frames differ from the first: a keyframed
+            // mesh filled from its clips moves.
+            int moving = 0;
+            const size_t n = size_t(m.frameVerts);
+            for (int f = 1; f < m.animFrames; ++f)
+                for (size_t v = 0; v < n; ++v)
+                    if (m.verts[size_t(f) * n + v] != m.verts[v]) {
+                        ++moving;
+                        break;
+                    }
+            std::printf("  %d frames filled from its clips by name, %d of them unlike the first\n", m.framesFromClips,
+                        moving);
+        }
         if (!err && m.bones)
             std::printf("  posed from %d bones (%s)\n", m.bones,
                         m.bonesAnimated ? "every frame, from their animation keys" : "the pose they're bound in, for all frames");

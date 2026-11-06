@@ -80,12 +80,15 @@ through the four.
 
 **Keyframed meshes.** Many animated meshes keep fewer `(FrameVerts,
 FrameVerts, 1)` vertex arrays than they have frames: ARD_AmmoCrate 2 for
-100 frames (its whole export is 8550 bytes, too small for 100), and
-ARD_TortureMachine about 250 for 400, each followed by a `(9, 9, 64)`
-array and, every few dozen, a `(k, k, 5)` header whose k is near an
-animation's frame count. They look like keyframes with timing still to be
-worked out; for now the first frame found is used for every frame
-(`Mesh::keyFrames` says how many were found) so the mesh is at least drawn.
+100 frames, ARD_TortureMachine about 250 for 400. Each array is followed
+by a `(9, 9, 64)` array, and every few dozen comes a `(k, k, 5)` header
+whose k is near an animation's frame count. They're the clips' vertex
+keys, timed in seconds (see "Clips by name, and vertex keys" below), and
+every frame is filled from them. Checked: `ue-probe` gives
+ARD_TortureMachine's 400 frames filled from its clips, 399 of them
+unlike the first. ARD_AmmoCrate's 100 frames are its one still pose, as
+no script animates it. `ue-check` counts no mesh left showing its first
+frame for all of them (`Mesh::keyFrames`).
 
 **`ue-check` on The Fallen** after this layout was added (October 2026):
 306 of 455 LodMeshes and 4 of 9 Meshes read (all now: see Classic Meshes
