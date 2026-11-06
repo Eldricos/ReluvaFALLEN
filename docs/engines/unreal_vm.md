@@ -352,8 +352,9 @@ What's left before play, by what `ue-run` reports:
 - **Speed**: the biggest map, M03_KiraL2 (4,263 actors), runs 20 seconds
   of play in about 5.7 s without drawing (21.6 s before the work below,
   10.7 before the last of it); all 74 maps take 371 s together, 800
-  before the last of it, the slowest (M10_WorfL1A) 11.5. The last of
-  it:
+  before the last of it, the slowest (M10_WorfL1A) 11.5. These are
+  October's figures; the later work and November's figures are under
+  Speed below. The last of it:
   - Only actors that may be seen are looked at to draw: not hidden, in a
     zone seen through the portals (`LevelPlay::mayBeSeen`). The rest
     aren't drawn, so they don't get `C3DPreRender` or `LastRenderTime`
@@ -1939,13 +1940,42 @@ DS9_FederationPhaserRifleAmmo AmmoAmount 20`),
 - **M01_KiraL1A:** the opening's directors fly over the monastery
   bridge, then follow her and a monk, letterboxed.
 
-**Speed**, measured without drawing (`ue-play`, M01_KiraL2, 20 s, 600
-frames): 13 s in all, about 22 ms a frame.
-- The scripts' ticks take 3.4 s.
-- The page's own work (mostly the fire and water textures) takes 5.3 s,
-  as it does when not playing.
-- The rest is reading the live actors and the camera each frame, plus
-  starting play and loading meshes once.
+**Speed** (`ue-play`, 20 s of play, 600 frames; November 2026). `ue-play`
+prepares each frame for drawing as the Maps page does: it poses, lights
+and uploads the characters and runs the HUD. Only the drawing itself is
+left out.
+- M10_WorfL1A, the slowest map, now takes about 12.5 to 15 s; it took
+  21.5 s before the work below. M03_KiraL2 takes about 5 s (12 s before).
+- The scripts alone (`ue-run -all`, no drawing at all) take 128 s for
+  all 74 maps. The slowest is M11_WorfL1, at 2.9 s for its 20 s.
+- The work:
+  - **Fire, water and the other procedural textures** tick only when
+    they're drawn, as UE1's do. Engine.dll's `UTexture::Update(Time)`
+    ticks a texture by the time since it last updated, and the renderer
+    gets each texture it draws through `UTexture::Get`, which calls it.
+    The Maps page now notes which textures each frame draws
+    (`TextureUseRecorder`) and ticks only those. Before, every one in the
+    level stepped every frame, seen or not.
+  - **The water texture's step and slopes** read their rows directly,
+    without a modulo for every cell. The picture is the same.
+  - **Packages are read whole at once.** They had been read a byte at a
+    time through stream iterators, a fifth of a level's start.
+  - **Answers kept:**
+    - `VmObject::find` with a string literal remembers its slot for each
+      class.
+    - The level's walls between a light and an actor (`wallBetween`) are
+      remembered for the same two places, since the BSP doesn't move. A
+      character standing still asked it of every light each frame.
+  - **The overlay:** only the rows drawn on the frame before are
+    cleared, not all 2.7 MB of it.
+- What's left most, from callgrind on M10_WorfL1A:
+  - Posing, lighting and uploading the characters for drawing: about
+    half, the IK's reaches (worked out twice a tick for each character
+    holding a gun) among it.
+  - The HUD's scripts: a tenth.
+  - The viewer's own text box: a tenth.
+  - Sounds decoded from MP3 the first time each is heard, and meshes
+    read as they first come into view: once each.
 
 The biggest maps' ticks took twice as long. Profiled on M03_KiraL2
 (callgrind, then stack samples later in the run), these made it about

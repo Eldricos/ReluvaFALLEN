@@ -88,10 +88,13 @@ What's left is mostly checking against the original, and speed:
    IK natives in [unreal_vm.md](unreal_vm.md)). A full playthrough's
    recording has been compared so far: see
    [unreal_playthrough.md](unreal_playthrough.md).
-2. **Speed.** Every map runs 20 seconds of play in under 12 of CPU
-   without drawing (M03_KiraL2 about 6); the characters' own
-   `C3DPreRender` scripts and the HUD's are what's left most. Drawing on
-   a GPU not yet measured.
+2. **Speed.** M10_WorfL1A, the slowest map, runs 20 seconds of play in
+   about 12.5 to 15 of CPU in `ue-play`, which prepares every frame for
+   drawing. M03_KiraL2 takes about 5 (November 2026). The scripts alone
+   (`ue-run -all`) take at most 2.9 s for a map's 20 s, and 128 s for
+   all 74 maps. What's left most is posing and lighting the characters
+   for drawing, the HUD's scripts and the viewer's own text. Drawing on a
+   GPU isn't measured yet.
 3. **Other UE1 games.** A tracker player for music modules, and the
    layouts other licensees changed, once there's a second game to check
    against.
