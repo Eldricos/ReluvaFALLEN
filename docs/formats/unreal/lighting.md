@@ -441,8 +441,9 @@ and its light manager's choice of light), and redone in Reluva's own code:
   whose normal points up at least 0.7, on the side facing the camera.
   A held `Weapon` (`bHeldItem`, with an `Owner`) casts with its holder's
   light and place, faded by its own `ScaleGlow`. An actor whose
-  `MultiTextureOne` overlay is blended (`bMultiTextureOn`,
-  `MultiTextureOneStyle` `STY_Blended`) fades its shadow by
+  first pass is blended (`bMultiTextureOn`, `MultiTextureOneStyle`
+  `STY_Blended`; there's no `MultiTextureOne` texture, the first pass is
+  its own skins) fades its shadow by
   `MultiTextureOneScaleGlow` instead (a cloak fading in).
 - **Distance.** A factor of 900 / the floor point's depth in the view,
   at most 3.5; under 0.05 there's none.

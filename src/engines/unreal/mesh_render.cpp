@@ -303,8 +303,10 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
                 call.vertexLightCount = 0;
                 call.color = {g * pass->unlitColor[0], g * pass->unlitColor[1], g * pass->unlitColor[2], 1};
             } else if (style != kStyleBlended && pass->glow < 1) {
+                // Render.dll: the first pass at least a hundredth, the
+                // second by its glow as it is.
                 for (size_t k = 0; k < 3; ++k)
-                    call.color[k] *= std::max(pass->glow, 0.01f);
+                    call.color[k] *= pass->second ? std::max(pass->glow, 0.0f) : std::max(pass->glow, 0.01f);
             }
         }
         if (b.polyFlags & polyflag::Masked)
@@ -314,6 +316,12 @@ void drawMesh(gfx::Renderer3D& renderer, const GpuMesh& mesh, const gfx::Mat4& p
             call.state.dst = gfx::Blend::OneMinusSrcAlpha;
             call.state.depthWrite = false;
             call.color[3] = std::clamp(pass ? pass->glow : 1.0f, 0.0f, 1.0f);
+            // The drivers' blended polygon (D3DDrv's and OpenGLDrv's
+            // DrawGouraudPolygon) takes the blend ratio as its alpha and
+            // scales its colour by it too: a pass fades in as glow².
+            if (pass)
+                for (size_t k = 0; k < 3; ++k)
+                    call.color[k] *= call.color[3];
         } else if (style == kStyleSubtractive) {
             call.state.src = gfx::Blend::Zero;
             call.state.dst = gfx::Blend::SrcColor;

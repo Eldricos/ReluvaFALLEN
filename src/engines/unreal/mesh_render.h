@@ -121,6 +121,7 @@ struct MeshFog {
 // pushed out along its normals (the mesh's own units).
 struct MeshPass {
     float glow = 1;
+    bool second = false; // the second pass (its light scaled by the raw glow, no floor)
     bool unlit = false;
     gfx::Vec3 unlitColor{1, 1, 1};
     gfx::TextureId texture = 0;

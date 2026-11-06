@@ -148,7 +148,7 @@ drawn as the original's Direct3D renderer blends them:
 | 2 Masked | colour 0 left out |
 | 3 Translucent | added (`ONE`, `INVSRCCOLOR`) |
 | 4 Modulated | times what's behind, doubled (`DESTCOLOR`, `SRCCOLOR`) |
-| 5 Blended | alpha-blended, its glow as the alpha (`SRCALPHA`, `INVSRCALPHA`) |
+| 5 Blended | alpha-blended, its glow as the alpha (`SRCALPHA`, `INVSRCALPHA`) and its colour times the glow too, so it fades in as glow² (the drivers' `DrawGouraudPolygon`) |
 | 6 Subtractive | times what's behind (`ZERO`, `SRCCOLOR`) |
 
 `bMultiTextureOn` (transporter beams on the characters they carry,
@@ -162,9 +162,10 @@ the original's `DrawMesh` does (Render.dll, read for what it does):
    mapped if `bMultiTextureEnvMap`; pushed out along its normals by
    `MultiTextureTwoFatness` / 16 - 8 world units (128: not at all).
 
-In each pass the glow is the alpha of a blended pass; with
-`bMultiTextureOneUnlit` / `bMultiTextureTwoUnlit` the pass is that glow
-times `ColorFilter`, not lit; otherwise a glow under 1 keeps that much of
-its light (at least 0.01). A transporter beaming someone in sets the first
+In each pass the glow is the alpha of a blended pass, and its colour is
+scaled by it too. With `bMultiTextureOneUnlit` / `bMultiTextureTwoUnlit`
+the pass is that glow times `ColorFilter`, not lit. Otherwise a glow
+under 1 keeps that much of its light: at least 0.01 in the first pass,
+the glow as it is in the second. A transporter beaming someone in sets the first
 pass blended from 0 and the second its sparkle texture, translucent and
 unlit, crossfading the two (`CTV_TransporterBeamIn`).

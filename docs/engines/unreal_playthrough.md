@@ -156,8 +156,20 @@ differs only in that way, Reluva follows its own scripts.
   `SetBlendRatio`, and both shipped drivers draw a blended polygon with
   its light and its alpha times that ratio (D3DDrv's
   `SRCALPHA`/`INVSRCALPHA`, OpenGLDrv's `GL_SRC_ALPHA`), so by the code
-  it starts unseen, as Reluva draws it. The recording's renderer
-  seemingly draws it opaque, as it is also brighter throughout. Its
+  it starts unseen, as Reluva draws it. Read again in full (November
+  2026):
+  - **The passes:** with `bMultiTextureOn` there's no other skin pass.
+    The first pass is the skin itself, restyled by
+    `MultiTextureOneStyle`; the second is the sparkle.
+  - **The fallback:** a device that refused `SetBlendRatio` would get the
+    pass translucent at a hundredth of its light. But all five shipped
+    drivers accept it (D3D, OpenGL, Glide, MeTaL, software).
+  - **The colour:** the drivers scale a blended polygon's colour by the
+    ratio as well as using it as alpha. The skin fades in as glow²,
+    darker halfway than Reluva had it (now as they do).
+  No path in the game's own code shows the skin at glow 0. The
+  recording's renderer seemingly draws it opaque, as it is also brighter
+  throughout. Its
   column is also lower and shorter (at most knee height, gone 0.5 s
   sooner); Reluva's spans the body, as the script's scale (twice the
   height over 80) and the quad mesh centred on its pivot (Z -200 to 200)

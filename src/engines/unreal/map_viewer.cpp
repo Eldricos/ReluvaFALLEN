@@ -2348,6 +2348,7 @@ void MapViewer::drawActorMesh(const GpuMesh& gpu, const gfx::Mat4& placement, co
     one.unlitColor = filter;
     drawMesh(*renderer_, gpu, placement, pose, skins, light, kExposure, m.oneStyle, &fog, &one);
     MeshPass two;
+    two.second = true;
     two.glow = m.twoGlow;
     two.unlit = m.twoUnlit;
     two.unlitColor = filter;
