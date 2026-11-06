@@ -79,9 +79,12 @@ Texture coordinates as for the level's surfaces:
 
 The Maps page draws movers where they're saved; O moves every mover to
 its next keyframe over its MoveTime (straight lines, as the default
-glide; the game's script picks the real moves). Their light is worked out
-at each vertex from the level's lights without shadows, where they start
-(the original lights movers as they move; not done yet).
+glide; the game's script picks the real moves). Their light is as
+Render.dll's ([lighting.md](lighting.md#movers-light)): a mover with
+`bDynamicLightMover` is lit where it is now, by its BSP leaf's lights
+and the lights that move; any other keeps the light it has where it
+starts (its lightmaps' light lists in the original; here worked out at
+its vertices when the level is read) and carries it as it moves.
 
 ## The sky zone
 

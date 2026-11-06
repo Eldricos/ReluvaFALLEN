@@ -1041,6 +1041,10 @@ Console commands (`ConsoleCommand`, `vm_console.cpp`):
     flashlight shows on the raised forearm (`C3DAttach(Player, 'Wrist',
     'Arm')`), the breather at the mouth ('Face'), and the video options
     name "Direct3D Support".
+  - Picking items up: standing still within 52 of one (`ScanForItemsToPickup`),
+    the player turns to it and plays the pick-up (crouching to one under
+    the feet), then takes it. M05_SiskoL1a's breather at (3205, -2204)
+    is in a nook open only to +Y, and is taken from there.
 - `set` changes one (above), and the class's property in its defaults and
   every object of it.
 - `KEYNAME n`, `KEYBINDING Key` and `SET Input Key Command` read and change
