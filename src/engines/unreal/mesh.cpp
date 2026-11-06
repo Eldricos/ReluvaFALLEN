@@ -1787,6 +1787,18 @@ struct LayeredPoser::Impl {
     BoneReader reader() const { return BoneReader{data, base, from, base + data.size()}; }
     bool locals(std::string_view base, float fraction, const std::vector<Layer>& layers,
                 std::vector<std::array<float, 12>>& out, const Adjust* adjust = nullptr) const;
+    bool localsUncached(std::string_view base, float fraction, const std::vector<Layer>& layers,
+                        std::vector<std::array<float, 12>>& out, const Adjust* adjust) const;
+    // The last poses worked out and what each was worked out from (byte
+    // for byte): the scripts' bone queries and the drawing ask for the
+    // same pose each tick, and its IK is the costliest part. A few, as
+    // the characters sharing a mesh share this.
+    struct Cached {
+        std::string key;
+        std::vector<Mat43> locals;
+    };
+    mutable std::array<Cached, 8> cache;
+    mutable size_t cacheNext = 0;
     void adjusted(std::vector<Mat43>& local, const Adjust& adjust) const;
     void solveChains(std::vector<Mat43>& local, const Adjust::Reach& r, const IkChain& place,
                      const IkChain* turn) const;
@@ -1979,6 +1991,83 @@ std::vector<bool> LayeredPoser::part(std::string_view bone, bool rest) const {
 // animation isn't the mesh's.
 bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const std::vector<Layer>& layers,
                                 std::vector<std::array<float, 12>>& out, const Adjust* adjust) const {
+    std::string key;
+    auto bytes = [&](const void* p, size_t n) { key.append(static_cast<const char*>(p), n); };
+    auto text = [&](std::string_view t) {
+        const size_t n = t.size();
+        bytes(&n, sizeof n);
+        key.append(t);
+    };
+    auto vec = [&](const Vec3f& v) { bytes(v.data(), sizeof(float) * 3); };
+    text(baseAnim);
+    bytes(&fraction, sizeof fraction);
+    for (const Vec3f& a : actorAxes)
+        vec(a);
+    for (const Layer& l : layers) {
+        text(l.anim);
+        bytes(&l.fraction, sizeof l.fraction);
+        if (l.part)
+            for (bool in : *l.part)
+                key.push_back(in ? '1' : '0');
+        key.push_back('/');
+        bytes(&l.weight, sizeof l.weight);
+        for (bool c : l.clear)
+            key.push_back(c ? '1' : '0');
+    }
+    key.push_back(adjust ? 'A' : '-');
+    if (adjust) {
+        for (const Adjust::Turn& t : adjust->turns) {
+            text(t.bone);
+            bytes(&t.axis, sizeof t.axis);
+            bytes(&t.radians, sizeof t.radians);
+        }
+        key.push_back('|');
+        for (const Adjust::SpaceTurn& t : adjust->spaceTurns) {
+            text(t.bone);
+            for (const Vec3f& v : t.turn)
+                vec(v);
+        }
+        key.push_back('|');
+        for (const Adjust::Op& o : adjust->ops) {
+            key.push_back(char('0' + o.kind));
+            text(o.bone);
+            bytes(&o.axis, sizeof o.axis);
+            bytes(&o.radians, sizeof o.radians);
+            for (const Vec3f& v : o.turn)
+                vec(v);
+            for (bool c : o.remove)
+                key.push_back(c ? '1' : '0');
+        }
+        key.push_back('|');
+        for (const Adjust::Reach& r : adjust->reaches) {
+            text(r.bone);
+            text(r.placeChain);
+            text(r.turnChain);
+            bytes(&r.placeWeight, sizeof r.placeWeight);
+            bytes(&r.turnWeight, sizeof r.turnWeight);
+            vec(r.at);
+            vec(r.offset);
+            for (const Vec3f& v : r.axes)
+                vec(v);
+            key.push_back(r.onBase ? '1' : '0');
+        }
+    }
+    for (const Cached& c : cache)
+        if (c.key == key && c.locals.size() == bones.size()) {
+            out = c.locals;
+            return true;
+        }
+    if (!localsUncached(baseAnim, fraction, layers, out, adjust))
+        return false;
+    Cached& slot = cache[cacheNext];
+    cacheNext = (cacheNext + 1) % cache.size();
+    slot.key = std::move(key);
+    slot.locals = out;
+    return true;
+}
+
+bool LayeredPoser::Impl::localsUncached(std::string_view baseAnim, float fraction, const std::vector<Layer>& layers,
+                                        std::vector<std::array<float, 12>>& out, const Adjust* adjust) const {
     const BoneReader r = reader();
     struct Source {
         const AnimationSet* set = nullptr;

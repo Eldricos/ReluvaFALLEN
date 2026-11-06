@@ -98,6 +98,17 @@ What's left is mostly checking against the original, and speed:
    all 74 maps. What's left most is posing and lighting the characters
    for drawing, the HUD's scripts and the viewer's own text. Drawing on a
    GPU isn't measured yet.
+   - Since then (M04_KiraL1, the rifle drawn, 9 s): a character's pose,
+     IK and all, is kept in its mesh's poser (the last 8, by everything
+     it's made from), and the drawing poses with the level's poser, so
+     the pose its scripts asked after this tick is drawn as it is. The
+     scripts' own queries still pose it about three times a tick for the
+     player: they change its bone turns and IK targets between them. The
+     viewer's info box keeps its text and draws only the lines that
+     changed (5% of the time before). Together about a tenth less time,
+     the frames the same to the pixel.
+   - The HUD is the game's own `PostRender` script once a frame (4%);
+     only a faster VM makes it cheaper.
 3. **Other UE1 games.** A tracker player for music modules, and the
    layouts other licensees changed, once there's a second game to check
    against.

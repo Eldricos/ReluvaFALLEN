@@ -620,7 +620,7 @@ private:
         bool seen = false;
     };
     std::map<VmObject*, ShadowState> shadows_;
-    bool drawLayered(const LevelPlay::Look& look, int mesh, const gfx::Mat4& placement,
+    bool drawLayered(VmObject* actor, const LevelPlay::Look& look, int mesh, const gfx::Mat4& placement,
                      const std::vector<gfx::TextureId>& skins, const MeshLight& light);
     float playClock_ = 0, fov_ = 90;
     LevelPlay::View view_;
@@ -659,6 +659,11 @@ private:
     // The overlay's rows drawn last frame, cleared before the next: [0,
     // top) and [bottom, the frame's height).
     int overlayTop_ = 0, overlayBottom_ = 0; // the first frame clears it all
+    // The info box's lines as drawn, its width and its error line: kept
+    // between frames, only changed lines drawn again (drawOverlay).
+    std::vector<std::string> overlayLines_;
+    int overlayBoxW_ = 0;
+    size_t overlayErrorLine_ = size_t(-1);
 
     // Fly camera, in the renderer's world: Unreal's axes with Y negated
     // (so right-handed), Z up; yaw 0 looks along +X.

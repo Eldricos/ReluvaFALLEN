@@ -1955,14 +1955,16 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
     const size_t rowBytes = size_t(kFrameW) * 4;
     const size_t top = std::min(size_t(std::clamp(overlayTop_, 0, kFrameH)) * rowBytes, overlay_.pixels.size());
     const size_t bottom = std::min(size_t(std::clamp(overlayBottom_, 0, kFrameH)) * rowBytes, overlay_.pixels.size());
-    std::fill(overlay_.pixels.begin(), overlay_.pixels.begin() + ptrdiff_t(top), uint8_t(0));
     std::fill(overlay_.pixels.begin() + ptrdiff_t(bottom), overlay_.pixels.end(), uint8_t(0));
-    overlayTop_ = 0;
     overlayBottom_ = kFrameH;
     // A cut scene's black bars are the HUD's own (CTV_Hud.RenderLetterBox,
     // with the subtitles drawn over them).
-    if (!showInfo_ && error_.empty())
+    if (!showInfo_ && error_.empty()) {
+        std::fill(overlay_.pixels.begin(), overlay_.pixels.begin() + ptrdiff_t(top), uint8_t(0));
+        overlayTop_ = 0;
+        overlayLines_.clear();
         return;
+    }
     std::vector<std::string> lines = info_;
     const size_t errorLine = error_.empty() ? size_t(-1) : lines.size();
     if (!error_.empty())
@@ -2001,15 +2003,36 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
         widest = std::max(widest, font::length(l));
     const int boxW = std::min(kFrameW, int(widest) * font::kAdvance + 8),
               boxH = std::min(kFrameH, int(lines.size()) * lh + 6);
-    overlayTop_ = boxH;
-    for (int y = 0; y < boxH; ++y) {
-        uint8_t* p = overlay_.row(y);
-        for (int x = 0; x < boxW; ++x)
-            p[x * 4 + 3] = std::max<uint8_t>(p[x * 4 + 3], 150);
+    // The box is kept from frame to frame (nothing else draws up there):
+    // only the lines that changed (the place and the frame rate, mostly)
+    // are drawn again. Drawing all its text each frame cost a twentieth.
+    const bool same = boxW == overlayBoxW_ && boxH == overlayTop_ && lines.size() == overlayLines_.size() &&
+                      errorLine == overlayErrorLine_ && bottom >= top;
+    auto band = [&](int from, int to) {
+        for (int y = std::max(0, from); y < std::min(to, boxH); ++y) {
+            uint8_t* p = overlay_.row(y);
+            std::fill(p, p + size_t(kFrameW) * 4, uint8_t(0));
+            for (int x = 0; x < boxW; ++x)
+                p[x * 4 + 3] = 150;
+        }
+    };
+    if (!same) {
+        std::fill(overlay_.pixels.begin(), overlay_.pixels.begin() + ptrdiff_t(top), uint8_t(0));
+        band(0, boxH);
+        overlayLines_.assign(lines.size(), std::string(1, '\0'));
     }
-    for (size_t i = 0; i < lines.size(); ++i)
+    overlayTop_ = boxH;
+    overlayBoxW_ = boxW;
+    overlayErrorLine_ = errorLine;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (overlayLines_[i] == lines[i])
+            continue;
+        if (same)
+            band(3 + int(i) * lh, 3 + int(i + 1) * lh);
         font::drawText(overlay_, 4, 3 + int(i) * lh, lines[i],
                        i == errorLine ? Color{255, 120, 120} : Color{230, 230, 230});
+        overlayLines_[i] = lines[i];
+    }
 }
 
 std::pair<gfx::TextureId, std::array<int, 2>> MapViewer::textureOf(const ObjectRef& tex, bool* unreadable,
@@ -3074,7 +3097,7 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
         const MeshLight light = meshLightAt(look.location, &look, a);
         lastMesh_ = {};
         if ((look.layers.empty() && look.adjust.empty() && look.faces.empty()) || !mesh.bones ||
-            !drawLayered(look, at, placement, skins, light))
+            !drawLayered(a, look, at, placement, skins, light))
         {
             lastMesh_ = {};
             drawActorMesh(gpuMeshes_[size_t(at)], placement, pose, skins, light, look);
@@ -3191,7 +3214,7 @@ float MapViewer::tweenProgress(const LevelPlay::Look& look, const MeshAnimSeq& a
 // by its scripts, or its face moved: posed now from its own animation and theirs, uploaded as one frame (kept until the next
 // frame is drawn) and drawn. False if it can't be (no skeleton, an
 // animation it hasn't): drawn as its own animation alone then.
-bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4& placement,
+bool MapViewer::drawLayered(VmObject* actor, const LevelPlay::Look& look, int at, const gfx::Mat4& placement,
                             const std::vector<gfx::TextureId>& skins, const MeshLight& light) {
     auto it = posers_.find({look.mesh.package, look.mesh.exportIndex});
     if (it == posers_.end()) {
@@ -3227,9 +3250,16 @@ bool MapViewer::drawLayered(const LevelPlay::Look& look, int at, const gfx::Mat4
     if (p.poser->hasFace())
         for (const LevelPlay::Look::Face& f : look.faces)
             faces.push_back({f.anim, f.seconds, f.weight, f.fromSeconds, f.fromWeight, f.mix});
+    // The level's poser for it, when the mesh is turned as the level has
+    // it: it has worked this pose out already for the scripts' bone
+    // queries this tick, IK and all, and keeps it.
+    LayeredPoser* poser = p.poser.get();
+    if (play_ && actor && ctx_.meshTurn == MeshTurn::Reverse && ctx_.meshYawQuarters == kImportYawQuarters)
+        if (LayeredPoser* shared = play_->level().poserOf(actor))
+            poser = shared;
     std::vector<Vec3f> verts;
     if ((layers.empty() && look.adjust.empty() && faces.empty()) ||
-        !p.poser->pose(look.animSequence, look.animFrame, layers, verts, &look.adjust, &faces))
+        !poser->pose(look.animSequence, look.animFrame, layers, verts, &look.adjust, &faces))
         return false;
     // Tweening into its animation: from the pose it was in.
     const Mesh& own = meshes_[size_t(at)];

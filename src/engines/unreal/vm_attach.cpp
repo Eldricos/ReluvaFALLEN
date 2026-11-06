@@ -650,6 +650,11 @@ void ScriptLevel::clearIk(VmObject* a, NameId chain) {
     forgetPose(a);
 }
 
+LayeredPoser* ScriptLevel::poserOf(VmObject* a) {
+    ActorMesh* m = a ? actorMesh(a) : nullptr;
+    return m ? m->poser.get() : nullptr;
+}
+
 LayeredPoser::Adjust ScriptLevel::boneAdjust(VmObject* a) {
     if (!a || bends_.find(a) == bends_.end())
         return {};

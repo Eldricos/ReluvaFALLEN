@@ -394,6 +394,9 @@ public:
     // All of that as the poser takes it, with the actor where it is now
     // (empty if nothing's done to its bones).
     LayeredPoser::Adjust boneAdjust(VmObject* actor);
+    // The poser the level poses an actor's mesh with (its scripts' bone
+    // queries), for the drawing to share: it keeps the last pose it made.
+    LayeredPoser* poserOf(VmObject* actor);
     // Movement so far, for diagnostics.
     struct MovementStats {
         int moves = 0, blockedByWorld = 0, blockedByActors = 0, steps = 0, landings = 0, touches = 0,
