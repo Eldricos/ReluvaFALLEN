@@ -214,7 +214,7 @@ public:
         };
         std::vector<Op> ops;
         std::vector<Reach> reaches;
-        bool empty() const { return turns.empty() && spaceTurns.empty() && reaches.empty(); }
+        bool empty() const { return turns.empty() && spaceTurns.empty() && ops.empty() && reaches.empty(); }
     };
     // One frame of vertices (FrameVerts, in packed units as Mesh::verts):
     // every bone placed as `base` has it `fraction` through, then the

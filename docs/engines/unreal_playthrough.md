@@ -112,6 +112,27 @@ differs only in that way, Reluva follows its own scripts.
   - The scripts (`ue-run -all`) give 89 errors and 2,416 None accessed
     over all 74 maps, against 258 and 3,860 in October's run.
 
+- **Heads turning to the talker** (CM01a_SW, from 29.5 s): in the
+  recording Sisko turns his head to Worf as he asks "Mister Worf, does
+  that look like an accident to you?". In Reluva he faced ahead. The
+  scripts' `Pawn.UpdateHeadAnimation` ran and turned the head
+  (`C3DApplyWorldRotation('Bip01_Head', ...)`, about 55 degrees of yaw
+  by 31 s), but the drawing left the turn out. A pose with only the
+  scripts' bone turns counted as unadjusted (`Adjust::empty` didn't look
+  at them), so it was drawn as its animation alone. Now it turns as in
+  the recording, a little less far at 32 s as it eases round. The same
+  had kept every character's head and spine turns out of the drawing
+  where nothing else changed the pose.
+- **The sound** of the opening (CM01a_SW from Sisko's start, 40 s): its
+  loudness each 50 ms against the recording's agrees best with Reluva
+  0.15 s ahead. Over each 5 s, the two correlate at 0.46 to 0.62 (the
+  music, the effects and the speech mixed together), and 0.17 over
+  30-35 s. Reluva's mix is 1 to 5 dB louder.
+- **Not compared:** the AI's pathfinding in play, and dialogue chosen in
+  play. They depend on how the recording was played, as above. Its
+  scripted scenes (the cut scenes and level openings above) are what
+  can be set against it, and those agree.
+
 ## Open
 
 - **Overall brightness**: the recording runs brighter than Reluva by 1.2
