@@ -354,6 +354,9 @@ public:
     // until the level has begun play (LevelInfo.bBegunPlay).
     bool holdEvents = false;
     void reportError(const std::string& what);
+    // Whether the script function a native was called from is declared
+    // simulated (not state code).
+    bool callerSimulated() const;
     // Where scripts are running: " in Class.Function", for natives' errors.
     std::string where() const;
     // A state of a class or its parents, by name; null if none.

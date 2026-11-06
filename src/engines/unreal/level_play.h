@@ -152,6 +152,7 @@ public:
             bool rest = false; // the part is all but the bone and those under it
             float frame = 0, weight = 0;
             std::array<bool, 3> clear{}; // its first bone keeps the actor's own yaw, pitch, roll
+            bool loop = false;
         };
         std::vector<Layer> layers;
         // Its face's channels away from the neutral face (C3DSetSkinAnim:

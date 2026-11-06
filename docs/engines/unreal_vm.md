@@ -247,8 +247,11 @@ rate counted.
   player and it. With `bDestroyOnShutDown` asleep is gone. Nothing
   sleeps until a renderer has drawn (`ue-run`, which draws nothing);
   `ue-play`'s `view` says how many are asleep (M01_KiraL1A, 194 of its
-  actors at 21 seconds). Not read: one engine switch (0 in play, it
-  seems) and an empty `MultiMesh` counting as showing nothing.
+  actors at 21 seconds), nor while a cut scene is skipped (the engine's
+  `bFastForward`, which `FastForward(true)` sets on Escape in one). A
+  `MultiMesh` whose list is empty (its `Next` None) counts as showing
+  nothing too, whatever it's drawn as; a decal drawn as nothing goes on
+  to the other tests.
 
 UnrealEd keeps its viewports' cameras in the level as `Camera` actors
 (292 of them over The Fallen's maps). `Camera` is a `PlayerPawn`, and in
@@ -1161,7 +1164,10 @@ per-frame `Update`), as read from them; the code is Reluva's own.
     positional mixing, whose obstruction does nothing without EAX. The
     filters themselves (a voice on the communicator is high-passed at
     600 Hz) aren't applied: the mixer has no high-pass.
-  - **The AI hears it** unless `bNoHearNoise` (`PlayOwnedSound` never):
+  - **The AI hears it** unless `bNoHearNoise`, or the sound is played
+    from a function declared `simulated` (the function calling, not
+    the actor's `Role`; state code isn't one), or on a network client
+    (`PlayOwnedSound` never; `PlayDummySound` always):
     each pawn but the players, the actor and its owner, if the actor has
     an owner and it or its owner is a player, a weapon or a projectile.
     Heard at 1 − (distance / `Radius`)², with 0.65 off through walls,

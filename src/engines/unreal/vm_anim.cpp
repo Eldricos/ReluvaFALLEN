@@ -411,6 +411,7 @@ void ScriptLevel::playLayer(VmObject* a, NameId group, NameId sequence, float ra
         l.fromSequence = l.sequence;
         l.fromFrame = std::max(0.0f, l.frame);
         l.fromWeight = l.weight;
+        l.fromLoop = l.loop;
         l.weight = 0;
     }
     l.sequence = sequence;

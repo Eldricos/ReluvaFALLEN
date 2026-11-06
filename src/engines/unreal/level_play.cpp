@@ -605,8 +605,8 @@ bool LevelPlay::look(VmObject* a, Look& out) {
             const std::string bone = l.bone ? vm.nameText(l.bone) : std::string();
             // What it replaced first, held under it while it fades in.
             if (l.fromSequence)
-                out.layers.push_back({vm.nameText(l.fromSequence), bone, l.rest, l.fromFrame, l.fromWeight});
-            out.layers.push_back({vm.nameText(l.sequence), bone, l.rest, l.frame, l.weight, l.clear});
+                out.layers.push_back({vm.nameText(l.fromSequence), bone, l.rest, l.fromFrame, l.fromWeight, {}, l.fromLoop});
+            out.layers.push_back({vm.nameText(l.sequence), bone, l.rest, l.frame, l.weight, l.clear, l.loop});
         }
     out.faces.clear();
     if (const auto* skins = level_->skinsOf(a))

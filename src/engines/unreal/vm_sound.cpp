@@ -404,8 +404,10 @@ void registerSoundNatives(Vm& vm) {
         r.loop = name.find("LOOPING") != std::string::npos;
         // A noise the AI hears, unless asked not to be (The Fallen's
         // weapons pass bNoHearNoise for all their sounds but the empty
-        // click).
-        if (!owned && !(given(6) && c.b(6)))
+        // click), or played from a simulated function (Engine.dll skips
+        // the pawns for those: the function calling, not the actor's
+        // Role; state code isn't one).
+        if (!owned && !(given(6) && c.b(6)) && !c.vm.callerSimulated())
             level->soundNoise(c.self, r.radius);
         if (!level->hearsSound(c.self, r.radius, r.volume))
             return;

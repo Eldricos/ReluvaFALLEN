@@ -169,10 +169,10 @@ std::vector<LayeredPoser::Layer> ScriptLevel::posedLayers(VmObject* a, ActorMesh
         // What it replaced first, held under it.
         if (l.fromSequence) {
             names.push_back(vm_.nameText(l.fromSequence));
-            layers.push_back({names.back(), l.fromFrame, &part->second, l.fromWeight});
+            layers.push_back({names.back(), l.fromFrame, &part->second, l.fromWeight, {}, l.fromLoop});
         }
         names.push_back(vm_.nameText(l.sequence));
-        layers.push_back({names.back(), l.frame, &part->second, l.weight, l.clear});
+        layers.push_back({names.back(), l.frame, &part->second, l.weight, l.clear, l.loop});
     }
     return layers;
 }
@@ -194,7 +194,7 @@ const std::vector<ScriptLevel::Vec>* ScriptLevel::posedVertices(VmObject* a, Act
         std::vector<std::string> names;
         const std::vector<LayeredPoser::Layer> layers = posedLayers(a, m, names);
         const LayeredPoser::Adjust adjust = adjustOf(a, m);
-        if (m.poser->pose(seq, frame, layers, verts, &adjust))
+        if (m.poser->pose({seq, pb(a, "bAnimLoop")}, frame, layers, verts, &adjust))
             return &verts;
     }
     // Between its frames (its own animations).
@@ -377,8 +377,8 @@ const std::vector<std::array<float, 12>>* ScriptLevel::posedSkeleton(VmObject* a
         std::vector<std::string> names;
         const std::vector<LayeredPoser::Layer> layers = posedLayers(a, m, names);
         const LayeredPoser::Adjust adjust = adjustOf(a, m);
-        if (!m.poser->skeleton(vm_.nameText(seqValue->i), frameValue ? frameValue->asFloat() : 0, layers, worlds,
-                               &adjust))
+        if (!m.poser->skeleton({vm_.nameText(seqValue->i), pb(a, "bAnimLoop")}, frameValue ? frameValue->asFloat() : 0,
+                               layers, worlds, &adjust))
             worlds.clear();
     }
     return worlds.empty() ? nullptr : &worlds;
@@ -777,7 +777,8 @@ bool ScriptLevel::measureEffectors(VmObject* a, ActorMesh& m, Bends& b, const La
     const Value* frameValue = prop(a, "AnimFrame");
     if (!seqValue || !seqValue->i)
         return false;
-    const std::string seq = vm_.nameText(seqValue->i);
+    const std::string seqName = vm_.nameText(seqValue->i);
+    const LayeredPoser::Anim seq{seqName, pb(a, "bAnimLoop")};
     const float frame = frameValue ? frameValue->asFloat() : 0;
     std::vector<std::string> names;
     const std::vector<LayeredPoser::Layer> layers = posedLayers(a, m, names);

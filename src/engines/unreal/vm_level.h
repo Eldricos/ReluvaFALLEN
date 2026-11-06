@@ -323,6 +323,7 @@ public:
         // this one fades in over it.
         NameId fromSequence = 0;
         float fromFrame = 0, fromWeight = 0;
+        bool fromLoop = false;
     };
     // A face channel, as the engine keeps it (an AnimGroupState after the
     // mesh's own groups): its sequence, frame (seconds into it) and

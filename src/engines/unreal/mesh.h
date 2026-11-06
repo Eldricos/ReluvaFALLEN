@@ -157,6 +157,16 @@ public:
     // The bones from `bone` down (with `rest`, all the others); empty if
     // there's no bone of that name.
     std::vector<bool> part(std::string_view bone, bool rest) const;
+    // The animation under the layers: its name, and whether it's looping
+    // (the engine's sampler then blends its last stretch toward the
+    // first key, not the last).
+    struct Anim {
+        std::string_view name;
+        bool loop = false;
+        Anim(std::string_view n, bool l = false) : name(n), loop(l) {}
+        Anim(const std::string& n, bool l = false) : name(n), loop(l) {}
+        Anim(const char* n, bool l = false) : name(n), loop(l) {}
+    };
     struct Layer {
         std::string_view anim;
         float fraction = 0;             // through it, as an actor's AnimFrame
@@ -166,6 +176,7 @@ public:
         // the actor's up, side and forward axes (C3DPlayAnim's ClearYaw,
         // ClearPitch, ClearRoll), taking only the rest of the layer's.
         std::array<bool, 3> clear{};
+        bool loop = false; // C3DLoopAnim's (else C3DPlayAnim's, held at its end)
     };
     // Where the skeleton's axes go in the actor's space (as the mesh is
     // placed): for the layers' clear, which needs the actor's axes.
@@ -233,19 +244,19 @@ public:
         float fromSeconds = 0, fromWeight = 0, mix = 1;
     };
     // ... and the face's channels over that.
-    bool pose(std::string_view base, float fraction, const std::vector<Layer>& layers, std::vector<Vec3f>& out,
+    bool pose(Anim base, float fraction, const std::vector<Layer>& layers, std::vector<Vec3f>& out,
               const Adjust* adjust = nullptr, const std::vector<Face>* faces = nullptr) const;
     // Whether it has a face (clips of vertex keys) to pose.
     bool hasFace() const;
     // A bone's place in the same pose: its origin and axes (rows X, Y, Z),
     // in packed units as the vertices. False if there's no such bone or an
     // animation isn't the mesh's.
-    bool bone(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
+    bool bone(Anim base, float fraction, const std::vector<Layer>& layers, std::string_view name,
               Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust = nullptr) const;
     // Every bone's place in the skeleton's space in the same pose (rows X,
     // Y, Z and the origin, each bone in order), and a bone's index (-1 if
     // there's none), for asking after many bones of one pose.
-    bool skeleton(std::string_view base, float fraction, const std::vector<Layer>& layers,
+    bool skeleton(Anim base, float fraction, const std::vector<Layer>& layers,
                   std::vector<std::array<float, 12>>& worlds, const Adjust* adjust = nullptr) const;
     // Every bone's place in the skeleton's space in its bind pose.
     std::vector<std::array<float, 12>> bindSkeleton() const;
@@ -257,7 +268,7 @@ public:
     // triangle's, which its attachment point turns with. -1 if none.
     int mainBone(const std::array<int32_t, 3>& vertices) const;
     // The same in the skeleton's space (as Adjust).
-    bool boneInSkeleton(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
+    bool boneInSkeleton(Anim base, float fraction, const std::vector<Layer>& layers, std::string_view name,
                         Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust = nullptr) const;
     bool hasBone(std::string_view name) const;
     // A bone's parent's name (empty for the root).

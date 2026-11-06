@@ -1072,6 +1072,12 @@ std::array<int32_t, 3> Vm::rotatorOf(const Value& v) {
     return {v.fields[0].asInt(), v.fields[1].asInt(), v.fields[2].asInt()};
 }
 
+bool Vm::callerSimulated() const {
+    if (running_.empty() || running_.back()->kind != VmStruct::Kind::Function)
+        return false;
+    return (static_cast<const VmFunction*>(running_.back())->flags & funcflag::Simulated) != 0;
+}
+
 std::string Vm::where() const {
     if (running_.empty())
         return "";

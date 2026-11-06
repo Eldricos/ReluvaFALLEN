@@ -668,11 +668,16 @@ struct BonePoser {
         return std::max(1, int(std::lround(last * 30)));
     }
     // Bone b's placement in its parent at time t of clip c.
-    Mat43 local(const BoneRecord& b, size_t c, float t) const { return localWith(b, r, b, c, t); }
+    Mat43 local(const BoneRecord& b, size_t c, float t) const { return localWith(b, r, b, c, t, false); }
 
     // The same with another skeleton's keys for it (`keys`, read by
     // `kr`): an animation set's (below), the bones matched by name.
-    static Mat43 localWith(const BoneRecord& b, const BoneReader& r, const BoneRecord& keys, size_t c, float t) {
+    // As the engine's key sampler: before the first key, the first; past
+    // the last, the last held, or looping the first; between, blended,
+    // a loop's last stretch toward the first key (its last key standing
+    // for the first again).
+    static Mat43 localWith(const BoneRecord& b, const BoneReader& r, const BoneRecord& keys, size_t c, float t,
+                           bool loop) {
         Mat43 m = b.placement;
         if (c >= keys.clipList.size())
             return m;
@@ -682,11 +687,14 @@ struct BonePoser {
             size_t i = 0;
             while (i + 1 < n && r.f32(k.rotations + 10 * (i + 1)) <= t)
                 ++i;
+            if (loop && n > 1 && i + 1 == n && t >= r.f32(k.rotations + 10 * i))
+                i = 0; // past the last key, looping: the first
             auto q = rotationKey(r.data.data() + (k.rotations + 10 * i + 4 - r.base));
-            if (i + 1 < n) {
+            if (i + 1 < n && t > r.f32(k.rotations + 10 * i)) {
                 const float t0 = r.f32(k.rotations + 10 * i), t1 = r.f32(k.rotations + 10 * (i + 1));
+                const size_t to = loop && i + 2 == n ? 0 : i + 1;
                 if (t1 > t0 && t > t0)
-                    q = slerp(q, rotationKey(r.data.data() + (k.rotations + 10 * (i + 1) + 4 - r.base)),
+                    q = slerp(q, rotationKey(r.data.data() + (k.rotations + 10 * to + 4 - r.base)),
                               std::min(1.0f, (t - t0) / (t1 - t0)));
             }
             Mat43 turn = b.placement;
@@ -701,13 +709,16 @@ struct BonePoser {
             size_t i = 0;
             while (i + 1 < n && r.f32(k.positions + 16 * (i + 1)) <= t)
                 ++i;
+            if (loop && n > 1 && i + 1 == n && t >= r.f32(k.positions + 16 * i))
+                i = 0;
             Vec3f d{r.f32(k.positions + 16 * i + 4), r.f32(k.positions + 16 * i + 8), r.f32(k.positions + 16 * i + 12)};
-            if (i + 1 < n) {
+            if (i + 1 < n && t > r.f32(k.positions + 16 * i)) {
                 const float t0 = r.f32(k.positions + 16 * i), t1 = r.f32(k.positions + 16 * (i + 1));
+                const size_t to = loop && i + 2 == n ? 0 : i + 1;
                 if (t1 > t0 && t > t0) {
                     const float f = std::min(1.0f, (t - t0) / (t1 - t0));
                     for (size_t a = 0; a < 3; ++a)
-                        d[a] += f * (r.f32(k.positions + 16 * (i + 1) + 4 + 4 * a) - d[a]);
+                        d[a] += f * (r.f32(k.positions + 16 * to + 4 + 4 * a) - d[a]);
                 }
             }
             // Its keys are in 3ds Max's axes (Z up, the figure facing -Y, its
@@ -1498,7 +1509,7 @@ Error borrowAnimation(const Package& package, int index, const AnimationSet& set
     for (int f = 0; f < n; ++f)
         poseVertices(r, bones, frame, mesh.scale, mesh.origin, mesh.verts.data() + first + size_t(f) * frame,
                      [&](size_t i) {
-                         return keys[i] ? BonePoser::localWith(bones[i], sr, *keys[i], size_t(clip), float(f) / 30)
+                         return keys[i] ? BonePoser::localWith(bones[i], sr, *keys[i], size_t(clip), float(f) / 30, false)
                                         : bones[i].placement;
                      });
     MeshAnimSeq a = seq;
@@ -1798,9 +1809,9 @@ struct LayeredPoser::Impl {
     Mat43 cleared(const Mat43& under, const Mat43& over, const Mat43& parentWorld, std::array<bool, 3> clear) const;
 
     BoneReader reader() const { return BoneReader{data, base, from, base + data.size()}; }
-    bool locals(std::string_view base, float fraction, const std::vector<Layer>& layers,
+    bool locals(Anim base, float fraction, const std::vector<Layer>& layers,
                 std::vector<std::array<float, 12>>& out, const Adjust* adjust = nullptr) const;
-    bool localsUncached(std::string_view base, float fraction, const std::vector<Layer>& layers,
+    bool localsUncached(Anim base, float fraction, const std::vector<Layer>& layers,
                         std::vector<std::array<float, 12>>& out, const Adjust* adjust) const;
     // The last poses worked out and what each was worked out from (byte
     // for byte): the scripts' bone queries and the drawing ask for the
@@ -2002,7 +2013,7 @@ std::vector<bool> LayeredPoser::part(std::string_view bone, bool rest) const {
 // Each bone's place in its parent: from `base` `fraction` through it, the
 // bones of each layer's part blended towards its animation's. False if an
 // animation isn't the mesh's.
-bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const std::vector<Layer>& layers,
+bool LayeredPoser::Impl::locals(Anim baseAnim, float fraction, const std::vector<Layer>& layers,
                                 std::vector<std::array<float, 12>>& out, const Adjust* adjust) const {
     std::string key;
     auto bytes = [&](const void* p, size_t n) { key.append(static_cast<const char*>(p), n); };
@@ -2012,7 +2023,8 @@ bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const
         key.append(t);
     };
     auto vec = [&](const Vec3f& v) { bytes(v.data(), sizeof(float) * 3); };
-    text(baseAnim);
+    text(baseAnim.name);
+    key.push_back(baseAnim.loop ? 'L' : 'H');
     bytes(&fraction, sizeof fraction);
     for (const Vec3f& a : actorAxes)
         vec(a);
@@ -2026,6 +2038,7 @@ bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const
         bytes(&l.weight, sizeof l.weight);
         for (bool c : l.clear)
             key.push_back(c ? '1' : '0');
+        key.push_back(l.loop ? 'L' : 'H');
     }
     key.push_back(adjust ? 'A' : '-');
     if (adjust) {
@@ -2079,15 +2092,17 @@ bool LayeredPoser::Impl::locals(std::string_view baseAnim, float fraction, const
     return true;
 }
 
-bool LayeredPoser::Impl::localsUncached(std::string_view baseAnim, float fraction, const std::vector<Layer>& layers,
+bool LayeredPoser::Impl::localsUncached(Anim baseAnim, float fraction, const std::vector<Layer>& layers,
                                         std::vector<std::array<float, 12>>& out, const Adjust* adjust) const {
     const BoneReader r = reader();
     struct Source {
         const AnimationSet* set = nullptr;
         size_t clip = 0;
         float time = 0; // seconds into the clip (its keys are 30 a second)
+        bool loop = false;
     };
-    auto sourceOf = [&](std::string_view anim, float f, Source& src) {
+    auto sourceOf = [&](std::string_view anim, float f, Source& src, bool loop) {
+        src.loop = loop;
         int frames = 0;
         if (!find(anim, src.set, src.clip, frames))
             return false;
@@ -2098,16 +2113,16 @@ bool LayeredPoser::Impl::localsUncached(std::string_view baseAnim, float fractio
     auto local = [&](const Source& src, size_t i) {
         const BoneRecord& b = bones[i];
         if (!src.set)
-            return BonePoser::localWith(b, r, b, src.clip, src.time);
+            return BonePoser::localWith(b, r, b, src.clip, src.time, src.loop);
         const BoneRecord* k = keysOf(*src.set)[i];
-        return k ? BonePoser::localWith(b, src.set->impl->reader(), *k, src.clip, src.time) : b.placement;
+        return k ? BonePoser::localWith(b, src.set->impl->reader(), *k, src.clip, src.time, src.loop) : b.placement;
     };
     Source under;
-    if (!sourceOf(baseAnim, fraction, under))
+    if (!sourceOf(baseAnim.name, fraction, under, baseAnim.loop))
         return false;
     std::vector<Source> over(layers.size());
     for (size_t l = 0; l < layers.size(); ++l)
-        if (!sourceOf(layers[l].anim, layers[l].fraction, over[l]))
+        if (!sourceOf(layers[l].anim, layers[l].fraction, over[l], layers[l].loop))
             return false;
     // The base animation, with the reaches done to it first.
     std::vector<Mat43> base(bones.size());
@@ -2571,7 +2586,7 @@ void LayeredPoser::Impl::solveChains(std::vector<Mat43>& local, const Adjust::Re
     }
 }
 
-bool LayeredPoser::pose(std::string_view base, float fraction, const std::vector<Layer>& layers,
+bool LayeredPoser::pose(Anim base, float fraction, const std::vector<Layer>& layers,
                         std::vector<Vec3f>& out, const Adjust* adjust, const std::vector<Face>* faces) const {
     const Impl& m = *impl;
     std::vector<Mat43> local;
@@ -2799,7 +2814,7 @@ bool LayeredPoser::hasBone(std::string_view name) const {
     return false;
 }
 
-bool LayeredPoser::skeleton(std::string_view base, float fraction, const std::vector<Layer>& layers,
+bool LayeredPoser::skeleton(Anim base, float fraction, const std::vector<Layer>& layers,
                             std::vector<std::array<float, 12>>& worlds, const Adjust* adjust) const {
     std::vector<Mat43> local;
     if (!impl->locals(base, fraction, layers, local, adjust))
@@ -2839,7 +2854,7 @@ int LayeredPoser::mainBone(const std::array<int32_t, 3>& vertices) const {
     return best;
 }
 
-bool LayeredPoser::boneInSkeleton(std::string_view base, float fraction, const std::vector<Layer>& layers,
+bool LayeredPoser::boneInSkeleton(Anim base, float fraction, const std::vector<Layer>& layers,
                                   std::string_view name, Vec3f& origin, std::array<Vec3f, 3>& axes,
                                   const Adjust* adjust) const {
     const Impl& m = *impl;
@@ -2857,7 +2872,7 @@ bool LayeredPoser::boneInSkeleton(std::string_view base, float fraction, const s
     return true;
 }
 
-bool LayeredPoser::bone(std::string_view base, float fraction, const std::vector<Layer>& layers, std::string_view name,
+bool LayeredPoser::bone(Anim base, float fraction, const std::vector<Layer>& layers, std::string_view name,
                         Vec3f& origin, std::array<Vec3f, 3>& axes, const Adjust* adjust) const {
     if (!boneInSkeleton(base, fraction, layers, name, origin, axes, adjust))
         return false;

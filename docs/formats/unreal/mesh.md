@@ -170,9 +170,12 @@ key's quaternion taken as rows of a matrix (i.e. by its conjugate, as row
 vectors turn), then by its placement's turn, at its placement's origin
 plus its position key; then its parent's, up to the root. Between
 keys, the engine's sampler blends; a clip whose static flag is set for
-a kind of key takes key 0 of it throughout. Looping, its last stretch
-blends toward key 0 rather than holding the last key (the loop asked
-for by the play call, not the file); Reluva doesn't yet.
+a kind of key takes key 0 of it throughout. Before the first key, the
+first; past the last, the last held, or looping key 0. Looping, the
+stretch into its last key blends toward key 0 instead (the last key
+stands for the first again), over the same time. Whether it loops is
+the play call's (the actor's `bAnimLoop`, a layer's `C3DLoopAnim`), not
+the file's.
 
 The position keys are in 3ds Max's axes, not the skeleton's: Z up, the
 figure facing -Y with its right at -X. The skeleton's are Y up, the

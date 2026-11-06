@@ -680,7 +680,16 @@ bool ScriptLevel::sleeping(VmObject* a) {
         const Value* v = prop(o, name);
         return v ? v->asObject() : nullptr;
     };
-    if (!levelInfo_ || renderedTick_ < ticks_ - 2) // no view: all seen
+    // A MultiMesh whose list has nothing in it (CTVE_MultiMesh, a
+    // CTVE_DllObject: no Next), whatever it's drawn as.
+    const auto emptyMultiMesh = [&] {
+        VmObject* m = objectProp(a, "MultiMesh");
+        const Value* next = m ? m->find(vm_, "Next") : nullptr;
+        return m && (!next || !next->asObject());
+    };
+    // No view (all seen), or a cut scene being skipped (the engine's
+    // bFastForward, FastForward's).
+    if (!levelInfo_ || renderedTick_ < ticks_ - 2 || fastForward())
         return false;
     if (pb(a, "bMustNotShutDown") || pf(a, "LifeSpan") != 0)
         return false;
@@ -696,9 +705,9 @@ bool ScriptLevel::sleeping(VmObject* a) {
     const int drawType = int(pf(a, "DrawType"));
     const bool byZone = pb(a, "bHidden") || pb(a, "bWakeWhenSeeZone") ||
                         (drawType == 0 && !vm_.isA(a, "Decal")) || (drawType == 2 && !objectProp(a, "Mesh")) ||
-                        ((drawType == 1 || drawType == 7) && !objectProp(a, "Texture"));
+                        ((drawType == 1 || drawType == 7) && !objectProp(a, "Texture")) || emptyMultiMesh();
     if (byZone)
-        *drawn = Value::floatValue(cameraZone_ == 0 ? now : zoneRenderTime_[size_t(zone)]);
+        *drawn = Value::floatValue(cameraZone_ <= 0 ? now : zoneRenderTime_[size_t(zone)]);
     const float elapsed = now - drawn->asFloat();
     if (!stasis->asBool()) {
         if (elapsed < 5)

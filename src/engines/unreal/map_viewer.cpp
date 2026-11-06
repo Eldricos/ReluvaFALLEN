@@ -3256,7 +3256,7 @@ bool MapViewer::drawLayered(VmObject* actor, const LevelPlay::Look& look, int at
         if (part == p.parts.end())
             part = p.parts.emplace(std::make_pair(l.bone, l.rest), p.poser->part(l.bone, l.rest)).first;
         if (!part->second.empty())
-            layers.push_back({l.anim, l.frame, &part->second, l.weight, l.clear});
+            layers.push_back({l.anim, l.frame, &part->second, l.weight, l.clear, l.loop});
     }
     std::vector<LayeredPoser::Face> faces;
     if (p.poser->hasFace())
@@ -3271,13 +3271,13 @@ bool MapViewer::drawLayered(VmObject* actor, const LevelPlay::Look& look, int at
             poser = shared;
     std::vector<Vec3f> verts;
     if ((layers.empty() && look.adjust.empty() && faces.empty()) ||
-        !poser->pose(look.animSequence, look.animFrame, layers, verts, &look.adjust, &faces))
+        !poser->pose({look.animSequence, look.animLoop}, look.animFrame, layers, verts, &look.adjust, &faces))
         return false;
     // Tweening into its animation: from the pose it was in.
     const Mesh& own = meshes_[size_t(at)];
     if (const MeshAnimSeq* anim = own.findAnim(look.animSequence); anim && look.animFrame < 0 && !look.tweenFrom.empty()) {
         std::vector<Vec3f> old;
-        if (p.poser->pose(look.tweenFrom, look.tweenFromFrame, layers, old, &look.adjust, &faces) &&
+        if (p.poser->pose({look.tweenFrom, look.tweenFromLoop}, look.tweenFromFrame, layers, old, &look.adjust, &faces) &&
             old.size() == verts.size()) {
             const float t = tweenProgress(look, *anim);
             for (size_t v = 0; v < verts.size(); ++v)
