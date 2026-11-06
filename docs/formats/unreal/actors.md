@@ -105,7 +105,17 @@ texel. `Style` (Engine.Actor's `ERenderStyle`) says how it blends:
 3 translucent adds to what's behind; 4 modulated multiplies it (doubled,
 so mid grey leaves it as is). Solid sprites are lit by the level's
 lights where they stand (as placed meshes are) unless `bUnlit`; blended
-ones are drawn at full brightness; both times `ScaleGlow`.
+ones are drawn at full brightness.
+
+A live sprite's colour is Render.dll's (`DrawActorSprite`): its
+`ColorFilter` (Actor's default 1, 1, 1), times `ScaleGlow` with each
+part held to at most 1, unless the glow is exactly 1, when the filter is
+taken as it is. A MultiMesh copy (`DrawActorSpriteMM`) puts its own
+`ColorFilter`, glow, texture, style and place on the actor for that
+one draw. 71 of the game's classes set `ColorFilter`: steam, smoke,
+sparks, projectiles' trails and others. Reluva drew them all untinted
+until November 2026. The sprites placed in the maps and drawn before
+the scripts run are still drawn untinted.
 
 Most actors are sprites by default (Engine.Actor's `DrawType`), but
 those only the editor shows are `bHidden`, or hide themselves when the

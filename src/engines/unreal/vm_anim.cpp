@@ -262,6 +262,12 @@ void ScriptLevel::updateHead(VmObject* a) {
     if (const Value* drawn = prop(a, "LastRenderTime"); drawn && levelInfo_)
         if (const Value* now = prop(levelInfo_, "TimeSeconds"); now && drawn->asFloat() < now->asFloat() - 4)
             return; // what the event would do first: not drawn lately
+    // The engine works the pose out afresh from the animation each frame
+    // before sending this, so the head the event asks after
+    // (C3DGetJointWorldPos) has none of the last frame's turns; it turns
+    // it by what's left from there. The last tick's turns, kept for
+    // drawing in between, go first.
+    clearStaleBoneOps(a);
     vm_.callEvent(a, "UpdateHeadAnimation");
 }
 

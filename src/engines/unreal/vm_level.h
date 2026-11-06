@@ -789,6 +789,7 @@ private:
         std::array<Effector, 4> effectors;
     };
     Bends::Op& newBoneOp(VmObject* actor);
+    void clearStaleBoneOps(VmObject* actor);
     std::map<VmObject*, Bends> bends_;
     void loadPaths();
     Hud hud_;

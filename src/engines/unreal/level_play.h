@@ -131,6 +131,7 @@ public:
         bool tweenFromLoop = false;
         uint8_t style = 1;
         float scaleGlow = 1;
+        std::array<float, 3> colorFilter{1, 1, 1}; // ColorFilter: a sprite's tint
         uint8_t ambientGlow = 0; // AmbientGlow: added to the zone's ambient light on it (255: pulsing)
         // The Fallen's MultiTexture: drawn twice, its own skins in one style
         // and glow, then MultiTextureTwo over them in another (bMultiTextureOn).
@@ -197,6 +198,7 @@ public:
         Vec3f location{}, axisScale{1, 1, 1};
         Rotator rotation;
         float drawScale = 1, scaleGlow = 1;
+        std::array<float, 3> colorFilter{1, 1, 1};
         ObjectRef texture;
         uint8_t style = 1;
     };

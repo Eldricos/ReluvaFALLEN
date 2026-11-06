@@ -333,6 +333,10 @@ bool LevelPlay::copies(VmObject* actor, std::vector<Copy>& out) {
             c.scaleGlow = v->asFloat();
         if (const Value* v = mm->find(vm, "Style"))
             c.style = uint8_t(v->asInt());
+        if (const Value* v = mm->find(vm, "ColorFilter")) {
+            const auto f = Vm::vectorOf(*v);
+            c.colorFilter = {f[0], f[1], f[2]};
+        }
         c.texture = refOf(mm->find(vm, "Texture"));
         out.push_back(c);
     }
@@ -550,6 +554,11 @@ bool LevelPlay::look(VmObject* a, Look& out) {
         out.unlit = v->asBool();
     if (const Value* v = at(AmbientGlow))
         out.ambientGlow = uint8_t(v->asInt());
+    out.colorFilter = {1, 1, 1};
+    if (const Value* c = a->find(vm, "ColorFilter")) {
+        const auto f = Vm::vectorOf(*c);
+        out.colorFilter = {f[0], f[1], f[2]};
+    }
     out.multi = {};
     if (const Value* on = at(MultiTextureOn); on && on->asBool()) {
         Look::MultiTexture& m = out.multi;
@@ -575,10 +584,7 @@ bool LevelPlay::look(VmObject* a, Look& out) {
         m.twoGlow = number("MultiTextureTwoScaleGlow", 1);
         m.oneUnlit = flag("bMultiTextureOneUnlit");
         m.twoUnlit = flag("bMultiTextureTwoUnlit");
-        if (const Value* c = a->find(vm, "ColorFilter")) {
-            const auto f = Vm::vectorOf(*c);
-            m.colorFilter = {f[0], f[1], f[2]};
-        }
+        m.colorFilter = out.colorFilter;
     }
     if (const Value* v = at(SpecularField))
         out.specular = v->asFloat();

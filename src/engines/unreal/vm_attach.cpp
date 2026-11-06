@@ -587,6 +587,14 @@ ScriptLevel::Bends::Op& ScriptLevel::newBoneOp(VmObject* a) {
     return b.ops.emplace_back();
 }
 
+void ScriptLevel::clearStaleBoneOps(VmObject* a) {
+    auto it = bends_.find(a);
+    if (it == bends_.end() || it->second.opsTick == int64_t(ticks_) || it->second.ops.empty())
+        return;
+    it->second.ops.clear();
+    forgetPose(a);
+}
+
 void ScriptLevel::turnBone(VmObject* a, NameId bone, int axis, float degrees) {
     Bends::Op& op = newBoneOp(a);
     op.kind = 0, op.bone = bone, op.axis = axis, op.degrees = degrees;

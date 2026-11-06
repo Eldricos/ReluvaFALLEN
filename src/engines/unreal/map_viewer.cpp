@@ -47,6 +47,18 @@ enum Held { Forward, Back, Left, Right, Up, Down, Fast, TurnLeft, TurnRight, Loo
 // are right-handed, so Y is negated on the way in.
 gfx::Vec3 toWorld(const Vec3f& v) { return {v[0], -v[1], v[2]}; }
 
+// A sprite's colour, as Render.dll's DrawActorSprite has it: its
+// ColorFilter, times its ScaleGlow (each part at most 1) unless that's 1.
+std::array<float, 3> spriteTint(const std::array<float, 3>& filter, float glow) {
+    std::array<float, 3> c = filter;
+    if (glow != 1)
+        for (float& v : c)
+            v = std::min(v * glow, 1.0f);
+    for (float& v : c)
+        v *= kExposure;
+    return c;
+}
+
 // The surface flags that change how a polygon is drawn, for grouping.
 constexpr uint32_t kDrawFlags = polyflag::Masked | polyflag::Translucent | polyflag::Modulated |
                                 polyflag::FakeBackdrop | polyflag::Unlit | polyflag::TwoSided | polyflag::Mirrored;
@@ -3065,8 +3077,7 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
         d.height = float(size[1]) * look.drawScale;
         d.style = look.style;
         d.vertical = look.drawType == kDrawVerticalSprite;
-        const float glow = look.scaleGlow * kExposure;
-        d.color = {glow, glow, glow};
+        d.color = spriteTint(look.colorFilter, look.scaleGlow);
         sprites.push_back(d);
     }
 }
@@ -3121,8 +3132,7 @@ void MapViewer::drawCopies(VmObject* a, const LevelPlay::Look& look, const std::
             d.height = float(size[1]) * c.drawScale;
             d.style = c.style;
             d.vertical = look.drawType == kDrawVerticalSprite;
-            const float glow = c.scaleGlow * kExposure;
-            d.color = {glow, glow, glow};
+            d.color = spriteTint(c.colorFilter, c.scaleGlow);
             sprites.push_back(d);
         }
     }

@@ -393,7 +393,11 @@ against the same views here, matched shot for shot in cut scenes:
   setting once its curve at other values is known.
 - Hass'terral's snowfield (M10_SiskoL1A) was far too dark, about 13
   times beyond the display difference. It's lit by 24 cylinder lights
-  (radius 6400, brightness 32, pale blue) high above. The ground's
+  (radius 6400, brightness 20 to 32, pale blue), all at Z -301.8: about
+  2240 over the ground (-2544), under the sky's ceiling (4112), some over
+  open space beyond the field. They were moved in the editor
+  (`OldLocation` differs), but the shadow bits were traced from where
+  they are now. The ground's
   lightmap (201x156 samples, 64 units each) has their shadow bits set for
   only 8.5% of light and sample pairs: the editor traced them from where
   the lights are (the bits agree 94% with a clear line to the light, so
@@ -407,7 +411,11 @@ against the same views here, matched shot for shot in cut scenes:
   does: its renderer gives every light in a surface's lightmap list its
   shadow bits (blurred by a weighted 8x8 kernel to 0-255), and only
   lights it treats as dynamic go without (below); Hass'terral's are
-  plain static lights. Read again (November 2026): `AddLight` makes a
+  plain static lights. So with these files the original's code shows
+  the field mostly in shadow. The recording is of a later build (its
+  credits differ too), whose map was likely lit again; the fitted rule
+  stays until this build's own footage or the later build's map says
+  which. Read again (November 2026): `AddLight` makes a
   `bStatic` steady light with a still effect (the effect table's flags
   both clear, as Cylinder's are) a lightmap light, and the cylinder
   lightmap function multiplies (1 - (dx^2 + dy^2) / r^2) by the light's

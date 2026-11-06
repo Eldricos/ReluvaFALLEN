@@ -96,8 +96,16 @@ differs only in that way, Reluva follows its own scripts.
   s): the ship is now lit as in the recording, the same tan, about 1.35
   times darker, as everything is (below). It came out dark before the
   actor lighting took its lights by their full distance (Render.dll's
-  rule, above). The light behind it shows as a white corona in Reluva,
-  and as a softer green-yellow glow in the recording.
+  rule, above). The glow behind it was white in Reluva, and a softer
+  green-yellow in the recording. It isn't a corona (the one corona light
+  there, Light39, is hidden behind the BSP). It is a steam jet's puffs
+  (`DS9_SteamJet0`, smoke sprites, translucent), and their
+  `ColorFilter` (the jet's `InitialColor`, 0.50, 0.65, 0.25) tints them.
+  Reluva drew sprites without their `ColorFilter`, so the puffs, piled
+  up, came out white. Render.dll's `DrawActorSprite` takes the filter
+  times the glow (actors.md). Now the glow is green-yellow, as in the
+  recording. The recording's is a little wider, as the puffs' sizes and
+  places are random.
 - **Across the levels after the lighting changes** (November 2026):
   every chapter's level was shot again 0.3, 2.3, 7.3 and 15.3 s after
   its start, and set against the shots from before and the recording.
@@ -123,11 +131,28 @@ differs only in that way, Reluva follows its own scripts.
   the recording, a little less far at 32 s as it eases round. The same
   had kept every character's head and spine turns out of the drawing
   where nothing else changed the pose.
+  - Each head's place, which the scripts read to aim it, still held the
+    turns from the tick before. Engine.dll works the pose out afresh
+    from the animation each frame before `UpdateHeadAnimation`, so the
+    script sees the head as unturned. Reluva now clears last tick's
+    bone turns first.
+  - Worf doesn't turn to O'Brien as he speaks (WRF143). No one has
+    a listener set for that line: the engine sets one only for a line
+    in a cut scene, read from Engine.dll. So each head keeps its last
+    target until its own random timer (0.5 to 2.5 s) runs out, and
+    which way it looks then varies from run to run. The recording's
+    head turns in that stretch are one such run.
 - **The sound** of the opening (CM01a_SW from Sisko's start, 40 s): its
   loudness each 50 ms against the recording's agrees best with Reluva
   0.15 s ahead. Over each 5 s, the two correlate at 0.46 to 0.62 (the
   music, the effects and the speech mixed together), and 0.17 over
   30-35 s. Reluva's mix is 1 to 5 dB louder.
+  - Over 30-35 s the lines start where the recording's do. Its subtitles
+    change at 27.05, 29.50, 32.75 and 37.25 s, Reluva's at 27.00, 29.50,
+    32.73 and 37.27 s, and WRF143's voice starts at 32.75 s in both. What
+    differs is the Defiant's telemetry blips
+    (`DS9_Defiant.telemetry.Defy_blipB3`, played at random times) and
+    the music under them. Nothing to change.
 - **Not compared:** the AI's pathfinding in play, and dialogue chosen in
   play. They depend on how the recording was played, as above. Its
   scripted scenes (the cut scenes and level openings above) are what
