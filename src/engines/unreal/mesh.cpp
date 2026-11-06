@@ -318,14 +318,18 @@ std::optional<std::array<Vec3f, 3>> importAxes(const std::vector<uint8_t>& data,
 // Meshes built on a skeleton (The Fallen's characters) keep no packed
 // vertices: the block has a record per bone instead, a tree written depth
 // first (see mesh.md):
-//   u16 length and the bone's name; (n, n, 8) and n i32s;
-//   (k, k, 128) and k float xyz, the bone's vertices in its own space;
-//   (k, k, 128) and k float weights; (k, k, 128) and k i32s, which of the
-//   frame's vertices each is; 12 floats, a 4x3 offset; an i32; 12 floats,
-//   the bone's 4x3 placement in its parent's space (rows: X, Y, Z axes,
-//   then the origin); an i32; (c, c, f) and c clips, each (n, n, f) and n
-//   position keys (time, xyz), (m, m, f) and m rotation keys (time, 6
-//   bytes), and 8 bytes; then (h, h, 4) and its h children's records.
+//   u16 length and the bone's name; (n, n, 8) and n i32s, the animation
+//   groups (body parts) it's in; (k, k, 128) and k float xyz, the bone's
+//   vertices in its own space; (k, k, 128) and k float weights;
+//   (k, k, 128) and k i32s, which of the frame's vertices each is; 12
+//   floats, a 4x3 offset, and an i32; 12 floats, the bone's 4x3 placement
+//   in its parent's space (rows: X, Y, Z axes, then the origin), and an
+//   i32 (each matrix's shortcut flags: 1 no translation, 2 3x3 identity,
+//   4 unit rows); (c, c, f) and c clips, each (n, n, f) and n position
+//   keys (time, xyz), (m, m, f) and m rotation keys (time, 6 bytes), and
+//   two i32s (positions static, rotations static); then (h, h, 4) and its
+//   h children's records. (The third of each array's header is the
+//   array's grow step, not a type.)
 struct BoneRecord {
     std::string name;
     int parent = -1;
@@ -337,6 +341,10 @@ struct BoneRecord {
     struct Clip {
         size_t positions = 0, rotations = 0; // file offsets of the keys
         uint32_t nPositions = 0, nRotations = 0;
+        // Its last 8 bytes, two i32s (C3DBONEANIM's two flags): its
+        // positions, its rotations static (the engine samples key 0 of
+        // that kind only, not between keys).
+        bool staticPositions = false, staticRotations = false;
     };
     std::vector<Clip> clipList; // when they read
     size_t start = 0;   // where its record starts (its name)
@@ -447,7 +455,10 @@ struct BoneReader {
             if (!header(p, k.nRotations, flags) || p + 12 + 10 * size_t(k.nRotations) + 8 > to)
                 return true;
             k.rotations = p + 12;
-            p += 12 + 10 * size_t(k.nRotations) + 8;
+            p += 12 + 10 * size_t(k.nRotations);
+            k.staticPositions = u32(p) != 0;
+            k.staticRotations = u32(p + 4) != 0;
+            p += 8;
             clips.push_back(k);
         }
         b.clipList = std::move(clips);
@@ -667,11 +678,12 @@ struct BonePoser {
             return m;
         const BoneRecord::Clip& k = keys.clipList[c];
         if (k.nRotations) {
+            const uint32_t n = k.staticRotations ? 1 : k.nRotations;
             size_t i = 0;
-            while (i + 1 < k.nRotations && r.f32(k.rotations + 10 * (i + 1)) <= t)
+            while (i + 1 < n && r.f32(k.rotations + 10 * (i + 1)) <= t)
                 ++i;
             auto q = rotationKey(r.data.data() + (k.rotations + 10 * i + 4 - r.base));
-            if (i + 1 < k.nRotations) {
+            if (i + 1 < n) {
                 const float t0 = r.f32(k.rotations + 10 * i), t1 = r.f32(k.rotations + 10 * (i + 1));
                 if (t1 > t0 && t > t0)
                     q = slerp(q, rotationKey(r.data.data() + (k.rotations + 10 * (i + 1) + 4 - r.base)),
@@ -685,11 +697,12 @@ struct BonePoser {
             m[11] = b.placement[11];
         }
         if (k.nPositions) {
+            const uint32_t n = k.staticPositions ? 1 : k.nPositions;
             size_t i = 0;
-            while (i + 1 < k.nPositions && r.f32(k.positions + 16 * (i + 1)) <= t)
+            while (i + 1 < n && r.f32(k.positions + 16 * (i + 1)) <= t)
                 ++i;
             Vec3f d{r.f32(k.positions + 16 * i + 4), r.f32(k.positions + 16 * i + 8), r.f32(k.positions + 16 * i + 12)};
-            if (i + 1 < k.nPositions) {
+            if (i + 1 < n) {
                 const float t0 = r.f32(k.positions + 16 * i), t1 = r.f32(k.positions + 16 * (i + 1));
                 if (t1 > t0 && t > t0) {
                     const float f = std::min(1.0f, (t - t0) / (t1 - t0));

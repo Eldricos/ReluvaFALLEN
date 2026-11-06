@@ -203,13 +203,52 @@ order (those spawned during the tick too): its animation (`AnimEnd`,
 notifications); the player its input, `PlayerInput` and `PlayerTick`
 (no `Tick`), any other its `Tick`; its state code; its timer (at most
 once a tick); its `LifeSpan` (at 0, `Expired` and gone, with no
-physics); its physics; a player's `UpdateEyeHeight`. Paused, the player
-only reads its input (`PlayerInput`, its axes 0) and only `bAlwaysTick`
-actors tick; the dialogue goes on. The Fallen's generators (sparks, the
-Jerrado bug swarm: one every 5 ms, each to live 0.4 s) count on the life
-span: without it, M03_KiraL2's swarm had made 17,500 actors by 20
-seconds in. Not done: the owner ticked before what it owns, the pain
-timer, and The Fallen's sleep for actors in zones unseen for 5 seconds.
+physics); its physics; a player's `UpdateEyeHeight`; a pawn's
+`PainTime` counted down (a full tick only), at 0 `PainTimer`. Paused,
+the player only reads its input (`PlayerInput`, its axes 0) and only
+`bAlwaysTick` actors tick; the dialogue goes on. The Fallen's
+generators (sparks, the Jerrado bug swarm: one every 5 ms, each to live
+0.4 s) count on the life span: without it, M03_KiraL2's swarm had made
+17,500 actors by 20 seconds in. Any `LifeSpan` but 0 counts down (one
+below 0 goes at once); a timer that isn't looping keeps what's over the
+rate counted.
+
+- **The owner first.** The level has a flag it flips each tick, each
+  actor its own (`bTicked`); one spawned is set to "not yet", one that
+  ticks to the level's. An actor whose `Owner` hasn't ticked yet this
+  time is put off; once the pass is done, those put off are ticked in
+  another (and another, while the passes get anywhere). As the engine
+  has it, an owner that never ticks (static, asleep) leaves its flag
+  standing, so what it owns ticks only every other frame. (`Base` isn't
+  looked at.)
+- **The pain timer.** The engine only counts down; the scripts do the
+  rest: in water (the head), `PainTime` is `UnderWaterTime`; in a pain
+  zone (the feet), 0.01; `PainTimer` drowns (5 `Drowned`, again in 2
+  seconds) or does the zone's harm (`DamagePerSec` by how deep, again in
+  1). M01_KiraL1B starts Kira in a flooded tunnel, its ceiling 46 over
+  her head: at 20 seconds she starts to drown (100, 85, then 5 every 2
+  seconds) unless she's swum out.
+- **Sleep** (The Fallen's shutdown, before all the rest): an actor not
+  seen for 5 seconds is asked `ShutDown`, and asleep (`bForceStasis`)
+  has no tick at all, no animation, `Tick`, state code, timer or
+  physics, until it's seen in the last 5 seconds again
+  (`DisableShutdownForSomeTime` puts `LastRenderTime` forward); one
+  that won't sleep is asked again in 2 seconds, and one asleep 6 to 7
+  seconds is asked again. Never one with `bMustNotShutDown` (movers,
+  dispatchers, the player, effects, projectiles, flashlights...), a
+  life span, or in zone 0. "Seen": its own `LastRenderTime`, which
+  drawing sets; for one that shows nothing of its own (hidden,
+  `bWakeWhenSeeZone`, drawn as nothing but a decal, a mesh or sprite
+  with none) when its zone was last drawn (the renderer's zones, the
+  sky's too), or now with the view in zone 0. `ShutDown` asks
+  `CanIShutYouDown` with `bAskMeBeforeShuttingDown`; with
+  `bWakeWhenSeePlayer` (not by its zone) it won't while its zone was
+  drawn in the last 5 seconds and nothing of the world is between the
+  player and it. With `bDestroyOnShutDown` asleep is gone. Nothing
+  sleeps until a renderer has drawn (`ue-run`, which draws nothing);
+  `ue-play`'s `view` says how many are asleep (M01_KiraL1A, 194 of its
+  actors at 21 seconds). Not read: one engine switch (0 in play, it
+  seems) and an empty `MultiMesh` counting as showing nothing.
 
 UnrealEd keeps its viewports' cameras in the level as `Camera` actors
 (292 of them over The Fallen's maps). `Camera` is a `PlayerPawn`, and in

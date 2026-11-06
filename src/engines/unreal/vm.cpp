@@ -1917,9 +1917,9 @@ void Vm::tick(VmObject* self, float seconds, bool sendTick) {
     if (!self->deleted && self->timerRate > 0) {
         self->timerCount += seconds;
         if (self->timerCount >= self->timerRate) {
-            if (self->timerLoop)
-                self->timerCount = std::fmod(self->timerCount, self->timerRate);
-            else
+            // What's over the whole rates stays counted, looping or not.
+            self->timerCount = std::fmod(self->timerCount, self->timerRate);
+            if (!self->timerLoop)
                 self->timerRate = 0;
             callEvent(self, "Timer");
         }

@@ -615,79 +615,26 @@ void ScriptLevel::tick(float seconds) {
     seconds = std::clamp(seconds, 0.005f, 0.4f);
     if (Value* v = levelInfo_->find(vm_, "DeltaTime"))
         v->f = seconds;
+    // As ULevel::Tick: each actor in the level's order, those spawned on
+    // the way too; one whose owner hasn't ticked yet waits for it, ticked
+    // in a pass after (and another, while those passes get anywhere).
+    std::vector<VmObject*> later;
+    bool progress = false;
     for (size_t i = 0; i < actors_.size(); ++i) {
         VmObject* a = actors_[i];
         if (a->deleted || a == levelInfo_)
             continue;
-        if (const Value* st = prop(a, "bStatic"); st && st->asBool())
-            continue;
-        if (stopped && a != player_) {
-            const Value* always = prop(a, "bAlwaysTick");
-            if (!always || !always->asBool())
-                continue;
-        }
-        if (a == player_) {
-            // The input axes, as the engine sets them each frame: those
-            // the keys are bound to (DefUser.ini's MoveForward is "Axis
-            // aBaseY Speed=+300", TurnRight "Axis aBaseX Speed=+150"...),
-            // the rest 0; PlayerInput works out the others from them. A
-            // held key adds its speed times the frame's time, and the
-            // engine then scales the axes by 20 over the frame's time: 20
-            // times the speed in all (the scripts' climbing speed,
-            // aForward x 0.02, is 120 a second). Paused, all 0.
-            constexpr float kHeld = 20;
-            const float on = stopped ? 0.0f : 1.0f;
-            const std::pair<const char*, float> axes[] = {
-                {"aBaseY", on * controls.forward * 300 * kHeld}, {"aStrafe", on * controls.strafe * 300 * kHeld},
-                {"aBaseX", on * controls.turn * 150 * kHeld},    {"aLookUp", on * controls.lookUp * 300 * kHeld},
-                {"aMouseX", on * controls.mouseX}, {"aMouseY", on * controls.mouseY},
-                {"aUp", on * ((controls.jump ? 300.0f : 0.0f) - (controls.duck ? 300.0f : 0.0f)) * kHeld},
-                {"aForward", 0}, {"aTurn", 0}, {"aBaseZ", 0},
-            };
-            for (const auto& [axis, value] : axes)
-                if (Value* v = a->find(vm_, axis))
-                    v->f = value;
-            controls.mouseX = controls.mouseY = 0; // the mouse's movement goes into one tick
-            for (const auto& [button, held] :
-                 {std::pair{"bExtra1", controls.jump}, std::pair{"bDuck", controls.duck}, std::pair{"bFire", controls.fire}})
-                if (Value* v = a->find(vm_, button))
-                    v->i = held && !stopped ? 1 : 0;
-            if (stopped) {
-                vm_.callEvent(a, "PlayerInput", {Value::floatValue(seconds)});
-                continue;
-            }
-        }
-        animate(a, seconds);
-        if (a->deleted)
-            continue;
-        if (a == player_) {
-            vm_.callEvent(a, "PlayerInput", {Value::floatValue(seconds)});
-            if (Value* old = prop(a, "OldLocation"))
-                if (const Value* at = prop(a, "Location"))
-                    vm_.assign(*old, *at);
-            vm_.callEvent(a, "PlayerTick", {Value::floatValue(seconds)});
-        }
-        vm_.tick(a, seconds, a != player_);
-        // A life span running out: Expired, then gone.
-        if (Value* life = a->deleted ? nullptr : prop(a, "LifeSpan"); life && life->asFloat() > 0) {
-            life->f -= seconds;
-            if (life->f <= 0.0001f) {
-                life->f = 0;
-                vm_.callEvent(a, "Expired");
-                destroy(a);
-                continue;
-            }
-        }
-        if (!a->deleted)
-            physics(a, seconds);
-        // Once it has moved, a player's UpdateEyeHeight: the view's height,
-        // and in The Fallen the arms' IK, which puts the weapon in hand.
-        if (!a->deleted)
-            if (const Value* p = prop(a, "bIsPlayer"); p && p->asBool())
-                vm_.callEvent(a, "UpdateEyeHeight", {Value::floatValue(seconds)});
-        if (!a->deleted)
-            moveMultiMeshes(a, seconds);
+        progress |= tickActor(a, seconds, stopped, later);
     }
+    while (!later.empty() && progress) {
+        std::vector<VmObject*> pass;
+        pass.swap(later);
+        progress = false;
+        for (VmObject* a : pass)
+            if (!a->deleted && ticked_[a] != tickedFlag_)
+                progress |= tickActor(a, seconds, stopped, later);
+    }
+    tickedFlag_ = !tickedFlag_;
     // What's attached (C3DAttach) goes where its holder now is.
     placeAttached();
     // The console ticks as the client does, paused or not (its UWindow
@@ -700,8 +647,203 @@ void ScriptLevel::tick(float seconds) {
     lipSyncUpdate();
     tickFlis(seconds);
     ++ticks_;
+    for (VmObject* a : actors_)
+        if (a->deleted)
+            ticked_.erase(a);
     actors_.erase(std::remove_if(actors_.begin(), actors_.end(), [](VmObject* a) { return a->deleted; }),
                   actors_.end());
+}
+
+void ScriptLevel::zonesRendered(uint64_t zones, int cameraZone) {
+    const float now = levelInfo_ ? pf(levelInfo_, "TimeSeconds") : 0;
+    for (size_t z = 0; z < zoneRenderTime_.size(); ++z)
+        if ((zones >> z) & 1)
+            zoneRenderTime_[z] = now;
+    if (cameraZone >= 0)
+        cameraZone_ = cameraZone;
+    renderedTick_ = ticks_;
+}
+
+// The Fallen's sleep (the engine's ShutDown), at the top of AActor::Tick:
+// an actor not seen for 5 seconds is asked to sleep, and asleep has no
+// tick at all (no animation, Tick, state code, timer or physics) until
+// it's seen again; one that won't is asked again in 2 seconds. Never one
+// with bMustNotShutDown, a life span, or in zone 0. "Seen", its own
+// LastRenderTime (which drawing sets), or for one that shows nothing of
+// its own (hidden, bWakeWhenSeeZone, drawn as nothing, a mesh or sprite
+// without one) when its zone was last drawn; with the view in zone 0,
+// now. Asleep (bForceStasis), it wakes once seen in the last 5 seconds
+// (DisableShutdownForSomeTime puts LastRenderTime forward), else after 6
+// to 7 is asked again: to sleep on, 5 seconds back; not, now.
+bool ScriptLevel::sleeping(VmObject* a) {
+    const auto objectProp = [&](VmObject* o, const char* name) {
+        const Value* v = prop(o, name);
+        return v ? v->asObject() : nullptr;
+    };
+    if (!levelInfo_ || renderedTick_ < ticks_ - 2) // no view: all seen
+        return false;
+    if (pb(a, "bMustNotShutDown") || pf(a, "LifeSpan") != 0)
+        return false;
+    const Value* region = prop(a, "Region");
+    const int zone = region && region->fields.size() > 2 ? region->fields[2].asInt() : 0;
+    if (zone <= 0 || zone >= int(zoneRenderTime_.size()))
+        return false;
+    Value* drawn = prop(a, "LastRenderTime");
+    Value* stasis = prop(a, "bForceStasis");
+    if (!drawn || !stasis)
+        return false;
+    const float now = pf(levelInfo_, "TimeSeconds");
+    const int drawType = int(pf(a, "DrawType"));
+    const bool byZone = pb(a, "bHidden") || pb(a, "bWakeWhenSeeZone") ||
+                        (drawType == 0 && !vm_.isA(a, "Decal")) || (drawType == 2 && !objectProp(a, "Mesh")) ||
+                        ((drawType == 1 || drawType == 7) && !objectProp(a, "Texture"));
+    if (byZone)
+        *drawn = Value::floatValue(cameraZone_ == 0 ? now : zoneRenderTime_[size_t(zone)]);
+    const float elapsed = now - drawn->asFloat();
+    if (!stasis->asBool()) {
+        if (elapsed < 5)
+            return false;
+        if (!mayShutDown(a, now, zone)) {
+            *drawn = Value::floatValue(now - 3);
+            return false;
+        }
+        *stasis = Value::boolValue(true);
+        if (pb(a, "bDestroyOnShutDown"))
+            destroy(a);
+        return true;
+    }
+    if (elapsed <= 5) {
+        *stasis = Value::boolValue(false);
+        return false;
+    }
+    if (elapsed <= 6 + std::uniform_real_distribution<float>(0, 1)(sleepRandom_))
+        return true;
+    if (mayShutDown(a, now, zone)) {
+        *drawn = Value::floatValue(now - 5);
+        return true;
+    }
+    *drawn = Value::floatValue(now);
+    *stasis = Value::boolValue(false);
+    return false;
+}
+
+// ShutDown's say: with bAskMeBeforeShuttingDown, the script's
+// CanIShutYouDown first; with bWakeWhenSeePlayer (and not by its zone),
+// not while the player can see it (its zone drawn in the last 5 seconds
+// and nothing of the world between).
+bool ScriptLevel::mayShutDown(VmObject* a, float now, int zone) {
+    if (pb(a, "bAskMeBeforeShuttingDown") && !vm_.callEvent(a, "CanIShutYouDown").asBool())
+        return false;
+    if (a->deleted)
+        return false;
+    if (pb(a, "bWakeWhenSeePlayer") && !pb(a, "bWakeWhenSeeZone")) {
+        if (now - zoneRenderTime_[size_t(zone)] >= 5)
+            return true;
+        if (!player_)
+            return true;
+        return !lineOfSight(a, pv(player_, "Location"), pv(a, "Location"));
+    }
+    return true;
+}
+
+// One actor's tick, as AActor::Tick: static ones not at all; then The
+// Fallen's sleep; one whose Owner hasn't ticked this time put off
+// (`later`); then its animation, its input and PlayerTick or its Tick,
+// state code, timer, life span (Expired: gone, no physics), physics, a
+// player's UpdateEyeHeight, and a pawn's PainTimer counting down.
+bool ScriptLevel::tickActor(VmObject* a, float seconds, bool stopped, std::vector<VmObject*>& later) {
+    if (const Value* st = prop(a, "bStatic"); st && st->asBool())
+        return false;
+    if (stopped && a != player_) {
+        const Value* always = prop(a, "bAlwaysTick");
+        if (!always || !always->asBool())
+            return false;
+    }
+    if (a == player_) {
+        // The input axes, as the engine sets them each frame: those
+        // the keys are bound to (DefUser.ini's MoveForward is "Axis
+        // aBaseY Speed=+300", TurnRight "Axis aBaseX Speed=+150"...),
+        // the rest 0; PlayerInput works out the others from them. A
+        // held key adds its speed times the frame's time, and the
+        // engine then scales the axes by 20 over the frame's time: 20
+        // times the speed in all (the scripts' climbing speed,
+        // aForward x 0.02, is 120 a second). Paused, all 0.
+        constexpr float kHeld = 20;
+        const float on = stopped ? 0.0f : 1.0f;
+        const std::pair<const char*, float> axes[] = {
+            {"aBaseY", on * controls.forward * 300 * kHeld}, {"aStrafe", on * controls.strafe * 300 * kHeld},
+            {"aBaseX", on * controls.turn * 150 * kHeld},    {"aLookUp", on * controls.lookUp * 300 * kHeld},
+            {"aMouseX", on * controls.mouseX}, {"aMouseY", on * controls.mouseY},
+            {"aUp", on * ((controls.jump ? 300.0f : 0.0f) - (controls.duck ? 300.0f : 0.0f)) * kHeld},
+            {"aForward", 0}, {"aTurn", 0}, {"aBaseZ", 0},
+        };
+        for (const auto& [axis, value] : axes)
+            if (Value* v = a->find(vm_, axis))
+                v->f = value;
+        controls.mouseX = controls.mouseY = 0; // the mouse's movement goes into one tick
+        for (const auto& [button, held] :
+             {std::pair{"bExtra1", controls.jump}, std::pair{"bDuck", controls.duck}, std::pair{"bFire", controls.fire}})
+            if (Value* v = a->find(vm_, button))
+                v->i = held && !stopped ? 1 : 0;
+        if (stopped) {
+            vm_.callEvent(a, "PlayerInput", {Value::floatValue(seconds)});
+            return false;
+        }
+    }
+    if (sleeping(a))
+        return false;
+    if (const Value* o = prop(a, "Owner"))
+        if (VmObject* owner = o->asObject(); owner && !owner->deleted && ticked_[owner] != tickedFlag_) {
+            later.push_back(a);
+            return false;
+        }
+    ticked_[a] = tickedFlag_;
+    animate(a, seconds);
+    if (a->deleted)
+        return true;
+    if (a == player_) {
+        vm_.callEvent(a, "PlayerInput", {Value::floatValue(seconds)});
+        if (Value* old = prop(a, "OldLocation"))
+            if (const Value* at = prop(a, "Location"))
+                vm_.assign(*old, *at);
+        vm_.callEvent(a, "PlayerTick", {Value::floatValue(seconds)});
+    }
+    vm_.tick(a, seconds, a != player_);
+    // A life span running out: Expired, then gone. Any but 0 counts down
+    // (one below 0 at once).
+    if (Value* life = a->deleted ? nullptr : prop(a, "LifeSpan"); life && life->asFloat() != 0) {
+        life->f -= seconds;
+        if (life->f <= 0.0001f) {
+            vm_.callEvent(a, "Expired");
+            destroy(a);
+            return true;
+        }
+    }
+    if (!a->deleted)
+        physics(a, seconds);
+    // Once it has moved, a player's UpdateEyeHeight: the view's height,
+    // and in The Fallen the arms' IK, which puts the weapon in hand.
+    if (!a->deleted)
+        if (const Value* p = prop(a, "bIsPlayer"); p && p->asBool())
+            vm_.callEvent(a, "UpdateEyeHeight", {Value::floatValue(seconds)});
+    if (!a->deleted)
+        moveMultiMeshes(a, seconds);
+    // The engine only counts PainTime down (a full tick, a pawn): its
+    // scripts set it (in water, UnderWaterTime; in a pain zone, 0.01) and
+    // PainTimer does the drowning or the zone's harm, then sets it again.
+    if (!a->deleted && !stopped) {
+        auto it = pawnClasses_.find(a->cls);
+        if (it == pawnClasses_.end())
+            it = pawnClasses_.emplace(a->cls, vm_.isA(a, "Pawn")).first;
+        if (Value* pain = it->second ? prop(a, "PainTime") : nullptr; pain && pain->asFloat() > 0) {
+            *pain = Value::floatValue(pain->asFloat() - seconds);
+            if (pain->asFloat() < 0.001f) {
+                *pain = Value::floatValue(0);
+                vm_.callEvent(a, "PainTimer");
+            }
+        }
+    }
+    return true;
 }
 
 VmObject* ScriptLevel::spawn(VmClass* cls, VmObject* owner, NameId tag, const Value* location, const Value* rotation) {
@@ -716,6 +858,7 @@ VmObject* ScriptLevel::spawn(VmClass* cls, VmObject* owner, NameId tag, const Va
         return nullptr;
     }
     actors_.push_back(a);
+    ticked_[a] = !tickedFlag_; // not ticked yet this time
     init(a);
     if (Value* v = a->find(vm_, "Owner"))
         v->o = owner;

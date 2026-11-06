@@ -209,6 +209,8 @@ public:
     // It was drawn this frame (its LastRenderTime: The Fallen's heads and
     // faces only move on pawns drawn in the last few seconds).
     void drawn(VmObject* actor);
+    // The zones drawn this frame (bit n, zone n), the view in `cameraZone`.
+    void zonesDrawn(uint64_t zones, int cameraZone) { level_->zonesRendered(zones, cameraZone); }
     // It's about to be drawn: C3DPreRender, as The Fallen's engine sends
     // (the player's weapon works out its tip and the crosshair).
     void preRender(VmObject* actor);

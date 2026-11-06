@@ -71,6 +71,11 @@ public:
     // actors are spawned or move).
     void updateRegion(VmObject* actor);
     int editorCameras() const { return editorCameras_; } // UnrealEd's cameras, left out
+    // The renderer drew these zones (bit n, zone n) this frame, the view
+    // in `cameraZone` (-1 not known): the zones' render times, which The
+    // Fallen's sleep goes by for actors that show nothing of their own.
+    // Until a renderer says so, nothing sleeps (a run with no view).
+    void zonesRendered(uint64_t zones, int cameraZone = -1);
 
     // The player's controls this tick, as the engine's input sets them
     // from the keys held (-1 to 1 each: back/forward, left/right, turning
@@ -958,6 +963,19 @@ private:
     LayeredPoser::Adjust adjustOf(VmObject* actor, ActorMesh& mesh);
     bool measureEffectors(VmObject* actor, ActorMesh& mesh, Bends& bends, const LayeredPoser::Adjust* adjust);
     int ticks_ = 0;
+    // One actor's tick (AActor::Tick); false if it did nothing (static,
+    // asleep, or put off until its owner has ticked: onto `later`).
+    bool tickActor(VmObject* a, float seconds, bool stopped, std::vector<VmObject*>& later);
+    // The Fallen's sleep (AActor::Tick's first part): true to skip the
+    // tick; and ShutDown, whether it may.
+    bool sleeping(VmObject* a);
+    bool mayShutDown(VmObject* a, float now, int zone);
+    bool tickedFlag_ = false;                       // ULevel's, flipped each tick
+    std::unordered_map<const VmObject*, bool> ticked_; // each actor's bTicked
+    std::array<float, 64> zoneRenderTime_{};
+    int cameraZone_ = -1;
+    int renderedTick_ = -100; // the tick a renderer last drew in
+    std::mt19937 sleepRandom_{24680};
     int placedGhosts_ = 0;
     int localizedSet_ = 0;
     std::vector<VmObject*> movers_; // the level's, which traces of the world meet

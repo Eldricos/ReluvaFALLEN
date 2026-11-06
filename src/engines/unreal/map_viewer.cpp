@@ -899,6 +899,12 @@ std::string MapViewer::describeView() {
     const std::array<float, 3> at{view_.location[0], view_.location[1], view_.location[2]};
     if (play_->level().inSolid(at))
         out += ", in solid";
+    // How many actors are asleep (unseen for 5 seconds: bForceStasis).
+    size_t asleep = 0;
+    for (VmObject* a : play_->level().actors())
+        if (const Value* v = a->deleted ? nullptr : a->find(play_->vm(), "bForceStasis"); v && v->asBool())
+            ++asleep;
+    out += ", " + std::to_string(asleep) + " actors asleep";
     return out;
 }
 
@@ -1266,7 +1272,7 @@ void MapViewer::update(uint64_t nowMs) {
             skyAt = *zoneSkies_[size_t(z)];
         const gfx::Vec3 eye = toWorld(skyAt);
         const gfx::Mat4 skyView = gfx::multiply(proj, gfx::lookAlong(eye, forward, {0, 0, 1}));
-        seeZonesFrom(eye, skyView);
+        seeZonesFrom(eye, skyView, false);
         renderer_->beginFrame(skyView, eye, {20, 24, 40});
         drawBatches(levelBatches(), mesh_, gfx::identity(), true);
         drawSurfaceSwaps();
@@ -1275,7 +1281,7 @@ void MapViewer::update(uint64_t nowMs) {
     } else {
         renderer_->beginFrame(viewProj, pos_, {20, 24, 40});
     }
-    seeZonesFrom(pos_, viewProj);
+    seeZonesFrom(pos_, viewProj, true);
     if (animate_)
         animTime_ += dt;
     if (play_)
@@ -1659,15 +1665,19 @@ gfx::Mat4 MapViewer::moverPlacement(const Mover& m, const Vec3f& location, const
 
 // The zones seen from `eye` (gfx's coordinates) through the portals, for
 // drawBatches to leave out the rest.
-void MapViewer::seeZonesFrom(const gfx::Vec3& eye, const gfx::Mat4& viewProj) {
+void MapViewer::seeZonesFrom(const gfx::Vec3& eye, const gfx::Mat4& viewProj, bool mainView) {
+    const Vec3f at{eye[0], -eye[1], eye[2]}; // Unreal's coordinates have y the other way
     if (!zoneCulling_) {
         zonesSeen_ = ~uint64_t(0);
-        return;
+    } else {
+        gfx::Mat4 flip = gfx::identity();
+        flip[5] = -1;
+        zonesSeen_ = zones_.visible(at, gfx::multiply(viewProj, flip));
     }
-    // Unreal's coordinates have y the other way.
-    gfx::Mat4 flip = gfx::identity();
-    flip[5] = -1;
-    zonesSeen_ = zones_.visible(Vec3f{eye[0], -eye[1], eye[2]}, gfx::multiply(viewProj, flip));
+    // The zones' render times (The Fallen's sleep); the view's zone, the
+    // main view's only (not the sky's).
+    if (play_)
+        play_->zonesDrawn(zonesSeen_, mainView ? zones_.zoneAt(at) : -1);
 }
 
 // The level's batches, playing: with the textures the scripts have swapped

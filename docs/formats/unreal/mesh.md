@@ -131,20 +131,29 @@ mesh's name and textures' file names, after it its body parts' names
 | Field | |
 |---|---|
 | u16 length and the bone's name | `root`, `Bip01_Pelvis`... (some empty, some ending in a tab) |
-| `(n, n, 8)` and n i32 | (0, 1) seen; not used |
+| `(n, n, 8)` and n i32 | the animation groups (body parts, the names after the tree) it's in: the engine plays each bone by the last of them that's active and lists it, so the upper and lower torso can play different clips. Not used (Reluva layers its own way) |
 | `(k, k, 128)` and k float xyz | the bone's vertices, in its own space (none for keyframed meshes' bones, whose packed frames have them) |
 | `(k, k, 128)` and k float | their weights (a vertex shared by bones has some under 1) |
 | `(k, k, 128)` and k i32 | which of the frame's vertices each is |
 | 12 floats | a 4x3 matrix ("offset"; not used: see below) |
-| i32 | 7 |
+| i32 | the matrix's shortcut flags (below): 7 |
 | 12 floats | the bone's placement in its parent's space: rows X, Y, Z, then the origin |
-| i32 | 7 for root, 4 for most, 0 for some |
+| i32 | its shortcut flags: 7 for root, 4 for most, 0 for some |
 | `(c, c, f)` | c clips, one per animation |
 | per clip: `(n, n, f)` and n x (time, x, y, z) floats | position keys: times in seconds, an offset to the placement's origin, in 3ds Max's axes (below) |
 | per clip: `(m, m, f)` and m x (float time, 6 bytes) | rotation keys: a quaternion, below |
-| per clip: 8 bytes | (0, 0), (0, 1), (1, 1) seen |
+| per clip: two i32 | positions static, rotations static: the engine's sampler then takes key 0 of that kind only, not between keys (or with a single key). Most set ones have identical keys; a few dozen don't, which Reluva now samples as the engine does |
 | `(h, h, 4)` | h children, whose records follow |
-| after the children: 12 floats, i32 7, 10 floats, two `(n, n, f)` and n i32 | a matrix (identity), what may be joint limits (+-30 degrees), links to other bones (usually none) |
+| after the children: 12 floats, i32 7, 4 floats | the bone's bounding cylinder (C3DCYLINDER), in its own space: a matrix, then z min, z max, the largest x²+y² and one more. All of them unbuilt (identity, +-1e38, 0): the exporter's, not used |
+| 6 floats | the joint limits (the IK's; +-30 degrees) |
+| two `(n, n, f)` and n i32 | a vertex remap for the attachment points: for each of the bone's vertices that is a corner of an attachment point's triangle, its index among the bone's vertices and its place in the mesh's list of those corners (the engine places attachment points from these without skinning the whole mesh). Not needed: Reluva skins the corners |
+
+Each array's header is (count, max, grow): the third number ("8",
+"128", "f") is the engine's grow step, not a type. Each matrix's i32
+is its shortcut flags, which the engine keeps to skip work: 1 no
+translation, 2 the 3x3 part the identity, 4 its rows unit length (no
+scale). So 7 is the identity, 4 a turn and a move, 0 not known to be
+unscaled (the transpose not to be taken as the inverse).
 
 A rotation key's 6 bytes are a quaternion: x, y and z packed as 11, 11
 and 10 bits (0 to the top of each standing for -1 to 1, as packed
@@ -159,7 +168,11 @@ them: knees in the runs, FireRunR's right elbow.
 **Posing.** A bone's place at time t of a clip: turned by its rotation
 key's quaternion taken as rows of a matrix (i.e. by its conjugate, as row
 vectors turn), then by its placement's turn, at its placement's origin
-plus its position key; then its parent's, up to the root.
+plus its position key; then its parent's, up to the root. Between
+keys, the engine's sampler blends; a clip whose static flag is set for
+a kind of key takes key 0 of it throughout. Looping, its last stretch
+blends toward key 0 rather than holding the last key (the loop asked
+for by the play call, not the file); Reluva doesn't yet.
 
 The position keys are in 3ds Max's axes, not the skeleton's: Z up, the
 figure facing -Y with its right at -X. The skeleton's are Y up, the
