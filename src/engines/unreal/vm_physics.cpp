@@ -1130,8 +1130,13 @@ void ScriptLevel::physics(VmObject* a, float dt) {
     Vec v = vecOf(velocityValue);
     Vec accel = vecOf(prop(a, "Acceleration"));
     switch (physics) {
-    case kPhysWalking:
     case kPhysSimpleWalking:
+        // Only a plain pawn's (APawn::physSimpleWalking: the leeches);
+        // The Fallen's own pawns don't move in it.
+        if (!vm_.isA(a, "CTVE_Pawn") && vm_.isA(a, "Pawn"))
+            simpleWalk(a, dt);
+        break;
+    case kPhysWalking:
         if (vm_.isA(a, "CTVE_PlayerPawn"))
             walkPlayer(a, dt);
         else if (vm_.isA(a, "CTVE_Pawn")) {
@@ -1231,6 +1236,79 @@ ScriptLevel::ZoneFeel ScriptLevel::zoneFeel(VmObject* a) {
 // it by friction; with none, braking (the player's in one go and stopped
 // under 2.2 a second, the AI's in steps of 0.03 s and stopped under 10);
 // then up to the speed, walking easing down to 30% of it.
+// A crawler's walk (APawn::physSimpleWalking, SR3_Leech): forward the
+// way it faces at GroundSpeed (its acceleration aside, its AccelRate held
+// at 300), along the floor found 10 over and under where that takes it,
+// 2 above it; blocked, it tries the plain move (going down) or 60 a second
+// up and then across (level or up), no sliding. No floor ahead, or none
+// within 10 under it after: Falling. Standing on a slope steeper than 0.6:
+// HitWall. Its Floor and Base are left as they were.
+void ScriptLevel::simpleWalk(VmObject* a, float dt) {
+    Value* vel = prop(a, "Velocity");
+    Value* acc = prop(a, "Acceleration");
+    if (!vel || dt <= 0)
+        return;
+    Vec v = vecOf(vel);
+    v[2] = 0;
+    if (acc) {
+        Vec ac = vecOf(acc);
+        ac[2] = 0;
+        vm_.setVector(*acc, ac[0], ac[1], ac[2]);
+    }
+    if (Value* r = prop(a, "AccelRate"))
+        *r = Value::floatValue(300);
+    const float speed = floatOf(prop(a, "GroundSpeed"), 320);
+    const Value* rot = prop(a, "Rotation");
+    const auto r = rot ? Vm::rotatorOf(*rot) : std::array<int32_t, 3>{};
+    const float yaw = float(r[1]) * 3.14159265f / 32768, pitch = float(r[0]) * 3.14159265f / 32768;
+    v = mul(Vec{std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), std::sin(pitch)}, speed);
+    if (Value* old = prop(a, "OldLocation")) {
+        const Vec l = vecOf(prop(a, "Location"));
+        vm_.setVector(*old, l[0], l[1], l[2]);
+    }
+    vm_.setVector(*vel, v[0], v[1], v[2]);
+    const Vec extent{floatOf(prop(a, "CollisionRadius"), 17), floatOf(prop(a, "CollisionRadius"), 17),
+                     floatOf(prop(a, "CollisionHeight"), 17)};
+    auto fall = [&] {
+        if (Value* ph = prop(a, "Physics"))
+            ph->i = kPhysFalling;
+        vm_.callEvent(a, "Falling");
+    };
+    const Vec here = vecOf(prop(a, "Location"));
+    const Vec dest = add(here, mul(v, dt));
+    Vec at, n;
+    const Vec probeTop{dest[0], dest[1], dest[2] + 10};
+    if (!trace(a, probeTop, {dest[0], dest[1], dest[2] - 10}, extent, false, at, n)) {
+        fall();
+    } else {
+        const float t = length(sub(at, probeTop)) / 20;
+        const Vec floorPt{dest[0], dest[1], dest[2] + 10 - 20 * t + 2};
+        v = mul(normalOf(sub(floorPt, here)), speed);
+        vm_.setVector(*vel, v[0], v[1], v[2]);
+        const MoveHit h = moveActor(a, mul(v, dt));
+        if (!a->deleted && h.hit()) {
+            if (floorPt[2] < dest[2]) {
+                moveActor(a, sub(dest, vecOf(prop(a, "Location"))));
+            } else {
+                moveActor(a, {0, 0, 60 * dt});
+                if (!a->deleted)
+                    moveActor(a, {v[0] * dt, v[1] * dt, 0});
+            }
+        }
+    }
+    if (a->deleted)
+        return;
+    const Vec now = vecOf(prop(a, "Location"));
+    VmObject* by = trace(a, now, {now[0], now[1], now[2] - 10}, extent, false, at, n);
+    if (!by) {
+        if (physicsOf(a) == kPhysSimpleWalking)
+            fall();
+        return;
+    }
+    if (n[2] < 0.6f)
+        vm_.callEvent(a, "HitWall", {vm_.vectorValue(n[0], n[1], n[2]), Value::objectValue(by)});
+}
+
 void ScriptLevel::calcVelocity(VmObject* a, Vec& v, Vec& accel, float dt, float maxSpeed, float friction, bool fluid,
                                bool brake, bool buoyant, const Vec& gravity) {
     const bool player = vm_.isA(a, "CTVE_PlayerPawn");

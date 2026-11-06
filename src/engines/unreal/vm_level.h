@@ -676,6 +676,7 @@ private:
     std::string options_; // the URL's options, for InitGame and Login
     void walkPlayer(VmObject* a, float dt);
     void walkPawn(VmObject* a, float dt, int maxIterations);
+    void simpleWalk(VmObject* a, float dt);
     void landed(VmObject* a, const std::array<float, 3>& n, VmObject* on, float remaining);
     void fallPlayer(VmObject* a, float dt);
     void fall(VmObject* a, float dt);
