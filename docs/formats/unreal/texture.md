@@ -30,7 +30,7 @@ Mipmaps: a compact count, then each, largest first:
 |---|---|
 | i32 | from version 63: the file offset just past the pixel data (for skipping it) |
 | compact | size of the pixel data |
-| bytes | the pixels: P8 one palette index each; DXT1 8-byte 4x4 blocks; RGB8 3 bytes and RGBA8 4 bytes, both stored blue first (an assumption to check) |
+| bytes | the pixels: P8 one palette index each; DXT1 8-byte 4x4 blocks; RGB8 3 bytes and RGBA8 4 bytes, both stored blue first (an assumption; no texture of The Fallen's uses them: all 4,029 are P8, `ue-check`) |
 | i32 × 2 | width, height |
 | u8 × 2 | log2 of width and height |
 

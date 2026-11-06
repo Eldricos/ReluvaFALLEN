@@ -5851,6 +5851,8 @@ int cmdUeCheck(int argc, char** argv) {
                 const reluva::Error err = decodeTexture(set, *pkg, int(i), img, &info);
                 if (!err && info.fromComp)
                     ++tallies["textures (from their compressed copy)"].ok;
+                if (!err && info.standIn.empty())
+                    ++tallies["textures in format " + std::to_string(int(info.format))].ok;
                 if (!err && !info.standIn.empty())
                     ++tallies["textures (procedural, stand-in shown)"].ok;
                 else
@@ -5876,6 +5878,21 @@ int cmdUeCheck(int argc, char** argv) {
                 if (err)
                     err.message = pkg->path(int32_t(i) + 1) + ": " + err.message;
                 record(from.empty() ? "sounds" : "sounds (streamed from mp3/)", err);
+                // A WAV's own loop (its smpl chunk, with a loop in it).
+                if (EmbeddedFile f; !readEmbeddedFile(*pkg, int(i), f) && f.data.size() > 12) {
+                    for (size_t at = 12; at + 8 <= f.data.size();) {
+                        const uint32_t size = uint32_t(f.data[at + 4]) | uint32_t(f.data[at + 5]) << 8 |
+                                              uint32_t(f.data[at + 6]) << 16 | uint32_t(f.data[at + 7]) << 24;
+                        if (std::memcmp(&f.data[at], "smpl", 4) == 0 && size >= 36 && at + 8 + 36 <= f.data.size()) {
+                            const uint8_t* q = &f.data[at + 8 + 28];
+                            const uint32_t loops = uint32_t(q[0]) | uint32_t(q[1]) << 8 | uint32_t(q[2]) << 16 | uint32_t(q[3]) << 24;
+                            if (loops > 0)
+                                ++tallies["sounds with a loop of their own (smpl)"].ok;
+                            break;
+                        }
+                        at += 8 + size + (size & 1);
+                    }
+                }
             } else if (cls == "music") {
                 EmbeddedFile f;
                 record("music", readEmbeddedFile(*pkg, int(i), f));

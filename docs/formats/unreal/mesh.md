@@ -94,9 +94,9 @@ frame for all of them (`Mesh::keyFrames`).
 306 of 455 LodMeshes and 4 of 9 Meshes read (all now: see Classic Meshes
 below). JadziaDax failed only for an
 animation (aaThumbTest2) running past its frames; such animations are now
-left out rather than the mesh. The rest are still to be looked at with
-`ue-probe`, which lists the block's array headers and every place the
-standard tail could start.
+left out rather than the mesh. All the rest read since (November 2026:
+455 of 455 LodMeshes, the 6 Meshes with geometry). `ue-probe` lists the
+block's array headers and every place the standard tail could start.
 
 **Classic Meshes** (not LodMesh): The Fallen has 9.
 - **Six have geometry:** `TransporterTubeMesh`, `EMPulseRifleImpactMesh`,

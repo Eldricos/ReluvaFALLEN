@@ -1197,11 +1197,16 @@ per-frame `Update`), as read from them; the code is Reluva's own.
   them as it goes. So do `UseStereo` and `ReverseStereo`.
   `SetMasterVolume` sets the master for now (a level fading out), and
   `KillSound` stops every sound.
+- **A WAV's own loop:** a looping sound with a loop in its `smpl` chunk
+  plays through once to the loop's end, then round the loop (its first
+  loop, start to last frame). Five of the game's sounds have one
+  (`ue-check`): the cantina's and a big fire's loops, the underwater
+  sound and the two breathing sounds.
 - **Not done:** the driver's Doppler (at its `DopplerSpeed` of 35,000 a
   change of about 1%), the zones' reverb (Miles' room types, by the
   camera's zone's `ZoneRoomType`; under water room 22), the high- and
-  low-pass filters, a WAV's own loop points, and the AI not hearing a
-  sound played from a `simulated` function.
+  low-pass filters, and the AI not hearing a sound played from a
+  `simulated` function.
 
 On M04_KiraL1, in the first seconds:
 - the vents' and engines' hums and the lights' buzz (37 ambient sounds);

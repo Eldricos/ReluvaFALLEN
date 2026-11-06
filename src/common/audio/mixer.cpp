@@ -134,17 +134,22 @@ void Mixer::mix(int16_t* out, int frames) {
         const double cutoff = 20000.0 * std::pow(1000.0 / 20000.0, double(c.muffle));
         const double k = 1 - std::exp(-2 * 3.14159265358979 * cutoff / double(outputRate_));
         for (int i = 0; i < frames; ++i) {
-            if (c.position >= double(n)) {
+            // Looping: over the sound's own loop if it has one (its WAV's
+            // smpl), else all of it.
+            const bool ownLoop = c.loop && s.loopEnd > s.loopStart;
+            const double loopFrom = ownLoop ? double(s.loopStart) : 0, loopTo = ownLoop ? double(s.loopEnd) : double(n);
+            if (c.position >= (c.loop ? loopTo : double(n))) {
                 if (!c.loop) {
                     c.done = true;
                     break;
                 }
-                c.position = std::fmod(c.position, double(n));
+                c.position = loopFrom + std::fmod(c.position - loopFrom, loopTo - loopFrom);
             }
-            // Linear interpolation towards the next frame (the first, when
-            // looping past the end; else the last holds).
+            // Linear interpolation towards the next frame (the loop's
+            // start, when looping past its end; else the last holds).
             const size_t f = size_t(c.position);
-            const size_t g = f + 1 < n ? f + 1 : (c.loop ? 0 : f);
+            const size_t g = ownLoop ? (double(f + 1) < loopTo ? f + 1 : s.loopStart)
+                                     : (f + 1 < n ? f + 1 : (c.loop ? 0 : f));
             const double t = c.position - double(f);
             double l = sample(f, 0) * (1 - t) + sample(g, 0) * t;
             double r = ch > 1 ? sample(f, 1) * (1 - t) + sample(g, 1) * t : l;

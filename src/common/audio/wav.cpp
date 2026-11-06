@@ -97,6 +97,11 @@ Error decodeWav(const std::vector<uint8_t>& d, Sound& out) {
             data = body, dataSize = avail;
         else if (std::memcmp(d.data() + p, "fact", 4) == 0 && avail >= 4)
             factFrames = u32(d, body);
+        else if (std::memcmp(d.data() + p, "smpl", 4) == 0 && avail >= 36 + 24 && u32(d, body + 28) > 0) {
+            // The first loop: its start and its last frame (inclusive).
+            out.loopStart = u32(d, body + 36 + 8);
+            out.loopEnd = size_t(u32(d, body + 36 + 12)) + 1;
+        }
         p = body + size + (size & 1);
     }
     if (!fmt || fmtSize < 16)
@@ -124,6 +129,8 @@ Error decodeWav(const std::vector<uint8_t>& d, Sound& out) {
         return Error::fail("WAVE format " + std::to_string(out.format) + " with " + std::to_string(bits) +
                            " bits isn't supported");
     }
+    if (out.loopEnd > out.frames() || out.loopStart >= out.loopEnd)
+        out.loopStart = out.loopEnd = 0;
     return Error::success();
 }
 

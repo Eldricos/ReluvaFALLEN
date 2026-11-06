@@ -16,6 +16,9 @@ struct Sound {
     int channels = 0; // 1 or 2
     int format = 0;   // the source's format: a WAV format tag (1 PCM, 0x11 IMA ADPCM), or kFormatMp3
     std::vector<int16_t> samples;
+    // A loop of its own (a WAV's smpl chunk): when it loops, from
+    // loopStart to loopEnd (frames, loopEnd past the last); none if equal.
+    size_t loopStart = 0, loopEnd = 0;
     size_t frames() const { return channels ? samples.size() / size_t(channels) : 0; }
 };
 
