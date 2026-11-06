@@ -252,6 +252,19 @@ private:
     const Package& map_;
     std::unique_ptr<Vm> vm_;
     std::unique_ptr<ScriptLevel> level_;
+    struct WallKey {
+        std::array<uint32_t, 6> bits;
+        bool operator==(const WallKey& o) const { return bits == o.bits; }
+    };
+    struct WallHash {
+        size_t operator()(const WallKey& k) const {
+            size_t h = 1469598103934665603ull;
+            for (uint32_t b : k.bits)
+                h = (h ^ b) * 1099511628211ull;
+            return h;
+        }
+    };
+    std::unordered_map<WallKey, bool, WallHash> walls_; // wallBetween's answers
     VmObject* player_ = nullptr;
     std::string loginError_;
     float time_ = 0, owed_ = 0, behind_ = 0;

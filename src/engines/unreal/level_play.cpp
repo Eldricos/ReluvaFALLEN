@@ -6,6 +6,7 @@
 #include "common/fs.h"
 
 #include <algorithm>
+#include <cstring>
 #include <chrono>
 #include <cmath>
 #include <utility>
@@ -414,8 +415,20 @@ bool LevelPlay::mayBeSeen(VmObject* a, uint64_t zones) {
     return true;
 }
 
+// The level's BSP doesn't move (movers aren't counted), so the answer for
+// the same two places is kept: an actor standing still asks it of each
+// light every frame.
 bool LevelPlay::wallBetween(const Vec3f& from, const Vec3f& to) {
-    return level_->worldBetween({from[0], from[1], from[2]}, {to[0], to[1], to[2]}, 24);
+    WallKey key{};
+    std::memcpy(key.bits.data(), from.data(), 12);
+    std::memcpy(key.bits.data() + 3, to.data(), 12);
+    if (auto it = walls_.find(key); it != walls_.end())
+        return it->second;
+    if (walls_.size() > 200000)
+        walls_.clear();
+    const bool wall = level_->worldBetween({from[0], from[1], from[2]}, {to[0], to[1], to[2]}, 24);
+    walls_.emplace(key, wall);
+    return wall;
 }
 
 // The zone's own if it sets one, else the level's (LevelInfo's: M03's

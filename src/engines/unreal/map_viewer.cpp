@@ -173,6 +173,7 @@ void MapViewer::activate() {
     recorder_ = std::make_unique<TextureUseRecorder>(*device);
     renderer_ = recorder_.get();
     overlay_.create(kFrameW, kFrameH, PixelFormat::RGBA32);
+    overlayTop_ = overlayBottom_ = 0;
     load(index_);
 }
 
@@ -1917,7 +1918,15 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
         fpsStart_ = nowMs;
         frames_ = 0;
     }
-    std::fill(overlay_.pixels.begin(), overlay_.pixels.end(), 0);
+    // Only the rows drawn last frame are cleared: the box at the top, the
+    // play lines at the bottom (clearing all 2.7 MB a frame cost a tenth).
+    const size_t rowBytes = size_t(kFrameW) * 4;
+    const size_t top = std::min(size_t(std::clamp(overlayTop_, 0, kFrameH)) * rowBytes, overlay_.pixels.size());
+    const size_t bottom = std::min(size_t(std::clamp(overlayBottom_, 0, kFrameH)) * rowBytes, overlay_.pixels.size());
+    std::fill(overlay_.pixels.begin(), overlay_.pixels.begin() + ptrdiff_t(top), uint8_t(0));
+    std::fill(overlay_.pixels.begin() + ptrdiff_t(bottom), overlay_.pixels.end(), uint8_t(0));
+    overlayTop_ = 0;
+    overlayBottom_ = kFrameH;
     // A cut scene's black bars are the HUD's own (CTV_Hud.RenderLetterBox,
     // with the subtitles drawn over them).
     if (!showInfo_ && error_.empty())
@@ -1958,7 +1967,9 @@ void MapViewer::drawOverlay(uint64_t nowMs) {
     size_t widest = 0;
     for (const std::string& l : lines)
         widest = std::max(widest, font::length(l));
-    const int boxW = std::min(kFrameW, int(widest) * font::kAdvance + 8), boxH = int(lines.size()) * lh + 6;
+    const int boxW = std::min(kFrameW, int(widest) * font::kAdvance + 8),
+              boxH = std::min(kFrameH, int(lines.size()) * lh + 6);
+    overlayTop_ = boxH;
     for (int y = 0; y < boxH; ++y) {
         uint8_t* p = overlay_.row(y);
         for (int x = 0; x < boxW; ++x)
@@ -3185,6 +3196,7 @@ void MapViewer::drawPlayHud() {
     // corners, and its objectives and subtitles are its own.
     const bool gameHud = !play_->level().hud().tiles.empty();
     const int left = gameHud ? std::max(0, (kFrameW - width) / 2) : 0;
+    overlayBottom_ = std::min(overlayBottom_, std::max(0, y - 2));
     for (int yy = y - 2; yy < kFrameH; ++yy) {
         uint8_t* p = overlay_.row(yy);
         for (int x = left; x < std::min(kFrameW, left + width); ++x)
@@ -3205,6 +3217,7 @@ void MapViewer::drawPlayHud() {
             list = list.substr(0, columns - 3) + "...";
         above -= font::kLineHeight + 2;
         const int w = std::min(kFrameW, int(font::length(list)) * font::kAdvance + 8);
+        overlayBottom_ = std::min(overlayBottom_, std::max(0, above - 1));
         for (int yy = above - 1; yy < above + font::kLineHeight; ++yy) {
             uint8_t* p = overlay_.row(yy);
             for (int x = 0; x < w; ++x)
@@ -3236,6 +3249,8 @@ void MapViewer::drawSubtitles(int bottom) {
         }
     }
     int y = bottom - int(rows.size()) * font::kLineHeight;
+    if (!rows.empty())
+        overlayBottom_ = std::min(overlayBottom_, std::max(0, y - 1));
     for (const std::string& row : rows) {
         const int width = int(font::length(row.c_str())) * font::kAdvance + 8;
         const int x = std::max(0, (kFrameW - width) / 2);

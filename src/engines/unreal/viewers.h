@@ -644,6 +644,9 @@ private:
     std::vector<std::pair<gfx::TextureId, std::unique_ptr<AnimatedTexture>>> animatedTextures_;
     std::vector<float> animatedSince_; // each one's time since it was last ticked
     std::unique_ptr<TextureUseRecorder> recorder_; // renderer_ while shown: what's drawn
+    // The overlay's rows drawn last frame, cleared before the next: [0,
+    // top) and [bottom, the frame's height).
+    int overlayTop_ = 0, overlayBottom_ = 0; // the first frame clears it all
 
     // Fly camera, in the renderer's world: Unreal's axes with Y negated
     // (so right-handed), Z up; yaw 0 looks along +X.
