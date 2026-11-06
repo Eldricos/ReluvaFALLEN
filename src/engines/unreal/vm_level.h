@@ -494,6 +494,15 @@ public:
     VmObject* resumeSavedGame(const std::string& playerName, std::string& error);
     std::set<int>& keysDown() { return keysDown_; }
     std::string& travel() { return travel_; }
+    // Travelling with the player's things (vm_travel.cpp): ClientTravel's
+    // bItems; the player's pawn and inventory written out as the engine's
+    // travel text; and the text this level was entered with, put back on
+    // the player at login. The Fallen's engine carries the player's
+    // GamePlayedTime over any travel too (below 0: none to carry).
+    bool& travelItems() { return travelItems_; }
+    std::string exportTravel();
+    std::string& incomingTravel() { return incomingTravel_; }
+    float& carriedPlayedTime() { return carriedPlayedTime_; }
     bool& quitAsked() { return quitAsked_; }
     // Skipping a cut scene (FastForward): the level run at speed until the
     // game turns it off, when the letterbox goes.
@@ -1001,6 +1010,14 @@ private:
     float time_ = 0;
     std::set<int> keysDown_;
     std::string travel_;
+    bool travelItems_ = false;
+    std::string incomingTravel_;
+    float carriedPlayedTime_ = -1;
+    std::string travelText(const VmProperty& p, const Value& v);
+    bool travelValue(const VmProperty& p, const std::string& text, Value& v,
+                     const std::map<std::string, VmObject*>& byName);
+    std::vector<VmObject*> acceptTravel(const std::string& text);
+    bool outOfWorld(VmObject* actor, int physics);
     bool quitAsked_ = false;
     bool fastForward_ = false;
     std::filesystem::path saveFolder_;

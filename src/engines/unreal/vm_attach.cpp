@@ -112,7 +112,7 @@ Vec inScriptAxes(const Vec& v) {
 struct ScriptLevel::ActorMesh {
     Mesh mesh;
     std::unique_ptr<LayeredPoser> poser; // built on a skeleton
-    std::map<std::pair<NameId, bool>, std::vector<bool>> parts;
+    std::map<std::pair<std::string, bool>, std::vector<bool>> parts; // by "group|bone" and rest
     // Where the skeleton's axes go in the actor's own space (the mesh's
     // turn: placeMeshVertex of the skeleton's units).
     Axes skeleton{};
@@ -161,18 +161,29 @@ std::vector<LayeredPoser::Layer> ScriptLevel::posedLayers(VmObject* a, ActorMesh
     for (const auto& [group, l] : *ls) {
         if ((l.weight <= 0 && !l.fromSequence) || !l.sequence)
             continue;
-        auto part = m.parts.find({l.bone, l.rest});
-        if (part == m.parts.end())
-            part = m.parts.emplace(std::make_pair(l.bone, l.rest), m.poser->part(vm_.nameText(l.bone), l.rest)).first;
+        // Its group's bones (the mesh's lists), else the bone's and those
+        // under it (or all but those).
+        const std::string groupName = vm_.nameText(group);
+        const std::string boneName = l.bone ? vm_.nameText(l.bone) : std::string();
+        const std::pair<std::string, bool> key{groupName + "|" + boneName, l.rest};
+        auto part = m.parts.find(key);
+        if (part == m.parts.end()) {
+            std::vector<bool> bones = m.poser->groupPart(groupName);
+            if (bones.empty())
+                bones = m.poser->part(boneName, l.rest);
+            part = m.parts.emplace(key, std::move(bones)).first;
+        }
+        const int groupIndex = m.poser->groupIndex(groupName);
+        const int clearBone = boneName.empty() ? -1 : m.poser->boneIndex(boneName);
         if (part->second.empty())
             continue;
         // What it replaced first, held under it.
         if (l.fromSequence) {
             names.push_back(vm_.nameText(l.fromSequence));
-            layers.push_back({names.back(), l.fromFrame, &part->second, l.fromWeight, {}, l.fromLoop});
+            layers.push_back({names.back(), l.fromFrame, &part->second, l.fromWeight, {}, l.fromLoop, groupIndex, -1});
         }
         names.push_back(vm_.nameText(l.sequence));
-        layers.push_back({names.back(), l.frame, &part->second, l.weight, l.clear, l.loop});
+        layers.push_back({names.back(), l.frame, &part->second, l.weight, l.clear, l.loop, groupIndex, clearBone});
     }
     return layers;
 }
@@ -292,9 +303,11 @@ bool pointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttac
     return true;
 }
 
-// The IK's effectors (measureEffectors) keep Reluva's own reading of a
-// hand's point: from the triangle's middle, in the axes of the bone it
-// moves with. How Engine.dll's IK takes its chains' ends isn't read.
+// The IK's effectors for a mesh with no IK chains of its own or its
+// sets' (measureEffectors: Reluva's stand-in): a hand's point from the
+// triangle's middle, in the axes of the bone it moves with. With chains,
+// as Engine.dll does, the point that reaches is the end bone's origin
+// (the chain's effector offset, none on Male's), no attachment point.
 bool ikPointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttachPoint& point, Vec& at, Axes& axes,
                 const std::array<float, 12>* bone = nullptr, const Axes* skeleton = nullptr) {
     if (point.type == 1) {

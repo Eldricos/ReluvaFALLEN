@@ -157,6 +157,11 @@ public:
     // The bones from `bone` down (with `rest`, all the others); empty if
     // there's no bone of that name.
     std::vector<bool> part(std::string_view bone, bool rest) const;
+    // Its animation groups (the engine's: FullBody, LowerTorso,
+    // UpperTorso), by name (-1 if none such), and a group's bones (empty
+    // if there's no such group): the bones whose own lists name it.
+    int groupIndex(std::string_view name) const;
+    std::vector<bool> groupPart(std::string_view name) const;
     // The animation under the layers: its name, and whether it's looping
     // (the engine's sampler then blends its last stretch toward the
     // first key, not the last).
@@ -177,6 +182,11 @@ public:
         // ClearPitch, ClearRoll), taking only the rest of the layer's.
         std::array<bool, 3> clear{};
         bool loop = false; // C3DLoopAnim's (else C3DPlayAnim's, held at its end)
+        // Its animation group's index (groupIndex; -1 none known): of the
+        // layers on a bone, the highest group's wins it, as the engine has
+        // it. And the bone its clear is done on (its InheritBone; -1 none).
+        int group = -1;
+        int clearBone = -1;
     };
     // Where the skeleton's axes go in the actor's space (as the mesh is
     // placed): for the layers' clear, which needs the actor's axes.

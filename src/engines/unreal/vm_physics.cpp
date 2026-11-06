@@ -1136,9 +1136,52 @@ void ScriptLevel::physics(VmObject* a, float dt) {
             *t = Value::floatValue(t->asFloat() - dt);
 }
 
+// Out of the world (its Region's zone 0), as the engine's physics checks
+// before moving: a pawn walking, or anything falling, is told
+// FellOutOfWorld (its scripts destroy it; a pawn's die, 'Fell'); a pawn
+// flying or Newtonian that collides with the world is gone ("flew out of
+// the world") but a player's, which only doesn't move; any other actor
+// Newtonian that collides with the world is gone, a projectile gone
+// whatever. Each logged as the engine does (falling: an inventory item,
+// decoration or pawn). True if it didn't move.
+bool ScriptLevel::outOfWorld(VmObject* a, int physics) {
+    constexpr int kPhysNewtonian = 17;
+    if (!hasModel_ || (physics != kPhysWalking && physics != kPhysFalling && physics != kPhysFlying &&
+                       physics != kPhysProjectile && physics != kPhysNewtonian))
+        return false;
+    const Value* region = prop(a, "Region");
+    if (!region || region->fields.size() < 3 || region->fields[2].asInt() != 0)
+        return false;
+    const bool pawn = vm_.isA(a, "Pawn");
+    auto log = [&](const char* what) {
+        if (vm_.logger)
+            vm_.logger(vm_.objectName(a) + what);
+    };
+    if (physics == kPhysWalking || physics == kPhysFalling) {
+        if (physics == kPhysWalking && !pawn)
+            return false;
+        if (pawn || vm_.isA(a, "Inventory") || vm_.isA(a, "Decoration"))
+            log(" fell out of the world!");
+        vm_.callEvent(a, "FellOutOfWorld");
+        return true;
+    }
+    if (physics == kPhysProjectile) {
+        destroy(a);
+        return true;
+    }
+    if ((physics == kPhysFlying && !pawn) || !pb(a, "bCollideWorld"))
+        return false;
+    log(" flew out of the world!");
+    if (!pawn || !pb(a, "bIsPlayer"))
+        destroy(a);
+    return true;
+}
+
 void ScriptLevel::move(VmObject* a, int physics, float dt) {
     Value* physicsValue = prop(a, "Physics");
     if (physics == kPhysNone)
+        return;
+    if (outOfWorld(a, physics))
         return;
     if (physics == kPhysMovingBrush) {
         moveBrush(a, dt);

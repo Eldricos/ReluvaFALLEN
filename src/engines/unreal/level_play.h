@@ -166,6 +166,7 @@ public:
             float frame = 0, weight = 0;
             std::array<bool, 3> clear{}; // its first bone keeps the actor's own yaw, pitch, roll
             bool loop = false;
+            std::string group; // its animation group's name (FullBody, LowerTorso, UpperTorso)
         };
         std::vector<Layer> layers;
         // Its face's channels away from the neutral face (C3DSetSkinAnim:

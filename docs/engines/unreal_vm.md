@@ -317,7 +317,32 @@ as `ULevel::SpawnPlayActor` does:
    (`UMenu.DS9_Console`).
 4. `Possess`; `bAdmin` (playing alone); `TravelPreAccept`; the game
    type's `AcceptInventory`; `TravelPostAccept`; the game type's
-   `PostLogin`. Travelling inventory isn't done (a level starts afresh).
+   `PostLogin`. With what travelled in (below) put back after the
+   player's `TravelPreAccept`: each of those told `TravelPreAccept`,
+   last first; then `AcceptInventory`; each `TravelPostAccept`, last
+   first; the player's own; `PostLogin`.
+
+**Travelling with the player's things** (`vm_travel.cpp`, as Engine.dll's
+travel and `SpawnPlayActor`). `ClientTravel(URL, Type, bItems)` with
+`bItems` writes the player's pawn and each actor along its `Inventory`
+chain that has `bTravel` as text, a block each (`Class=PLYR.DS9_Kira
+Name=DS9_Kira0`, then `{`, a `Property=value` line for each `travel`
+property that differs from its class's default, `}`; an actor reference
+as the actor's name). On `?RESTART` what the level was entered with goes
+again; otherwise nothing. On arrival the pawn's block goes onto the pawn
+logged in, whatever class it was, and each other block's class is
+spawned where the pawn is, owned by it; their properties put back by
+name, an actor reference to the travelled actor that had that name.
+The scripts rebuild the inventory (`Inventory.TravelPreAccept`:
+`GiveTo`). The engine also carries the player's `GamePlayedTime` over
+any travel. In The Fallen only `CTVE_EndLevel` with `bLinksLevelParts`
+travels with items (it sets `bPreserveInventory`, a travel property,
+and the weapon slot to take out again); `EquipInventory` then keeps
+them, else gives the start's. Tried on M04_KiraL1 travelling to itself
+with items and `bPreserveInventory`: the phaser rifle (`AmmoType` its
+travelled ammo), the tricorder's 5 charges, the flashlight selected all
+arrive, and 2 takes the rifle out. `ue-play`'s `travel <url> items`
+does such a travel.
 
 On M01_KiraL1A this plays the opening as the scripts have it: Kira's
 `InitPlayerStart` gives her the start's weapons and items, spawns her
@@ -542,10 +567,23 @@ hit, or with no acceleration; a pawn going (toward its `Destination`;
 a CTVE pawn, its acceleration) into it more head on than `MinHitWall`
 (walking, both flattened, the event given the flat normal), else its
 `MoveTimer` ends (`bFromWall`) if it has no `HitWall` of its own. A
-smooth move's second wall is told as it is. Not done: the engine's
-"fell out of the world" (an AI pawn walking or falling in zone 0 is
-told `FellOutOfWorld`; fliers destroyed), until zone 0 is checked to mean
-the same here.
+smooth move's second wall is told as it is.
+
+**Out of the world** (zone 0: the BSP's last node's zone for the side
+the point is on, as `UModel::PointRegion` has it), checked before each
+move as Engine.dll's physics does: a pawn walking, or anything falling,
+is told `FellOutOfWorld` (an actor's script destroys it, a pawn's dies,
+`'Fell'`); a pawn flying or Newtonian that collides with the world is
+destroyed ("flew out of the world"), a player's only doesn't move; any
+other Newtonian actor colliding with the world is destroyed, and a
+projectile whatever. Over all 74 maps' first 20 seconds it happens once:
+M07_WorfL1's player is a pawn saved in the map (`DS9_WorfBeaten0`, which
+`GameInfo.Login` reuses, as it does any player pawn with no player) at
+(928, 531, 1059), behind a wall, inside solid: walking there, Worf dies
+at once. Before, he stood stuck in the wall. Nothing in Engine.dll
+moves, hides or removes such a pawn, and the level's start
+(`DS9_PlayerStart0`, at (1, 571, 1046)) isn't used for one reused, so
+what the original does there is open.
 
 **Finding a ledge or a ladder**, as Engine.dll does. Each search turns
 the player to face into the wall before asking its scripts'
@@ -1759,23 +1797,35 @@ natives:
 - **Cut scenes:** the animators' upper or lower body.
 
 `vm_anim.cpp` keeps each actor's layers, one per group.
+- **The groups are the mesh's** (Engine.dll's): each bone lists the
+  animation groups it's in (the first array of its record), the mesh
+  names them (`FullBody` 0, `LowerTorso` 1, `UpperTorso` 2). On Male,
+  the pelvis and legs are in LowerTorso, the spine and up in
+  UpperTorso, every bone in FullBody. A layer poses its group's bones;
+  of the layers on a bone, the highest group's wins it outright (the
+  actor's own animation, FullBody, under them all). A mesh with no
+  group list keeps Reluva's earlier reading (the InheritBone and those
+  under it; a group named lower, the rest).
 - **Starting:** `C3DPlayAnim(Group, Sequence, Boned, Rate, TweenTime,
-  InheritBone, ...)` and `C3DLoopAnim` play the sequence on the bone
-  named and those under it. A group named lower (`LowerTorso`) is the
-  rest of the skeleton. It fades in over the tween (0.2 s when left
-  out), its weight rising from 0 to 1, its time held at the start
-  until it's in. The rate is a plain multiplier of the sequence's own
-  speed.
+  InheritBone, ...)` and `C3DLoopAnim` play the sequence on the group's
+  bones. The InheritBone and its clears are set only when a bone is
+  given; else they stay as they were. It fades in over the tween (0.2 s
+  when left out), its weight rising from 0 to 1, its time held at the
+  start until it's in. The rate is a plain multiplier of the
+  sequence's own speed.
 - **Holding a pose:** `C3DTweenAnim` fades to the first frame.
 - **Replacing one:** a layer started on a group whose layer shows holds
   the old one where it was, under the new one, until the new one has
   faded in (a combo's right punch into the left).
 - **Keeping the actor's turn:** `ClearYaw`, `ClearPitch` and `ClearRoll`
-  keep the part's first bone turned as it is under the layer about the
-  actor's up, side and forward axes (the layer's turn less its twist
-  about each); the bones below take the layer as it is. `CTV_Human`'s
-  melee sets all three except when swimming, so a punch while running
-  keeps the spine turned with the run and the arm punches.
+  act on the layer's InheritBone alone, as Engine.dll does: its turn
+  from its bind pose in the skeleton's space, split into a turn about
+  one of the skeleton's axes (Y yaw, X pitch, Z roll) and the rest. One
+  cleared: that turn taken off; two: only the third axis's kept; all
+  three: the bone as in its bind pose (where it is kept). Blended in by
+  the layer's weight as it fades. The bones below take the layer as it
+  is. `CTV_Human`'s melee sets all three except when swimming.
+  (`C3DRemoveRotation` is another thing: Euler angles.)
 - **Speed:** `C3DLoopAnim`'s `MinRate` is ignored, as the engine does.
 - **Ticking:** a layer moves on at its rate and calls the sequence's
   notifications. One played once sends `C3DAnimEnd(Group)` at its end
@@ -2030,11 +2080,11 @@ last until the scripts' next tick replaces them:
     `LeftFoot`/`RightFoot` do the same for the feet. Each bends the end
     bone's two parents: upper arm, forearm, hand (`Bip01_R_Hand`), or
     thigh, calf, foot.
-  - **What reaches.** For a hand it's the mesh's attachment point of the
-    same name: the player's `RightHand` goes onto the gun's `RightHand`,
-    turned to its axes, as `C3DAttach` would put them. For a foot it's
-    the bone itself, in the scripts' axes, since the scripts work the
-    targets out from `C3DGetJointWorldPos` (`CalcFootZ`).
+  - **What reaches.** With the skeleton's own chains (Male's: every
+    character the scripts set IK on), the end bone's origin: the
+    chain's effector offset, none on Male's, as Engine.dll has it. A
+    skeleton with none keeps Reluva's stand-in: for a hand the mesh's
+    attachment point of the same name, for a foot the bone itself.
   - **The solve.** The upper bone turns so the elbow or knee is where the
     two bones' lengths put it on the way to the target, bending in the
     plane it bends in now. The middle bone points at the target. When
@@ -2065,10 +2115,18 @@ facing where she faces, both hands on its grips, its muzzle 27 units
 ahead of the right hand's.
 
 Not done:
-- The meanings above are Reluva's readings of how the scripts use the
-  natives: the order of a bone's axes, the axes `C3DApplyRotation` turns
-  about, the actor's axes for `C3DApplyWorldRotation`, and what reaches
-  in an IK chain.
+- (Checked against Engine.dll, November 2026: a bone's place's axes
+  (`C3DGetJointWorldPos`: the actor's X is the bone's −Z, Y its −X, Z
+  its +Y, through a fixed swap), `C3DApplyRotation` turning about the
+  bone's own X (pitch), Y (yaw) and Z (roll) before its local place,
+  and `C3DApplyWorldRotation` turning the bone within the skeleton by
+  the rotator carried through that swap, the actor's own turn left out
+  (Reluva takes the swap from the mesh's placement, the same for The
+  Fallen's meshes): all as Reluva has them.)
+- **Not as the engine:** a layer fading in or out crossfades by its
+  weight from what's under it (the replaced layer held there); the
+  engine blends each bone from the pose shown at the fade's start. The
+  same at the ends, not always midway.
 - **The IK, as Engine.dll's** (`C3DApplyIK` and its solver, read November
   2026):
   - **The chains are data.** Shared.u's `Male` keeps eight (the player

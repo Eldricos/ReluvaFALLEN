@@ -2579,9 +2579,27 @@ Error MapViewer::saveGame(const std::string& name) {
     return play_->level().saveGame(name);
 }
 
-void MapViewer::travel(const std::string& url) {
-    // "?RESTART": the map again, from where it began.
+void MapViewer::travel(const std::string& url, bool items) {
     const std::string lower = fs::toLower(url);
+    if (items && play_)
+        play_->level().travelItems() = true;
+    // What goes with the player, as the engine has it: its played time
+    // always; on "?RESTART" what it came into this level with, else with
+    // ClientTravel's bItems its pawn and inventory (the travel text), else
+    // nothing. (A saved game loaded has its own.)
+    pendingTravel_.clear();
+    pendingPlayedTime_ = -1;
+    if (play_ && lower.find("?load=") == std::string::npos) {
+        ScriptLevel& level = play_->level();
+        if (VmObject* p = play_->player())
+            if (const Value* t = p->find(play_->vm(), "GamePlayedTime"))
+                pendingPlayedTime_ = t->asFloat();
+        if (lower.find("?restart") != std::string::npos)
+            pendingTravel_ = level.incomingTravel();
+        else if (level.travelItems())
+            pendingTravel_ = level.exportTravel();
+    }
+    // "?RESTART": the map again, from where it began.
     if (lower.rfind("?restart", 0) == 0) {
         const std::string portal = portal_;
         startPlay(portal);
@@ -2640,6 +2658,8 @@ void MapViewer::startPlay(const std::string& portal, const std::filesystem::path
     if (!pkg || !error_.empty())
         return;
     auto play = std::make_unique<LevelPlay>(ctx_.packages, *pkg);
+    play->level().incomingTravel() = std::exchange(pendingTravel_, std::string());
+    play->level().carriedPlayedTime() = std::exchange(pendingPlayedTime_, -1.0f);
     if (Error err = play->start(portal, saved, ctx_.saveFolder)) {
         playError_ = err.message;
         return;
@@ -3252,11 +3272,19 @@ bool MapViewer::drawLayered(VmObject* actor, const LevelPlay::Look& look, int at
         return false;
     std::vector<LayeredPoser::Layer> layers;
     for (const LevelPlay::Look::Layer& l : look.layers) {
-        auto part = p.parts.find({l.bone, l.rest});
-        if (part == p.parts.end())
-            part = p.parts.emplace(std::make_pair(l.bone, l.rest), p.poser->part(l.bone, l.rest)).first;
+        // Its group's bones (the mesh's lists), else the bone's and those
+        // under it (or all but those).
+        const std::pair<std::string, bool> key{l.group + "|" + l.bone, l.rest};
+        auto part = p.parts.find(key);
+        if (part == p.parts.end()) {
+            std::vector<bool> bones = p.poser->groupPart(l.group);
+            if (bones.empty())
+                bones = p.poser->part(l.bone, l.rest);
+            part = p.parts.emplace(key, std::move(bones)).first;
+        }
         if (!part->second.empty())
-            layers.push_back({l.anim, l.frame, &part->second, l.weight, l.clear, l.loop});
+            layers.push_back({l.anim, l.frame, &part->second, l.weight, l.clear, l.loop, p.poser->groupIndex(l.group),
+                              l.bone.empty() ? -1 : p.poser->boneIndex(l.bone)});
     }
     std::vector<LayeredPoser::Face> faces;
     if (p.poser->hasFace())

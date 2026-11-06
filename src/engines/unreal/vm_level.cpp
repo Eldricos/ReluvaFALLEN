@@ -363,16 +363,30 @@ VmObject* ScriptLevel::login(const std::string& playerClass, const std::string& 
         return nullptr;
     }
     // Then as SpawnPlayActor goes on: the viewport (Possess), an
-    // administrator (playing alone), TravelPreAccept, the game's
-    // AcceptInventory, TravelPostAccept, PostLogin.
+    // administrator (playing alone), TravelPreAccept; what travelled with
+    // the player put back (its own properties, its things spawned), each
+    // of those told TravelPreAccept, last first (their GiveTo rebuilds
+    // the inventory in its old order); the game's AcceptInventory; each
+    // TravelPostAccept, last first; the player's TravelPostAccept;
+    // PostLogin.
     attachViewport();
     vm_.callEvent(player_, "Possess");
     if (Value* v = prop(player_, "bAdmin"))
         *v = Value::boolValue(true);
     vm_.callEvent(player_, "TravelPreAccept");
+    const std::vector<VmObject*> travelled = acceptTravel(incomingTravel_);
+    for (auto it = travelled.rbegin(); it != travelled.rend(); ++it)
+        if (!(*it)->deleted)
+            vm_.callEvent(*it, "TravelPreAccept");
     vm_.callEvent(game_, "AcceptInventory", {Value::objectValue(player_)});
+    for (auto it = travelled.rbegin(); it != travelled.rend(); ++it)
+        if (!(*it)->deleted)
+            vm_.callEvent(*it, "TravelPostAccept");
     vm_.callEvent(player_, "TravelPostAccept");
     vm_.callEvent(game_, "PostLogin", {Value::objectValue(player_)});
+    if (carriedPlayedTime_ >= 0)
+        if (Value* v = prop(player_, "GamePlayedTime"))
+            *v = Value::floatValue(carriedPlayedTime_);
     return player_;
 }
 

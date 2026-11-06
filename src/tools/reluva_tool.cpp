@@ -4829,7 +4829,7 @@ private:
 int cmdUePlay(int argc, char** argv) {
     if (argc < 4) {
         std::fprintf(stderr, "usage: reluva-tool ue-play <game folder> <map> [play | wait <s> | hold <key> <s> | "
-                             "teleport <actor> <dx> <dy> <dz> <yaw> | camera <x> <y> <z> <yaw> <pitch> | places <class> | where | view | lines | actor <name> | prop <actor> <property> | call <actor> <function> | console <command> | down <key> | up <key> | press <key> | travel <url> | saves <dir> | watch <actor> | "
+                             "teleport <actor> <dx> <dy> <dz> <yaw> | camera <x> <y> <z> <yaw> <pitch> | places <class> | where | view | lines | actor <name> | prop <actor> <property> | call <actor> <function> | console <command> | down <key> | up <key> | press <key> | travel <url> [items] | saves <dir> | watch <actor> | "
                              "drag <dx> <dy> | click <x> <y> | shot <file.ppm>]...\n");
         return 2;
     }
@@ -4940,7 +4940,12 @@ int cmdUePlay(int argc, char** argv) {
         } else if (step == "saves" && i + 1 < argc) {
             ctx.saveFolder = argv[++i];
         } else if (step == "travel" && i + 1 < argc) {
-            page.travel(argv[++i]);
+            const std::string url = argv[++i];
+            // "items" after it: with the player's things (bItems).
+            const bool items = i + 1 < argc && std::strcmp(argv[i + 1], "items") == 0;
+            if (items)
+                ++i;
+            page.travel(url, items);
             std::printf("travel: %s\n", page.playing() ? "playing" : "didn't start");
             frame();
         } else if (step == "watch" && i + 1 < argc) {

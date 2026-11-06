@@ -350,7 +350,8 @@ public:
     Error saveGame(const std::string& name);
     // The game's ClientTravel ("CM01a_SW/CM01_A_Sisko01?options"): that
     // map loaded and played from the start the portal tags.
-    void travel(const std::string& url);
+    // `items`: as ClientTravel's bItems (else as the level last asked).
+    void travel(const std::string& url, bool items = false);
     // Playing with the game's own view, Escape is the game's (its menu).
     bool ownsKey(uint32_t k) const override { return play_ && !freeCam_ && k == key::Escape; }
     // Playing: the camera let loose, in front of the live actor of that
@@ -495,6 +496,9 @@ private:
     uint64_t zonesSeen_ = ~uint64_t(0);
     bool zoneCulling_ = true;
     void seeZonesFrom(const gfx::Vec3& eye, const gfx::Mat4& viewProj, bool mainView);
+    // What goes with the player into the next level started (travel).
+    std::string pendingTravel_;
+    float pendingPlayedTime_ = -1;
     static float tweenProgress(const LevelPlay::Look& look, const MeshAnimSeq& anim);
     // Actors drawn as meshes, each mesh uploaded once.
     struct MeshDraw {

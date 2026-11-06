@@ -207,8 +207,10 @@ void registerConsoleNatives(Vm& vm) {
     // ClientTravel(string URL, ETravelType TravelType, bool bItems): to
     // another map, which the page running the level loads in its place.
     reg("PlayerPawn.ClientTravel", [](NativeCall& c) {
-        if (c.vm.level)
+        if (c.vm.level) {
             c.vm.level->travel() = c.s(0);
+            c.vm.level->travelItems() = c.b(2);
+        }
     });
 }
 

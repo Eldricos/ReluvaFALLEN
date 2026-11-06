@@ -347,6 +347,7 @@ struct BoneRecord {
         bool staticPositions = false, staticRotations = false;
     };
     std::vector<Clip> clipList; // when they read
+    std::vector<int> groups;    // the animation groups (body parts) it's in, by index
     size_t start = 0;   // where its record starts (its name)
     size_t end = 0;     // past its own fields (before its children); 0: its clips didn't read
     // Its joint limits for the IK, in radians, from its bind pose: about
@@ -416,6 +417,9 @@ struct BoneReader {
         size_t p = at + 2 + b.name.size();
         if (!header(p, n, flags) || flags != 8 || n > 64)
             return false;
+        b.groups.clear();
+        for (uint32_t g = 0; g < n; ++g)
+            b.groups.push_back(int(u32(p + 12 + 4 * size_t(g))));
         p += 12 + 4 * size_t(n);
         // Keyframed meshes' bones (ARD_AmmoCrate's) keep weights and
         // indices but no positions, which their packed frames have: such a
@@ -1772,6 +1776,9 @@ struct LayeredPoser::Impl {
     size_t base = 0, from = 0;
     std::vector<BoneRecord> bones;
     std::vector<IkChain> chains; // its own, else its shared sets' (Male's)
+    // Its animation groups' names (FullBody, LowerTorso, UpperTorso), in
+    // order: the bones' group lists index them.
+    std::vector<std::string> groupNames;
     const IkChain* chain(const std::string& name) const {
         for (const IkChain& c : chains)
             if (fs::toLower(c.name) == fs::toLower(name))
@@ -1806,7 +1813,9 @@ struct LayeredPoser::Impl {
     std::vector<std::vector<std::pair<uint32_t, float>>> vertexBones;
     // The actor's forward, side and up axes in the skeleton's space.
     std::array<Vec3f, 3> actorAxes{Vec3f{1, 0, 0}, Vec3f{0, 1, 0}, Vec3f{0, 0, 1}};
-    Mat43 cleared(const Mat43& under, const Mat43& over, const Mat43& parentWorld, std::array<bool, 3> clear) const;
+    Mat43 cleared(const Mat43& over, const Mat43& parentWorld, const Mat43& bindWorld, std::array<bool, 3> clear,
+                  float weight) const;
+    mutable std::vector<Mat43> bindWorlds; // each bone's place in the skeleton in its bind pose, once asked for
 
     BoneReader reader() const { return BoneReader{data, base, from, base + data.size()}; }
     bool locals(Anim base, float fraction, const std::vector<Layer>& layers,
@@ -1890,6 +1899,42 @@ struct LayeredPoser::Impl {
 LayeredPoser::LayeredPoser() = default;
 LayeredPoser::~LayeredPoser() = default;
 
+// The animation groups' names in a skeleton's block: (g, g, 10) and g
+// names (u16 length, text), just before the two empty (0, 0, 10) arrays
+// the attachment points follow. Empty if not found.
+std::vector<std::string> findGroupNames(const std::vector<uint8_t>& data) {
+        static const uint8_t anchor[24] = {0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0};
+        const std::vector<uint8_t>& d = data;
+        size_t at = std::string::npos;
+        for (size_t i = 0; i + sizeof anchor <= d.size(); ++i)
+            if (std::memcmp(d.data() + i, anchor, sizeof anchor) == 0)
+                at = i;
+        auto u32 = [&](size_t q) {
+            uint32_t v;
+            std::memcpy(&v, d.data() + q, 4);
+            return v;
+        };
+        for (size_t back = 14; at != std::string::npos && back < 512 && back <= at; ++back) {
+            const size_t s0 = at - back;
+            const uint32_t g = u32(s0);
+            if (g == 0 || g > 16 || u32(s0 + 4) != g || u32(s0 + 8) != 10)
+                continue;
+            std::vector<std::string> names;
+            size_t q = s0 + 12;
+            for (uint32_t k = 0; k < g && q + 2 <= at; ++k) {
+                const size_t len = size_t(d[q]) | size_t(d[q + 1]) << 8;
+                if (q + 2 + len > at)
+                    break;
+                names.emplace_back(reinterpret_cast<const char*>(d.data() + q + 2), len);
+                q += 2 + len;
+            }
+            if (names.size() == g && q == at) {
+                return names;
+            }
+        }
+        return {};
+}
+
 std::unique_ptr<LayeredPoser> LayeredPoser::open(const Package& package, int index, const std::vector<AnimationSet>& sets) {
     auto impl = std::make_unique<Impl>();
     if (readMesh(package, index, impl->mesh) || impl->mesh.bones == 0)
@@ -1902,6 +1947,7 @@ std::unique_ptr<LayeredPoser> LayeredPoser::open(const Package& package, int ind
     impl->sets = &sets;
     const BoneReader r = impl->reader();
     impl->chains = findIkChains(r, impl->bones);
+    impl->groupNames = findGroupNames(impl->data);
     for (size_t k = 0; impl->chains.empty() && k < sets.size(); ++k)
         if (sets[k].impl && !sets[k].impl->chains.empty())
             impl->chains = sets[k].impl->chains;
@@ -2039,6 +2085,8 @@ bool LayeredPoser::Impl::locals(Anim baseAnim, float fraction, const std::vector
         for (bool c : l.clear)
             key.push_back(c ? '1' : '0');
         key.push_back(l.loop ? 'L' : 'H');
+        bytes(&l.group, sizeof l.group);
+        bytes(&l.clearBone, sizeof l.clearBone);
     }
     key.push_back(adjust ? 'A' : '-');
     if (adjust) {
@@ -2141,20 +2189,39 @@ bool LayeredPoser::Impl::localsUncached(Anim baseAnim, float fraction, const std
             adjusted(base, onBase);
     }
     out.resize(bones.size());
+    // The layers by their groups, lowest first: of those on a bone, the
+    // highest group's wins it (one fading in over what was there).
+    std::vector<size_t> order(layers.size());
+    for (size_t l = 0; l < order.size(); ++l)
+        order[l] = l;
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        const int ga = layers[a].group < 0 ? 1 << 20 : layers[a].group;
+        const int gb = layers[b].group < 0 ? 1 << 20 : layers[b].group;
+        return ga < gb;
+    });
+    if (bindWorlds.size() != bones.size()) {
+        std::vector<Mat43> bind(bones.size());
+        for (size_t k = 0; k < bones.size(); ++k)
+            bind[k] = bones[k].placement;
+        bindWorlds = worlds(bind);
+    }
     for (size_t i = 0; i < bones.size(); ++i) {
         Mat43 placed = base[i];
-        for (size_t l = 0; l < layers.size(); ++l) {
+        for (const size_t l : order) {
             const Layer& layer = layers[l];
             if (!layer.part || i >= layer.part->size() || !(*layer.part)[i] || layer.weight <= 0)
                 continue;
             Mat43 theirs = local(over[l], i);
-            // The part's first bone, keeping some of its turn.
-            const bool first = bones[i].parent < 0 || !(*layer.part)[size_t(bones[i].parent)];
-            if (first && (layer.clear[0] || layer.clear[1] || layer.clear[2])) {
+            // Its clear, on its InheritBone (else, with none named, on the
+            // part's first bone).
+            const bool target = layer.clearBone >= 0
+                                    ? size_t(layer.clearBone) == i
+                                    : bones[i].parent < 0 || !(*layer.part)[size_t(bones[i].parent)];
+            if (target && (layer.clear[0] || layer.clear[1] || layer.clear[2])) {
                 Mat43 parentWorld{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
                 for (int p = bones[i].parent; p >= 0; p = bones[size_t(p)].parent)
                     parentWorld = then(parentWorld, out[size_t(p)]);
-                theirs = cleared(placed, theirs, parentWorld, layer.clear);
+                theirs = cleared(theirs, parentWorld, bindWorlds[i], layer.clear, layer.weight);
             }
             const float w = std::min(1.0f, layer.weight);
             for (size_t k = 0; k < placed.size(); ++k)
@@ -2167,14 +2234,21 @@ bool LayeredPoser::Impl::localsUncached(Anim baseAnim, float fraction, const std
     return true;
 }
 
-// A layer's first bone (`over`, in its parent) turned as it is under it
-// (`under`) about the actor's axes the layer clears, and by the rest of
-// the layer's turn: the turn from one to the other, in the skeleton's
-// space, less its twist about each of those axes.
-Mat43 LayeredPoser::Impl::cleared(const Mat43& under, const Mat43& over, const Mat43& parentWorld,
-                                  std::array<bool, 3> clear) const {
-    const Mat43 wu = then(under, parentWorld), wo = then(over, parentWorld);
-    Mat43 rel = then(inverseOf(wu), wo);
+// The clear on a layer's InheritBone, as the engine does it: the bone's
+// turn from its bind pose, in the skeleton's space (its place in the
+// skeleton less its bind place's, no move), split into a turn about one
+// of the skeleton's axes (Y yaw, the actor's up; X pitch; Z roll) and the
+// rest. One axis cleared: the turn about it taken off; two: only the turn
+// about the third kept; all three: none, the bone as in its bind pose.
+// Where it is stays; and the result is blended in by the layer's weight.
+Mat43 LayeredPoser::Impl::cleared(const Mat43& over, const Mat43& parentWorld, const Mat43& bindWorld,
+                                  std::array<bool, 3> clear, float weight) const {
+    const Mat43 wo = then(over, parentWorld);
+    Mat43 bind = bindWorld;
+    bind[9] = bind[10] = bind[11] = 0;
+    Mat43 now = wo;
+    now[9] = now[10] = now[11] = 0;
+    Mat43 rel = then(inverseOf(bind), now);
     // The quaternion whose rotation() this is.
     const float tr = rel[0] + rel[4] + rel[8];
     std::array<float, 4> q{};
@@ -2191,31 +2265,45 @@ Mat43 LayeredPoser::Impl::cleared(const Mat43& under, const Mat43& over, const M
         const float r = std::sqrt(1 + rel[8] - rel[0] - rel[4]) * 2;
         q = {(rel[2] + rel[6]) / r, (rel[5] + rel[7]) / r, r / 4, (rel[3] - rel[1]) / r};
     }
-    // Yaw about up, pitch about the side, roll about forward.
-    const std::array<size_t, 3> axisOf{2, 1, 0};
-    for (size_t k = 0; k < 3; ++k) {
-        if (!clear[k])
-            continue;
-        const Vec3f a = vunit(actorAxes[axisOf[k]]);
-        // Its twist about `a`, taken off: q times the twist's conjugate.
-        const float along = q[0] * a[0] + q[1] * a[1] + q[2] * a[2];
-        std::array<float, 4> t{a[0] * along, a[1] * along, a[2] * along, q[3]};
-        const float n = std::sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2] + t[3] * t[3]);
+    // Yaw, pitch, roll: about the skeleton's Y, X, Z.
+    const std::array<int, 3> axisOf{1, 0, 2};
+    auto twist = [&](int axis) { // its turn about that axis alone
+        std::array<float, 4> t{0, 0, 0, q[3]};
+        t[size_t(axis)] = q[size_t(axis)];
+        const float n = std::sqrt(t[size_t(axis)] * t[size_t(axis)] + t[3] * t[3]);
         if (n < 1e-6f)
-            continue;
+            return std::array<float, 4>{0, 0, 0, 1};
         for (float& c : t)
             c /= n;
-        const std::array<float, 4> tc{-t[0], -t[1], -t[2], t[3]};
-        q = {q[3] * tc[0] + q[0] * tc[3] + q[1] * tc[2] - q[2] * tc[1],
-             q[3] * tc[1] - q[0] * tc[2] + q[1] * tc[3] + q[2] * tc[0],
-             q[3] * tc[2] + q[0] * tc[1] - q[1] * tc[0] + q[2] * tc[3],
-             q[3] * tc[3] - q[0] * tc[0] - q[1] * tc[1] - q[2] * tc[2]};
+        return t;
+    };
+    const int count = int(clear[0]) + int(clear[1]) + int(clear[2]);
+    if (count == 3) {
+        q = {0, 0, 0, 1};
+    } else if (count == 2) {
+        for (size_t k = 0; k < 3; ++k)
+            if (!clear[k])
+                q = twist(axisOf[k]);
+    } else if (count == 1) {
+        for (size_t k = 0; k < 3; ++k)
+            if (clear[k]) {
+                const std::array<float, 4> t = twist(axisOf[k]);
+                const std::array<float, 4> tc{-t[0], -t[1], -t[2], t[3]};
+                q = {q[3] * tc[0] + q[0] * tc[3] + q[1] * tc[2] - q[2] * tc[1],
+                     q[3] * tc[1] - q[0] * tc[2] + q[1] * tc[3] + q[2] * tc[0],
+                     q[3] * tc[2] + q[0] * tc[1] - q[1] * tc[0] + q[2] * tc[3],
+                     q[3] * tc[3] - q[0] * tc[0] - q[1] * tc[1] - q[2] * tc[2]};
+            }
     }
-    rel = rotation(q);
-    Mat43 w = then(wu, rel);
+    Mat43 w = then(bind, rotation(q));
     for (size_t c = 0; c < 3; ++c)
         w[9 + c] = wo[9 + c];
-    return then(w, inverseOf(parentWorld));
+    const Mat43 local = then(w, inverseOf(parentWorld));
+    Mat43 out = over;
+    const float f = std::clamp(weight, 0.0f, 1.0f);
+    for (size_t k = 0; k < out.size(); ++k)
+        out[k] += (local[k] - out[k]) * f;
+    return out;
 }
 
 void LayeredPoser::setPlacement(const std::array<Vec3f, 3>& skeletonInActor) {
@@ -2831,6 +2919,23 @@ std::vector<std::array<float, 12>> LayeredPoser::bindSkeleton() const {
 }
 
 int LayeredPoser::boneIndex(std::string_view name) const { return impl->indexOf(name); }
+
+int LayeredPoser::groupIndex(std::string_view name) const {
+    for (size_t g = 0; g < impl->groupNames.size(); ++g)
+        if (fs::toLower(impl->groupNames[g]) == fs::toLower(name))
+            return int(g);
+    return -1;
+}
+
+std::vector<bool> LayeredPoser::groupPart(std::string_view name) const {
+    const int g = groupIndex(name);
+    if (g < 0)
+        return {};
+    std::vector<bool> in(impl->bones.size(), false);
+    for (size_t i = 0; i < impl->bones.size(); ++i)
+        in[i] = std::find(impl->bones[i].groups.begin(), impl->bones[i].groups.end(), g) != impl->bones[i].groups.end();
+    return in;
+}
 
 bool LayeredPoser::hasChain(const std::string& name) const { return impl->chain(name) != nullptr; }
 

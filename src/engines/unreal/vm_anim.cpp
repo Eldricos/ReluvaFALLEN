@@ -398,12 +398,19 @@ void ScriptLevel::playLayer(VmObject* a, NameId group, NameId sequence, float ra
     const MeshAnimSeq* s = findAnim(vm_, a, sequence);
     AnimLayer& l = layers_[a][group];
     const float n = s ? float(std::max(1, s->numFrames)) : 1;
+    // Its InheritBone and clears, as the engine keeps them: set only when
+    // a bone is given, else as they were. (The part the layer poses is its
+    // group's bones, from the mesh: the bone is only what its clears turn.)
+    const bool newBone = bone != 0;
     if (loop && s && l.sequence == sequence && l.loop && !l.finished && l.weightRate >= 0) {
         l.rate = rate * s->rate / n; // looping it already: only its speed changes
         l.minRate = std::max(0.0f, minRate) * s->rate / n;
-        l.clear = clear;
+        if (newBone)
+            l.clear = clear;
         return;
     }
+    if (!newBone)
+        bone = l.bone, clear = l.clear;
     // Replacing one that shows: it stays as it is under this one, which
     // fades in over it from nothing.
     l.fromSequence = 0;
@@ -432,7 +439,7 @@ void ScriptLevel::playLayer(VmObject* a, NameId group, NameId sequence, float ra
 }
 
 // C3DTweenAnim: the part to the sequence's first frame, fading in over
-// `seconds`, then still (C3DAnimEnd when there).
+// `seconds`, then still (no C3DAnimEnd when there).
 void ScriptLevel::tweenLayer(VmObject* a, NameId group, NameId sequence, float seconds, NameId bone,
                              std::array<bool, 3> clear) {
     playLayer(a, group, sequence, 0, seconds, false, bone, 0, clear);

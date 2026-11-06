@@ -131,7 +131,7 @@ mesh's name and textures' file names, after it its body parts' names
 | Field | |
 |---|---|
 | u16 length and the bone's name | `root`, `Bip01_Pelvis`... (some empty, some ending in a tab) |
-| `(n, n, 8)` and n i32 | the animation groups (body parts, the names after the tree) it's in: the engine plays each bone by the last of them that's active and lists it, so the upper and lower torso can play different clips. Not used (Reluva layers its own way) |
+| `(n, n, 8)` and n i32 | the animation groups (body parts, the names after the tree) it's in: the engine plays each bone by the last of them that's active and lists it, so the upper and lower torso can play different clips. Male: the pelvis and legs (0, 1), the spine and up (0, 2). Used for the layers' parts |
 | `(k, k, 128)` and k float xyz | the bone's vertices, in its own space (none for keyframed meshes' bones, whose packed frames have them) |
 | `(k, k, 128)` and k float | their weights (a vertex shared by bones has some under 1) |
 | `(k, k, 128)` and k i32 | which of the frame's vertices each is |
