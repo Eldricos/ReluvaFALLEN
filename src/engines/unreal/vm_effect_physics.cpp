@@ -1177,59 +1177,64 @@ void ScriptLevel::fallenPhysics(VmObject* a, int physics, float dt) {
         return;
     }
     case kPhysNewtonian: {
-        // Free flight by momentum (physNewtonian). An actor (a thrown drum)
-        // keeps its velocity, which only its scripts change; it slides
-        // along what it hits. A pawn (the Vulture, the Wraith, the
-        // Arachnid) flies as a flyer does with no friction: its
-        // acceleration (at most AccelRate) changes its velocity, up to
-        // AirSpeed (times DesiredSpeed for those not players); its
-        // velocity is then what it moved.
-        if (vm_.isA(a, "Pawn")) {
-            Vec push = accel;
-            const float rate = f("AccelRate", 500);
-            if (length(push) > rate)
-                push = mul(normal(push), rate);
-            const bool player = prop(a, "bIsPlayer") && prop(a, "bIsPlayer")->asBool();
-            const float most = f("AirSpeed", 320) * (player ? 1 : f("DesiredSpeed", 1));
-            v = add(v, mul(push, dt));
-            if (length(v) > most)
-                v = mul(normal(v), most);
+        // Free flight by momentum (physNewtonian). A pawn (the Vulture, the
+        // Wraith, the Arachnid) as calcVelocity has it with no friction:
+        // its velocity steered toward its acceleration (at most AccelRate),
+        // up to AirSpeed (times DesiredSpeed if not a player); an actor (a
+        // thrown drum) keeps its velocity, which only its scripts change.
+        // Moved: on a wall, a pawn steps up a low one; else the wall is
+        // told (processHitWall) and it slides, a second wall told too and
+        // the move bent along both. A pawn's velocity is then what it
+        // moved (unless it was just teleported).
+        const bool pawn = vm_.isA(a, "Pawn");
+        if (pawn) {
+            if (Value* t = prop(a, "bJustTeleported"))
+                *t = Value::boolValue(false);
+            Vec ac = accel;
+            calcVelocity(a, v, ac, dt, f("AirSpeed", 320), 0, true, false, false, zoneFeel(a).gravity);
             vm_.setVector(*velocityValue, v[0], v[1], v[2]);
-            const Vec start = Vm::vectorOf(*loc);
-            if (length(v) > 1e-3f)
-                hitWall(moveSmooth(a, mul(v, dt)));
-            if (!a->deleted && dt > 0)
+        }
+        const Vec start = Vm::vectorOf(*loc);
+        if (Value* old = prop(a, "OldLocation"))
+            vm_.setVector(*old, start[0], start[1], start[2]);
+        const Vec delta = mul(v, dt);
+        if (length(delta) > 1e-4f) {
+            MoveHit h = moveActor(a, delta);
+            if (!a->deleted && h.hit()) {
+                const Vec gravDir{0, 0, zoneFeel(a).gravity[2] > 0 ? 1.0f : -1.0f};
+                const float up = dot(gravDir, normal(delta));
+                if (pawn && std::fabs(h.normal[2]) < 0.2f && up > -0.2f && up < 0.5f) {
+                    stepUp(a, gravDir, normal(delta), mul(delta, 1 - h.time), h);
+                } else {
+                    ScriptLevel::hitWall(a, h);
+                    Vec along = mul(sub(delta, mul(h.normal, dot(delta, h.normal))), 1 - h.time);
+                    if (!a->deleted && dot(along, delta) >= 0) {
+                        const MoveHit h2 = moveActor(a, along);
+                        if (!a->deleted && h2.hit()) {
+                            ScriptLevel::hitWall(a, h2);
+                            if (!a->deleted)
+                                moveActor(a, twoWallAdjust(normal(delta), along, h2.normal, h.normal, h2.time));
+                        }
+                    }
+                }
+            }
+        }
+        if (pawn && !a->deleted && dt > 0) {
+            const Value* jt = prop(a, "bJustTeleported");
+            if (!jt || !jt->asBool())
                 if (Value* vv = prop(a, "Velocity")) {
                     const Vec moved = mul(sub(Vm::vectorOf(*prop(a, "Location")), start), 1 / dt);
                     vm_.setVector(*vv, moved[0], moved[1], moved[2]);
                 }
-            return;
         }
-        if (length(v) > 1e-3f)
-            hitWall(moveSmooth(a, mul(v, dt)));
         return;
     }
-    case kPhysFish: {
-        // A fish (physFish): swimming as a swimmer does (the zone's
-        // friction, buoyancy, current), up to WaterSpeed, facing the way
-        // it swims (no roll). (The engine also works out a pull toward its
-        // Destination, but keeps it in LastSeenPos, not its velocity.)
-        swimOrFly(a, dt, true);
-        if (a->deleted)
-            return;
-        Value* vv = prop(a, "Velocity");
-        if (!vv)
-            return;
-        v = Vm::vectorOf(*vv);
-        const float most = std::max(1.0f, f("WaterSpeed", 200));
-        if (length(v) > most)
-            v = mul(normal(v), most);
-        vm_.setVector(*vv, v[0], v[1], v[2]);
-        if (Value* r = prop(a, "Rotation"); r && length(v) > 1e-3f)
-            *r = vm_.rotatorValue(units(std::atan2(v[2], std::hypot(v[0], v[1]))) & 0xffff,
-                                  units(std::atan2(v[1], v[0])) & 0xffff, 0);
+    case kPhysFish:
+        // A fish (physFish): swimming as an AI pawn does, kept in the water,
+        // pulled on toward its Destination (swimPawn).
+        if (vm_.isA(a, "Pawn"))
+            swimPawn(a, dt, true);
         return;
-    }
     case kPhysExpTrail:
         // An explosion's trail flies by its velocity and acceleration,
         // through everything.

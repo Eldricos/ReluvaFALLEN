@@ -677,6 +677,10 @@ private:
     void walkPlayer(VmObject* a, float dt);
     void walkPawn(VmObject* a, float dt, int maxIterations);
     void simpleWalk(VmObject* a, float dt);
+    void move(VmObject* a, int physics, float dt);
+    void pawnRotation(VmObject* a, float dt, const std::array<float, 3>& velocityBefore);
+    std::array<float, 3> findWaterLine(const std::array<float, 3>& in, const std::array<float, 3>& out);
+    void swimPawn(VmObject* a, float dt, bool fish);
     void landed(VmObject* a, const std::array<float, 3>& n, VmObject* on, float remaining);
     void fallPlayer(VmObject* a, float dt);
     void fall(VmObject* a, float dt);

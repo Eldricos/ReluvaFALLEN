@@ -657,19 +657,23 @@ ScriptLevel::MoveHit ScriptLevel::moveActor(VmObject* a, const Vec& delta) {
 // walking); and if its script has no HitWall of its own, the pawn just
 // gives up its move (MoveTimer -1, bFromWall) unless it's falling.
 void ScriptLevel::hitWall(VmObject* a, const MoveHit& h) {
-    if (a->deleted || !h.hit())
+    if (a->deleted || !h.hit() || !h.actor)
         return;
-    if (h.actor && h.actor != levelInfo_ && vm_.isA(h.actor, "Pawn"))
+    if (h.actor != levelInfo_ && vm_.isA(h.actor, "Pawn"))
         return;
+    Vec n = h.normal;
     if (vm_.isA(a, "Pawn")) {
-        if (length(vecOf(prop(a, "Acceleration"))) == 0)
+        const Vec accel = vecOf(prop(a, "Acceleration"));
+        if (length(accel) == 0)
             return;
+        // Which way it's going: toward its Destination (a CTVE pawn: its
+        // acceleration), made one long; walking, flattened (the normal
+        // too, and the event gets that).
         const bool walking = prop(a, "Physics") && prop(a, "Physics")->asInt() == kPhysWalking;
-        Vec toward = sub(vecOf(prop(a, "Destination")), vecOf(prop(a, "Location")));
-        Vec n = h.normal;
+        Vec toward = normalOf(vm_.isA(a, "CTVE_Pawn") ? accel : sub(vecOf(prop(a, "Destination")), vecOf(prop(a, "Location"))));
         if (walking)
             toward[2] = 0, n[2] = 0;
-        if (dot(n, normalOf(toward)) > floatOf(prop(a, "MinHitWall")))
+        if (dot(toward, n) > floatOf(prop(a, "MinHitWall")))
             return;
         VmFunction* f = vm_.findFunction(a, vm_.name("HitWall"));
         const bool own = f && f->qualified != "Actor.HitWall";
@@ -681,7 +685,7 @@ void ScriptLevel::hitWall(VmObject* a, const MoveHit& h) {
             return;
         }
     }
-    vm_.callEvent(a, "HitWall", {vm_.vectorValue(h.normal[0], h.normal[1], h.normal[2]), Value::objectValue(h.actor)});
+    vm_.callEvent(a, "HitWall", {vm_.vectorValue(n[0], n[1], n[2]), Value::objectValue(h.actor)});
 }
 
 // Two walls: the move's rest along the second, or along the crease where
@@ -713,7 +717,8 @@ ScriptLevel::MoveHit ScriptLevel::moveSmooth(VmObject* a, const Vec& delta) {
     h = moveActor(a, adjust);
     if (!h.hit() || a->deleted)
         return h;
-    hitWall(a, h);
+    // The second wall: HitWall as it is (the engine's moveSmooth).
+    vm_.callEvent(a, "HitWall", {vm_.vectorValue(h.normal[0], h.normal[1], h.normal[2]), Value::objectValue(h.actor)});
     if (a->deleted)
         return h;
     adjust = twoWallAdjust(normalOf(delta), adjust, h.normal, first, h.time);
@@ -1106,18 +1111,33 @@ void ScriptLevel::physics(VmObject* a, float dt) {
     if (physics != kPhysClambering && clambers_.count(a))
         endClamber(a);
     steer(a, dt);
-    // Turning, as the engine's performPhysics: an actor (not a pawn) only
-    // in PHYS_Rotating (The Fallen's 23 and 24 turn one axis: fallenPhysics); a pawn towards its
-    // DesiredRotation unless climbing walls (Spider); a player's pawn as
-    // its input says (UpdateRotation).
+    // Turning, as the engine's performPhysics, after the move: an actor
+    // (not a pawn) only in PHYS_Rotating (The Fallen's 23 and 24 turn one
+    // axis: fallenPhysics); a pawn as physicsRotation has it (not
+    // climbing walls; Newtonian ones newtonianRotation); a player's pawn
+    // as its input says (UpdateRotation). Then a pawn's MoveTimer.
     const bool pawn = vm_.isA(a, "Pawn");
+    const Vec velocityBefore = vecOf(prop(a, "Velocity"));
+    move(a, physics, dt);
+    if (a->deleted)
+        return;
     const Value* player = prop(a, "Player");
-    if (pawn ? ((!player || !player->asObject()) && physics != 11)
-             : physics == kPhysRotating)
-        rotate(a, dt);
+    if (!pawn) {
+        if (physics == kPhysRotating)
+            rotate(a, dt);
+    } else if ((!player || !player->asObject()) && physics != 11) {
+        if (physics == 17)
+            rotate(a, dt);
+        else
+            pawnRotation(a, dt, velocityBefore);
+    }
     if (pawn)
         if (Value* t = prop(a, "MoveTimer"))
             *t = Value::floatValue(t->asFloat() - dt);
+}
+
+void ScriptLevel::move(VmObject* a, int physics, float dt) {
+    Value* physicsValue = prop(a, "Physics");
     if (physics == kPhysNone)
         return;
     if (physics == kPhysMovingBrush) {
@@ -1181,6 +1201,10 @@ void ScriptLevel::physics(VmObject* a, float dt) {
         if (!vm_.isA(a, "Pawn"))
             break; // a pawn's physics only
         const bool swim = physics == kPhysSwimming;
+        if (swim && !vm_.isA(a, "PlayerPawn")) {
+            swimPawn(a, dt, false);
+            break;
+        }
         swimOrFly(a, dt, swim);
         if (swim && !a->deleted) {
             Value* r = prop(a, "Region");
@@ -1307,6 +1331,150 @@ void ScriptLevel::simpleWalk(VmObject* a, float dt) {
     }
     if (n[2] < 0.6f)
         vm_.callEvent(a, "HitWall", {vm_.vectorValue(n[0], n[1], n[2]), Value::objectValue(by)});
+}
+
+// An AI pawn's turn after its move (APawn::physicsRotation): set to turn
+// to DesiredRotation (bRotateToDesired on, bFixedRotationDir off); its
+// yaw toward the desired at RotationRate.Yaw a second, its pitch the
+// desired's, kept within RotationRate.Pitch of level; with a
+// RotationRate.Roll, a lean into its turns at speed (the sideways part
+// of how its velocity changed, MaxRoll 4096 walking or 28000 else over
+// AccelRate, at most RotationRate.Roll, eased in at 5 a second), easing
+// back level at 8 a second when it doesn't, or walking under 200.
+void ScriptLevel::pawnRotation(VmObject* a, float dt, const Vec& velocityBefore) {
+    Value* rot = prop(a, "Rotation");
+    if (!rot || dt <= 0)
+        return;
+    const auto rate = prop(a, "RotationRate") ? Vm::rotatorOf(*prop(a, "RotationRate")) : std::array<int32_t, 3>{};
+    auto r = Vm::rotatorOf(*rot);
+    const auto want = prop(a, "DesiredRotation") ? Vm::rotatorOf(*prop(a, "DesiredRotation")) : r;
+    if (r == want && rate[2] <= 0)
+        return;
+    if (Value* p = prop(a, "bRotateToDesired"))
+        *p = Value::boolValue(true);
+    if (Value* p = prop(a, "bFixedRotationDir"))
+        *p = Value::boolValue(false);
+    r[1] = turnTowards(r[1], want[1], std::fabs(float(rate[1])) * dt) & 0xffff;
+    int32_t pitch = int16_t(want[0] & 0xffff);
+    const int32_t most = std::abs(rate[0]);
+    pitch = std::clamp(pitch, -most, most);
+    r[0] = pitch & 0xffff;
+    if (rate[2] > 0) {
+        float roll = float(int16_t(r[2] & 0xffff));
+        const Vec v = vecOf(prop(a, "Velocity"));
+        const bool walking = physicsOf(a) == kPhysWalking;
+        const Vec change = mul(sub(v, velocityBefore), 1 / dt);
+        if ((walking && length(v) < 200) || length(change) <= 100) {
+            roll -= roll * std::min(8 * dt, 1.0f);
+        } else {
+            const float yaw = float(r[1]) * 3.14159265f / 32768, pt = float(int16_t(r[0])) * 3.14159265f / 32768;
+            // The side axis of its new facing (roll level).
+            const Vec side{-std::sin(yaw), std::cos(yaw), 0};
+            (void)pt;
+            const float maxRoll = walking ? 4096 : 28000;
+            float target = dot(change, side) * maxRoll / std::max(1.0f, floatOf(prop(a, "AccelRate"), 500));
+            target = std::clamp(target, -float(rate[2]), float(rate[2]));
+            roll += (target - roll) * std::min(5 * dt, 1.0f);
+        }
+        r[2] = int32_t(roll) & 0xffff;
+    } else {
+        r[2] = 0;
+    }
+    *rot = vm_.rotatorValue(r[0], r[1], r[2]);
+}
+
+// The water line between a point in the water and one out of it, found by
+// halving (APawn::findWaterLine): the last point found in the water.
+Vec ScriptLevel::findWaterLine(const Vec& in, const Vec& out) {
+    Vec a = in, b = out;
+    for (int k = 0; k < 40 && dot(sub(b, a), sub(b, a)) > 0.01f; ++k) {
+        const Vec m = mul(add(a, b), 0.5f);
+        if (waterAt({m[0], m[1], m[2]}))
+            a = m;
+        else
+            b = m;
+    }
+    return a;
+}
+
+// An AI pawn swimming (APawn::physSwimming) or a fish (physFish):
+// calcVelocity in the water (WaterSpeed, the zone's fluid friction,
+// buoyant, no braking), then the move with the zone's current in up to
+// three goes (APawn::Swim): out of the water, back to the water line (or
+// back where it was); head on into a wall (MinHitWall), HitWall and
+// stop, else along it. A swimmer's velocity is then what it moved; a
+// fish is pulled on toward its Destination when that's over 20 away
+// (kept in LastSeenPos too), held to WaterSpeed and faces the way it
+// swims. Neither leaves the water: their scripts do that.
+void ScriptLevel::swimPawn(VmObject* a, float dt, bool fish) {
+    Value* vel = prop(a, "Velocity");
+    if (!vel || dt <= 0)
+        return;
+    const ZoneFeel z = zoneFeel(a);
+    const Vec start = vecOf(prop(a, "Location"));
+    if (Value* old = prop(a, "OldLocation"))
+        vm_.setVector(*old, start[0], start[1], start[2]);
+    if (Value* t = prop(a, "bJustTeleported"))
+        *t = Value::boolValue(false);
+    Vec accel = vecOf(prop(a, "Acceleration"));
+    Vec v = vecOf(vel);
+    const float most = floatOf(prop(a, "WaterSpeed"), 200);
+    calcVelocity(a, v, accel, dt, most, z.fluidFriction, true, false, true, z.gravity);
+    vm_.setVector(*vel, v[0], v[1], v[2]);
+    Vec delta = mul(add(v, z.velocity), dt);
+    const Vec desired = normalOf(delta);
+    const float minHitWall = floatOf(prop(a, "MinHitWall"));
+    for (int k = 0; k < 3 && dot(delta, delta) > 0.0001f; ++k) {
+        const Vec from = vecOf(prop(a, "Location"));
+        MoveHit h = moveActor(a, delta);
+        if (a->deleted)
+            return;
+        delta = mul(delta, 1 - h.time);
+        const Vec now = vecOf(prop(a, "Location"));
+        if (!waterAt({now[0], now[1], now[2]})) {
+            const Vec line = findWaterLine(from, now);
+            const MoveHit back = moveActor(a, sub(line, now));
+            if (a->deleted)
+                return;
+            if (back.hit()) {
+                setLocation(a, from);
+                h.normal = {0, 0, 0};
+                h.time = 0;
+            }
+            delta[2] = 0;
+        }
+        if (!h.hit())
+            break;
+        if (dot(desired, h.normal) < minHitWall) {
+            if (vm_.findFunction(a, vm_.name("HitWall")))
+                vm_.callEvent(a, "HitWall", {vm_.vectorValue(h.normal[0], h.normal[1], h.normal[2]), Value::objectValue(h.actor)});
+            break;
+        }
+        delta = sub(delta, mul(h.normal, dot(delta, h.normal)));
+    }
+    if (a->deleted)
+        return;
+    const Vec here = vecOf(prop(a, "Location"));
+    if (!fish) {
+        const Vec moved = mul(sub(here, start), 1 / dt);
+        vm_.setVector(*vel, moved[0], moved[1], moved[2]);
+        return;
+    }
+    v = vecOf(vel);
+    Vec pull{};
+    const Vec to = sub(vecOf(prop(a, "Destination")), here);
+    const float d = length(to);
+    if (d > 20)
+        pull = mul(to, floatOf(prop(a, "AccelRate"), 500) / d);
+    if (Value* p = prop(a, "LastSeenPos"))
+        vm_.setVector(*p, pull[0], pull[1], pull[2]);
+    v = add(v, mul(pull, dt));
+    if (length(v) > most)
+        v = mul(normalOf(v), most);
+    vm_.setVector(*vel, v[0], v[1], v[2]);
+    if (Value* r = prop(a, "Rotation"); r && length(v) > 1e-3f)
+        *r = vm_.rotatorValue(int32_t(std::lround(std::atan2(v[2], std::hypot(v[0], v[1])) * 32768 / 3.14159265f)) & 0xffff,
+                              int32_t(std::lround(std::atan2(v[1], v[0]) * 32768 / 3.14159265f)) & 0xffff, 0);
 }
 
 void ScriptLevel::calcVelocity(VmObject* a, Vec& v, Vec& accel, float dt, float maxSpeed, float friction, bool fluid,
