@@ -108,6 +108,8 @@
 //                                                  then ticks; report errors and natives missing
 //   reluva-tool ue-extract <game folder> <package> <export> [steps]  write a texture as .tga (one that plays a second in, or after [steps] frames), a sound or music
 //   reluva-tool ue-points <game folder>  check attachment points against the meshes' precomputed places
+//   reluva-tool ue-ledges <game folder> <map> [max]  places to pull up onto a ledge or catch one in a jump
+//   reluva-tool ue-trace <game folder> <map> x y z x2 y2 z2 [ex ey ez]  a box swept through the level's BSP
 //                                                  as the file it holds
 
 #include "common/audio/decode.h"
@@ -157,6 +159,7 @@
 #include "engines/unreal/vm_level.h"
 #include "engines/unreal/viewers.h"
 #include "tools/soft_renderer.h"
+#include "engines/unreal/collision.h"
 #include "engines/unreal/model.h"
 #include "engines/unreal/package_set.h"
 #include "engines/unreal/properties.h"
@@ -5394,6 +5397,116 @@ void printPointsCheck(const PointsCheck& c) {
                     c.places, c.miss / c.places, c.within5, c.triangleX, c.boneX);
 }
 
+// ue-trace <game folder> <map> x y z x2 y2 z2 [ex ey ez]: a box (half
+// sizes, none for a line) swept through a level's BSP: where it stops.
+int cmdUeTrace(int argc, char** argv) {
+    if (argc != 10 && argc != 13) {
+        std::fprintf(stderr, "usage: reluva-tool ue-trace <game folder> <map> x y z x2 y2 z2 [ex ey ez]\n");
+        return 2;
+    }
+    using namespace reluva::unreal;
+    PackageSet set;
+    if (reluva::Error err = set.open(argv[2], "")) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    const Package* pkg = set.get(argv[3]);
+    Model model;
+    std::string error;
+    if (!pkg || findLevelModel(*pkg, &model, &error) < 0) {
+        std::fprintf(stderr, "no level model in %s\n", argv[3]);
+        return 1;
+    }
+    auto f = [&](int i) { return float(std::atof(argv[i])); };
+    const Vec3f a{f(4), f(5), f(6)}, b{f(7), f(8), f(9)};
+    const Vec3f e = argc == 13 ? Vec3f{f(10), f(11), f(12)} : Vec3f{};
+    LevelCollision col(model);
+    const auto h = col.trace(a, b, e);
+    std::printf("hit %d startSolid %d time %.4f at %.2f %.2f %.2f normal %.3f %.3f %.3f node %d; start solid box %d, end %d\n",
+                h.hit(), h.startSolid, double(h.time), double(h.location[0]), double(h.location[1]), double(h.location[2]),
+                double(h.normal[0]), double(h.normal[1]), double(h.normal[2]), h.node, col.solid(a, e), col.solid(b, e));
+    return 0;
+}
+
+// ue-ledges <game folder> <map> [max]: places in a level's BSP where the
+// player could pull up onto a ledge (a wall straight ahead, its flat top
+// 30 to 110 units over the floor, room over it) or catch one in a jump
+// (115 to 160 up): each with the place to stand (Unreal's coordinates)
+// and the way to face, for trying them with ue-play's teleport.
+int cmdUeLedges(int argc, char** argv) {
+    if (argc != 4 && argc != 5) {
+        std::fprintf(stderr, "usage: reluva-tool ue-ledges <game folder> <map> [max]\n");
+        return 2;
+    }
+    using namespace reluva::unreal;
+    PackageSet set;
+    if (reluva::Error err = set.open(argv[2], "")) {
+        std::fprintf(stderr, "%s\n", err.message.c_str());
+        return 1;
+    }
+    const Package* pkg = set.get(argv[3]);
+    Model model;
+    std::string error;
+    if (!pkg || findLevelModel(*pkg, &model, &error) < 0) {
+        std::fprintf(stderr, "no level model in %s %s\n", argv[3], error.c_str());
+        return 1;
+    }
+    const int most = argc == 5 ? std::atoi(argv[4]) : 40;
+    LevelCollision col(model);
+    const float R = 17, H = 49.5f;
+    const Vec3f stand{R, R, H};
+    int found = 0;
+    std::set<std::tuple<int, int, int>> seen;
+    for (const BspNode& n : model.nodes) {
+        if (n.plane[2] < 0.9f || n.vertexCount < 3 || found >= most)
+            continue;
+        Vec3f c{};
+        for (int k = 0; k < n.vertexCount; ++k) {
+            const int32_t pi = model.verts[size_t(n.vertPool + k)].point;
+            for (size_t q = 0; q < 3; ++q)
+                c[q] += model.points[size_t(pi)][q] / float(n.vertexCount);
+        }
+        const Vec3f at{c[0], c[1], c[2] + H + 2};
+        if (col.solid(at, stand))
+            continue;
+        // On the floor (just above it).
+        const auto down = col.trace(at, {at[0], at[1], at[2] - 8}, stand);
+        if (!down.hit() || down.normal[2] < 0.7f)
+            continue;
+        const Vec3f foot = down.location;
+        const float feet = foot[2] - H;
+        for (int d = 0; d < 8 && found < most; ++d) {
+            const float yaw = float(d) * 3.14159265f / 4;
+            const Vec3f dir{std::cos(yaw), std::sin(yaw), 0};
+            const Vec3f far{foot[0] + dir[0] * 80, foot[1] + dir[1] * 80, foot[2]};
+            const auto wall = col.trace(foot, far, stand);
+            if (!wall.hit() || std::fabs(wall.normal[2]) > 0.1f || -(wall.normal[0] * dir[0] + wall.normal[1] * dir[1]) < 0.9f)
+                continue;
+            // The top: down from high over the wall, just past its face.
+            const Vec3f past{wall.location[0] + dir[0] * (R + 12), wall.location[1] + dir[1] * (R + 12), feet + 175};
+            const auto top = col.trace(past, {past[0], past[1], feet + 20}, {4, 4, 1});
+            if (!top.hit() || top.normal[2] < 0.9f || top.startSolid)
+                continue;
+            const float rise = top.location[2] - 1 - feet;
+            const bool clamber = rise > 30 && rise < 110, hang = rise > 115 && rise < 160;
+            if (!clamber && !hang)
+                continue;
+            // Room to stand on it.
+            const Vec3f onTop{past[0] + dir[0] * 16, past[1] + dir[1] * 16, top.location[2] + H + 2};
+            if (col.solid(onTop, stand))
+                continue;
+            const auto key = std::make_tuple(int(foot[0] / 64), int(foot[1] / 64), d);
+            if (!seen.insert(key).second)
+                continue;
+            ++found;
+            std::printf("%s %.1f %.1f %.1f yaw %d rise %.1f\n", clamber ? "clamber" : "hang", double(foot[0]),
+                        double(foot[1]), double(foot[2]), d * 45, double(rise));
+        }
+    }
+    std::printf("%d found\n", found);
+    return 0;
+}
+
 int cmdUePoints(int argc, char** argv) {
     if (argc != 3) {
         std::fprintf(stderr, "usage: reluva-tool ue-points <game folder>\n");
@@ -5949,6 +6062,10 @@ int main(int argc, char** argv) {
         return cmdUeExtract(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-points") == 0)
         return cmdUePoints(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-ledges") == 0)
+        return cmdUeLedges(argc, argv);
+    if (argc >= 2 && std::strcmp(argv[1], "ue-trace") == 0)
+        return cmdUeTrace(argc, argv);
     if (argc >= 2 && std::strcmp(argv[1], "ue-check") == 0)
         return cmdUeCheck(argc, argv);
 #endif

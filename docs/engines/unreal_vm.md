@@ -547,9 +547,28 @@ the player to face into the wall before asking its scripts'
 - **The hit's node** (`TestHitIntegrity`): Reluva's collision already
   gives each hit its BSP plane's own normal and node, which the
   engine's test exists to make sure of.
-- **Seen:** on M01_KiraL2, walking into the ladder under
-  `CTVE_LadderTop2` climbs it at 120 a second, pulls up over the top
-  and walks on.
+- **Seen:**
+  - **The ladder:** on M01_KiraL2, walking into the ladder under
+    `CTVE_LadderTop2` climbs it at 120 a second, pulls up over the top
+    and walks on.
+  - **Pulling up:** on M01_SiskoL1A, walking into the ledges at (-362,
+    2981) and (-316, 3222), 56 and 60 up, goes through `PlayerClambering`
+    onto them.
+  - **Refused, as the tests say:** other places found there are walls
+    that go on up past reach, or tops with nothing for the hands at
+    their edge (`TestForHandHold` finds no wall 2 under the top: the face
+    is set back up there).
+  - **Hanging:** on M01_KiraL2 at (351, 3516), jumping at a ledge 122 up
+    while running at it catches it (`PlayerHanging`, `LedgeHang`). She
+    stays when let be, and shuffles along it with the strafe keys
+    (`LedgeR`, 48 a second). Forward climbs up after half a second
+    (`ledgeu`) and walks on 104 higher; back lets go. Held forward
+    through the catch, she pulls up at once, as the hanging state's
+    script asks.
+  - `reluva-tool ue-ledges <game> <map>` lists places to try (a wall
+    straight ahead, a flat top 30 to 110 over the floor to pull up onto,
+    or 115 to 160 to catch in a jump). `ue-trace` sweeps a box through a
+    level's BSP.
 
 The input axes are 20 times the bindings' speeds (`aBaseY` 6000 for a
 held MoveForward), as UE1's input scales a held key's axis. The
