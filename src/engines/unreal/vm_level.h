@@ -737,7 +737,8 @@ private:
     const std::vector<Vec>* posedVertices(VmObject* actor, ActorMesh& mesh); // packed, as this tick has them
     const std::vector<std::array<float, 12>>* posedSkeleton(VmObject* actor, ActorMesh& mesh); // its bones, the same
     std::vector<LayeredPoser::Layer> posedLayers(VmObject* actor, ActorMesh& mesh, std::vector<std::string>& names);
-    bool attachFrame(VmObject* actor, ActorMesh& mesh, const MeshAttachPoint& point, Vec& at, std::array<Vec, 3>& axes);
+    bool attachFrame(VmObject* actor, ActorMesh& mesh, const MeshAttachPoint& point, Vec& at, std::array<Vec, 3>& axes,
+                     std::array<Vec, 3>* raw = nullptr);
     void toWorld(VmObject* actor, Vec& at, std::array<Vec, 3>* axes);
     void placeAttached();
     std::map<const VmObject*, std::shared_ptr<ActorMesh>> actorMeshes_; // by mesh object

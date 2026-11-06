@@ -234,16 +234,67 @@ void ScriptLevel::toWorld(VmObject* a, Vec& at, Axes* axes) {
 }
 
 // An attachment point's place and axes in the actor's own space (before
-// DrawScale). On a triangle: from the triangle's middle, the point's turn
-// and offset in the axes of the bone the triangle moves with (`bone`: that
-// bone in the skeleton's space, posed as `verts`; `skeleton`: where the
-// skeleton's axes go in the actor's), else in the triangle's own (X along
-// its first edge, Z along its normal): reluva-tool ue-points checks both
-// against the meshes' precomputed places, and the bone's fits (mesh.md).
-// On the mesh's origin: its turn and offset in the skeleton's units.
+// DrawScale), as Engine.dll's PointMatrix: worked out in the skeleton's
+// space (the C3D model's: packed vertices less Origin, times Scale), then
+// placed as the mesh's vertices are. On a triangle (type 1) its turn and
+// offset are in the triangle's frame as posed: from its corner 0, X
+// toward corner 2, Y its normal, Z = X x Y. On the mesh (type 2) they're
+// from the skeleton's origin as they are. A kind 7 point is no turn and
+// no offset (the matrix's identity flag). `raw`: its axes in the
+// skeleton's space, unplaced (C3DGetAttachPtOffset's rotation).
+// reluva-tool ue-points checks this against the meshes' precomputed
+// places: all 65 within 5 units, every one's axes the same.
 namespace {
 
 bool pointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttachPoint& point, Vec& at, Axes& axes,
+                Axes* raw = nullptr) {
+    const bool identity = point.kind == 7;
+    const Axes turn = identity ? Axes{Vec{1, 0, 0}, Vec{0, 1, 0}, Vec{0, 0, 1}}
+                               : Axes{point.axes[0], point.axes[1], point.axes[2]};
+    const Vec offset = identity ? Vec{} : Vec{point.offset[0], point.offset[1], point.offset[2]};
+    Vec pos{};
+    Axes rows = turn;
+    if (point.type == 1) {
+        if (!verts || point.triangle < 0 || size_t(point.triangle) >= mesh.tris.size())
+            return false;
+        const MeshTri& t = mesh.tris[size_t(point.triangle)];
+        Vec c[3];
+        for (size_t k = 0; k < 3; ++k) {
+            if (size_t(t.vertex[k]) >= verts->size())
+                return false;
+            const Vec& v = (*verts)[size_t(t.vertex[k])];
+            for (size_t q = 0; q < 3; ++q)
+                c[k][q] = (v[q] - mesh.origin[q]) * mesh.scale[q];
+        }
+        const Vec x = unit(sub(c[2], c[0]));
+        const Vec y = unit(cross(sub(c[1], c[0]), sub(c[2], c[0])));
+        const Axes frame{x, y, cross(x, y)};
+        pos = c[0];
+        for (size_t j = 0; j < 3; ++j)
+            pos = add(pos, mul(frame[j], offset[j]));
+        rows = inFrame(turn, frame);
+    } else if (point.type == 2) {
+        pos = offset;
+    } else {
+        // Any other type: Engine.dll leaves the identity it started with.
+        pos = {};
+        rows = Axes{Vec{1, 0, 0}, Vec{0, 1, 0}, Vec{0, 0, 1}};
+    }
+    if (raw)
+        *raw = rows;
+    const Vec3f placed = placeMeshScaled(mesh, {pos[0], pos[1], pos[2]});
+    at = {placed[0], placed[1], placed[2]};
+    for (size_t k = 0; k < 3; ++k) {
+        const Vec3f r = placeMeshScaled(mesh, {rows[k][0], rows[k][1], rows[k][2]});
+        axes[k] = unit({r[0], r[1], r[2]});
+    }
+    return true;
+}
+
+// The IK's effectors (measureEffectors) keep Reluva's own reading of a
+// hand's point: from the triangle's middle, in the axes of the bone it
+// moves with. How Engine.dll's IK takes its chains' ends isn't read.
+bool ikPointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttachPoint& point, Vec& at, Axes& axes,
                 const std::array<float, 12>* bone = nullptr, const Axes* skeleton = nullptr) {
     if (point.type == 1) {
         if (!verts || point.triangle < 0 || size_t(point.triangle) >= mesh.tris.size())
@@ -281,17 +332,9 @@ bool pointFrame(const Mesh& mesh, const std::vector<Vec>* verts, const MeshAttac
 
 } // namespace
 
-bool ScriptLevel::attachFrame(VmObject* a, ActorMesh& m, const MeshAttachPoint& point, Vec& at, Axes& axes) {
-    if (point.type != 1)
-        return pointFrame(m.mesh, nullptr, point, at, axes);
-    const std::vector<Vec>* verts = posedVertices(a, m);
-    // The bone its triangle moves with, as this tick has it.
-    const std::array<float, 12>* bone = nullptr;
-    if (m.poser && point.triangle >= 0 && size_t(point.triangle) < m.mesh.tris.size())
-        if (const int b = m.poser->mainBone(m.mesh.tris[size_t(point.triangle)].vertex); b >= 0)
-            if (const auto* worlds = posedSkeleton(a, m); worlds && size_t(b) < worlds->size())
-                bone = &(*worlds)[size_t(b)];
-    return pointFrame(m.mesh, verts, point, at, axes, bone, &m.skeleton);
+bool ScriptLevel::attachFrame(VmObject* a, ActorMesh& m, const MeshAttachPoint& point, Vec& at, Axes& axes,
+                              Axes* raw) {
+    return pointFrame(m.mesh, point.type == 1 ? posedVertices(a, m) : nullptr, point, at, axes, raw);
 }
 
 bool ScriptLevel::attachPointAt(VmObject* a, NameId name, bool precomputed, bool world, Vec& location, Rot& rotation) {
@@ -299,16 +342,22 @@ bool ScriptLevel::attachPointAt(VmObject* a, NameId name, bool precomputed, bool
     const MeshAttachPoint* point =
         m ? findPoint(precomputed ? m->mesh.precomputedPoints : m->mesh.attachPoints, vm_.nameText(name)) : nullptr;
     Vec at{};
-    Axes axes{};
-    if (!point || !attachFrame(a, *m, *point, at, axes))
+    Axes axes{}, raw{};
+    if (!point || !attachFrame(a, *m, *point, at, axes, &raw))
         return false;
     if (world) {
+        // C3DGetAttachPtCoords: in the world, its axes in the scripts'
+        // order (X the point's -Z, Y its -X, Z its Y), as the bones'.
         toWorld(a, at, &axes);
-    } else if (const Value* scale = prop(a, "DrawScale")) {
-        at = mul(at, scale->asFloat());
+        location = at;
+        rotation = rotOf(scriptAxes(axes));
+    } else {
+        // C3DGetAttachPtOffset: from the mesh's origin, no DrawScale, and
+        // the turn as the skeleton has it (Engine.dll swaps the place's
+        // axes but not the turn's).
+        location = at;
+        rotation = rotOf(raw);
     }
-    location = at;
-    rotation = rotOf(axes);
     return true;
 }
 
@@ -452,26 +501,34 @@ void ScriptLevel::placeAttached() {
         ++it;
         ActorMesh* pm = actorMesh(at.parent);
         ActorMesh* cm = actorMesh(child);
-        const MeshAttachPoint* pp = pm ? findPoint(pm->mesh.attachPoints, vm_.nameText(at.parentPoint)) : nullptr;
-        const MeshAttachPoint* cp = cm ? findPoint(cm->mesh.attachPoints, vm_.nameText(at.childPoint)) : nullptr;
+        // A point not named is the mesh's first; one that isn't there, or
+        // a mesh with none, ends the attachment (as Engine.dll's C3DAttach).
+        auto pointOf = [&](ActorMesh* mm, NameId name) -> const MeshAttachPoint* {
+            if (!mm || mm->mesh.attachPoints.empty())
+                return nullptr;
+            return name ? findPoint(mm->mesh.attachPoints, vm_.nameText(name)) : &mm->mesh.attachPoints.front();
+        };
+        const MeshAttachPoint* pp = pointOf(pm, at.parentPoint);
+        const MeshAttachPoint* cp = pointOf(cm, at.childPoint);
+        if (!pp || !cp) {
+            attachments_.erase(child);
+            continue;
+        }
         Vec where{}, mine{};
         Axes theirs{}, ours{};
-        if (!pp || !attachFrame(at.parent, *pm, *pp, where, theirs))
+        if (!attachFrame(at.parent, *pm, *pp, where, theirs) || !attachFrame(child, *cm, *cp, mine, ours))
             continue;
         toWorld(at.parent, where, &theirs);
-        if (!cp || !attachFrame(child, *cm, *cp, mine, ours)) {
-            mine = {};
-            ours = {Vec{1, 0, 0}, Vec{0, 1, 0}, Vec{0, 0, 1}};
-        }
         // Its axes: row j = sum over k of ours[k][j] theirs[k] (ours undone, then theirs).
         Axes frame{};
         for (size_t j = 0; j < 3; ++j)
             for (size_t k = 0; k < 3; ++k)
                 frame[j] = add(frame[j], mul(unit(theirs[k]), unit(ours[k])[j]));
-        const Value* scale = prop(child, "DrawScale");
-        const Value* pivot = prop(child, "PrePivot");
+        // Its own point undone in the parent's scale: Engine.dll places the
+        // child's origin so, its own DrawScale and PrePivot not allowed for.
+        const Value* scale = prop(at.parent, "DrawScale");
         const float ds = scale ? scale->asFloat() : 1;
-        Vec loc = sub(where, pivot ? Vm::vectorOf(*pivot) : Vec{});
+        Vec loc = where;
         for (size_t j = 0; j < 3; ++j)
             loc = sub(loc, mul(frame[j], mine[j] * ds));
         if (Value* l = prop(child, "Location"))
@@ -716,7 +773,7 @@ bool ScriptLevel::measureEffectors(VmObject* a, ActorMesh& m, Bends& b, const La
                                   : -1;
         const std::array<float, 12>* boneWorld =
             pointBone >= 0 && size_t(pointBone) < worlds.size() ? &worlds[size_t(pointBone)] : nullptr;
-        if (!point || !pointFrame(m.mesh, &verts, *point, at, axes, boneWorld, &m.skeleton)) {
+        if (!point || !ikPointFrame(m.mesh, &verts, *point, at, axes, boneWorld, &m.skeleton)) {
             // The bone itself reaches, turned as the scripts take its axes.
             for (size_t k = 0; k < 3; ++k)
                 e.axes[k] = {kScriptAxes[k][0], kScriptAxes[k][1], kScriptAxes[k][2]};

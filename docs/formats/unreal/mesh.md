@@ -287,7 +287,12 @@ What the type means:
   copy's space instead (the rifle has none: it's the usual turn guessed),
   the right hand is 10 units below, outside the rifle. Over all 67
   type 2 points, 29 are nearer their mesh's surface read so, 8 read the
-  float copy's way.
+  float copy's way. Engine.dll settles it: a type 2 point is the stored
+  matrix as it is, in the same space as the skeleton's posed vertices
+  (`C3DGetWldToC3DTM` maps the world into that space; the mesh's Scale,
+  Origin and RotOrigin aren't read there). Reluva places it as it
+  places those vertices, so a point and its mesh turn together whatever
+  turn is guessed for the mesh.
 
 Then come `(s, s, 5)`, the shared animation sets the mesh's animations
 come from (`shared.MaleTwo`, `shared.Male`), and `(m, m, 4)` places
@@ -307,26 +312,36 @@ Checked:
 - On The Fallen, all 419 meshes with the block read: 429 attachment
   points in 135 meshes, every triangle within its mesh, and 74
   precomputed places in 14.
-- A type 1 point is at its triangle's middle, its turn and offset in the
-  axes of the bone the triangle moves with (its three corners' weights
-  summed, the most). `reluva-tool ue-points` checks this against the
-  precomputed places, and `ue-check` prints its summary: 65 of the 74
-  name a type 1 point and an animation (`<Animation><Point>Loc`; two
-  more name a `Fire` their meshes haven't). With each animation posed
-  through its frames, the point comes 5.8 units from its place on
-  average 3.6 units from its place, 47 of the 65 within 5, on every
-  mesh at the same point of each animation (FireRunF, B, L and R all 5%
-  in). `FireRunRGunTipLoc` was 10 to 17 units under its place until the
-  rotation keys' w was read with its wrap (below): its right elbow
-  flipped half a turn between keys. Its X, the barrel,
-  lies along the place's X (within 0.95, either way) in 28 of the 65
-  taken in the bone's axes, and in 1 taken in the triangle's own (X
-  along its first edge, Z its normal, as before). The other two axes are
-  turned about the barrel by an angle each mesh keeps across its poses,
-  and on CardassianOfficer and the Jem'Hadar lance the point's X is the
-  place's Y: the meshes' artists set their points' axes their own ways.
-  A pose with no skeleton (an animation of vertex keys) uses the
-  triangle's own axes.
+- **A type 1 point, as Engine.dll places it** (`PointMatrix` and
+  `TriFrame`, read November 2026):
+  - The frame: from the triangle's corner 0, X toward corner 2, Y its
+    normal (corner 1 less corner 0, crossed with corner 2 less corner 0),
+    Z = X x Y. The corners are as posed, in the skeleton's space. No
+    bone is involved.
+  - The point: its offset along that frame's axes from corner 0, and
+    its turn's rows taken in the frame.
+  - The i32 after the 12 floats (4 or 7) is the stored matrix's flags.
+    7 is the identity: no turn, no offset, whatever floats are stored.
+- **A type 2 point** is the stored matrix as it is, from the
+  skeleton's origin; the triangle isn't used. Any other type is the
+  identity.
+- **Checked against the precomputed places:** `reluva-tool ue-points`
+  does this, and `ue-check` prints its summary. 65 of the 74 places name
+  a type 1 point and an animation (`<Animation><Point>Loc`); two more
+  name a `Fire` their meshes haven't. Each animation is posed through
+  its frames in 60 steps.
+  - The point comes 1.9 units from its place on average, every one of
+    the 65 within 5.
+  - Every one's turn is the place's exactly (rows' dot products summing
+    to 3.00).
+  - Reluva's earlier reading (the triangle's middle, in its bone's axes)
+    was 3.6 units off on average, 47 within 5, and only the barrel's
+    line matched.
+  - `FireRunRGunTipLoc` was 10 to 17 units under its place until the
+    rotation keys' w was read with its wrap (below): its right elbow
+    flipped half a turn between keys.
+  - A pose with no skeleton (an animation of vertex keys) uses the same
+    frame.
 
 On Kira, standing:
 - **Hands and feet:** her `RightHand` point is on her right at hip

@@ -5229,9 +5229,10 @@ int cmdUeProbe(int argc, char** argv) {
 // turned against the places The Fallen's meshes keep worked out in
 // advance (`<Animation><Point>Loc`, in the skeleton's units): each
 // animation posed through its frames, the point where it comes nearest
-// the place, and its axes there taken in the triangle's frame or in the
-// frame of the bone the triangle moves with (mesh.md). Each place's line
-// printed if `print`.
+// the place (placed in the triangle's frame as Engine.dll's PointMatrix
+// does: from corner 0, X to corner 2, Y the normal), and its axes there
+// taken in that frame or in the frame of the bone the triangle moves with
+// (mesh.md). Each place's line printed if `print`.
 struct PointsCheck {
     int places = 0, within5 = 0, triangleX = 0, boneX = 0;
     double miss = 0; // units, all together
@@ -5303,14 +5304,29 @@ PointsCheck checkAttachPoints(const reluva::unreal::PackageSet& set, bool print)
                 float best = 1e30f, at = 0;
                 Vec3f miss{};
                 std::vector<Vec3f> verts;
+                // Engine.dll's frame (TriFrame): from corner 0, X to corner 2,
+                // Y the normal, Z = X x Y; the point's offset along those, its
+                // turn after (a kind 7 point is no turn and no offset).
+                auto engineFrame = [&](const std::vector<Vec3f>& vs, Vec3f& origin) {
+                    Vec3f c[3];
+                    for (size_t k = 0; k < 3; ++k)
+                        c[k] = skeletonOf(vs[size_t(t.vertex[k])]);
+                    const Vec3f x = unit(sub(c[2], c[0]));
+                    const Vec3f y = unit(cross(sub(c[1], c[0]), sub(c[2], c[0])));
+                    const std::array<Vec3f, 3> f{x, y, cross(x, y)};
+                    origin = c[0];
+                    if (point->kind != 7)
+                        for (size_t j = 0; j < 3; ++j)
+                            for (size_t q = 0; q < 3; ++q)
+                                origin[q] += point->offset[j] * f[j][q];
+                    return f;
+                };
                 for (int f = 0; f <= 60; ++f) {
                     if (!poser->pose(anim, float(f) / 60, {}, verts))
                         break;
-                    Vec3f middle{};
-                    for (size_t k = 0; k < 3; ++k)
-                        for (size_t c = 0; c < 3; ++c)
-                            middle[c] += skeletonOf(verts[size_t(t.vertex[k])])[c] / 3;
-                    const Vec3f d = sub(middle, pre.offset);
+                    Vec3f placed{};
+                    engineFrame(verts, placed);
+                    const Vec3f d = sub(placed, pre.offset);
                     if (dot(d, d) < best) {
                         best = dot(d, d);
                         at = float(f) / 60;
@@ -5324,11 +5340,10 @@ PointsCheck checkAttachPoints(const reluva::unreal::PackageSet& set, bool print)
                     continue;
                 }
                 poser->pose(anim, at, {}, verts);
-                Vec3f c[3];
-                for (size_t k = 0; k < 3; ++k)
-                    c[k] = skeletonOf(verts[size_t(t.vertex[k])]);
-                const Vec3f x = unit(sub(c[1], c[0])), z = unit(cross(sub(c[1], c[0]), sub(c[2], c[0])));
-                const std::array<Vec3f, 3> triangleAxes = inFrame(point->axes, {x, cross(z, x), z});
+                Vec3f origin{};
+                const std::array<Vec3f, 3> ef = engineFrame(verts, origin);
+                const std::array<Vec3f, 3> ident{Vec3f{1, 0, 0}, Vec3f{0, 1, 0}, Vec3f{0, 0, 1}};
+                const std::array<Vec3f, 3> triangleAxes = inFrame(point->kind == 7 ? ident : point->axes, ef);
                 const float byTriangle = match(triangleAxes, pre.axes);
                 const float xTriangle = std::fabs(dot(triangleAxes[0], pre.axes[0]));
                 float byBone = -3, xBone = 0;

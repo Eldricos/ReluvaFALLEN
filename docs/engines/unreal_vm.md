@@ -1717,19 +1717,33 @@ The natives:
   - No script calls any of the three.
 - `C3DDoesBoneExist`.
 - `C3DGetAttachPtCoords(Name, out Pos, out Orientation)`: an attachment
-  point in the world (`GunTip`, `FirePoint`, `KickPoint`...). On a
-  triangle it's the triangle's frame (above) with the point's offset
-  and turn; on the origin, its offset and turn from the mesh's float
-  copy.
+  point in the world (`GunTip`, `FirePoint`, `KickPoint`...), as
+  Engine.dll's `PointMatrix` places it:
+  - It's worked out in the skeleton's space, then placed as the mesh is.
+  - On a triangle (type 1): the point's turn and offset in the
+    triangle's frame as posed. The frame runs from corner 0, with X
+    toward corner 2, Y the normal and Z = X x Y. No bone is involved.
+  - On the mesh (type 2): its turn and offset from the skeleton's
+    origin, as stored.
+  - Of another type, or of kind 7 (the stored matrix's identity flag):
+    no turn and no offset.
+  - The orientation is in the scripts' order of axes, as the bones'
+    (X the point's -Z, Y its -X, Z its Y).
 - `C3DGetAttachPtCoordsPrecomputed`: the places worked out in advance
-  (`FireGunTipLoc`).
-- `C3DGetAttachPtOffset` (from the actor), `C3DGetNumAttachPts`.
+  (`FireGunTipLoc`), the same way as a type 2 point.
+- `C3DGetAttachPtOffset`: the point from the mesh's origin, with no
+  DrawScale. Its rotation is the turn as the skeleton has it, without
+  the swap of axes (as Engine.dll's). Also `C3DGetNumAttachPts`.
 - A part the mesh hasn't answers with the actor's own location and
   rotation, so what starts there starts at the actor.
 - **Attaching:** `C3DAttach(Obj, ObjPt, ThisPt)` keeps this actor, from
   each tick on, with its point `ThisPt` on `Obj`'s `ObjPt`. It's turned
   so its point's axes are `Obj`'s point's, and moved so the two meet.
-  This runs after every actor's tick, until `C3DDetach`.
+  This runs after every actor's tick, until `C3DDetach`. As Engine.dll's:
+  - A point not named is the mesh's first. A named point that isn't
+    there, or a mesh with no points, ends the attachment.
+  - The child's own point is undone in the parent's DrawScale. The
+    child's own DrawScale and PrePivot aren't allowed for.
   - What's attached in the levels: the ensigns' tricorders and phasers
     on their belts (`BeltAttach` on `BeltClip`), and the gun nests'
     spotlights.
@@ -1837,9 +1851,12 @@ Not done:
   bone's limits); Reluva's two-bone solve above stands in for them, and
   layers are placed by a group's first bone rather than the mesh's own
   per-bone group lists.
-- Points on triangles turn with their triangle's bone, and points from
-  the origin are in the skeleton's units ([mesh.md](../formats/unreal/mesh.md),
-  `reluva-tool ue-points`). With them, Kira holds the phaser rifle at
+- The IK chains' ends (where a hand reaches from) are still Reluva's
+  reading: the hand's point from its triangle's middle, in the axes of
+  the bone the triangle moves with. How Engine.dll's IK takes them
+  wasn't read, and the natives' frame above moves the arms. Points from
+  the origin are in the skeleton's units
+  ([mesh.md](../formats/unreal/mesh.md), `reluva-tool ue-points`). With them, Kira holds the phaser rifle at
   her hip, the right hand on its grip at the back and the left under the
   barrel. That needed `Rotator * Rotator` (The Fallen's own operator,
   `Object.uc`'s native 292) to turn the second rotator on in the
