@@ -1352,6 +1352,35 @@ void ScriptLevel::interpolate(VmObject* a, float dt) {
                 *p = vm_.rotatorValue(rot[0] & 0xffff, rot[1] & 0xffff, rot[2] & 0xffff);
         }
         alpha->f = t;
+        // The points' game speed (the level's TimeDilation), and for a
+        // player its view's field (its class's FovAngle times the points'
+        // FovModifier) and screen flash, blended by the way along.
+        auto lerp = [&](const char* name, float otherwise) {
+            const float a0 = num(from, name, otherwise);
+            return a0 + (num(to, name, otherwise) - a0) * t;
+        };
+        if (VmObject* li = levelInfo_)
+            if (Value* d = prop(li, "TimeDilation"))
+                *d = Value::floatValue(lerp("GameSpeedModifier", 1));
+        if (vm_.isA(a, "PlayerPawn")) {
+            const float flash = lerp("ScreenFlashScale", 1);
+            const Value* f0 = prop(from, "ScreenFlashFog");
+            const Value* f1 = prop(to, "ScreenFlashFog");
+            const Vec fog0 = f0 ? Vm::vectorOf(*f0) : Vec{}, fog1 = f1 ? Vm::vectorOf(*f1) : Vec{};
+            const Vec fog = add(fog0, mul(sub(fog1, fog0), t));
+            for (const char* name : {"FlashScale"})
+                if (Value* p = prop(a, name))
+                    vm_.setVector(*p, flash, flash, flash);
+            if (Value* p = prop(a, "DesiredFlashScale"))
+                *p = Value::floatValue(flash);
+            for (const char* name : {"FlashFog", "DesiredFlashFog"})
+                if (Value* p = prop(a, name))
+                    vm_.setVector(*p, fog[0], fog[1], fog[2]);
+            if (const VmProperty* fp = a->cls->findProperty(vm_.name("FovAngle"));
+                fp && size_t(fp->slot) < a->cls->defaults.size())
+                if (Value* p = prop(a, "FovAngle"))
+                    *p = Value::floatValue(a->cls->defaults[size_t(fp->slot)].asFloat() * lerp("FovModifier", 1));
+        }
         left -= spent;
         if (!past)
             break;
