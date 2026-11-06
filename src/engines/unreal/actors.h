@@ -124,6 +124,7 @@ struct SpriteActor {
     Vec3f location{}, prePivot{};
     float drawScale = 1;
     float scaleGlow = 1; // its brightness
+    Vec3f colorFilter{1, 1, 1}; // ColorFilter: its tint (Render.dll's DrawActorSprite)
     uint8_t style = kStyleNormal;
     bool vertical = false; // turns about the vertical only (DT_VerticalSprite)
     bool unlit = false;    // drawn at full brightness, not lit where it stands

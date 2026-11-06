@@ -280,14 +280,16 @@ void ScriptLevel::moveMultiMeshes(VmObject* actor, float dt) {
                 *p = *t;
         setBool(c, "bUse", true);
     };
-    // Turned about `axis` keeping its speed (a trail's or cinder's curl).
+    // Turned about `axis` keeping its speed (a trail's or cinder's curl):
+    // the axis crossed with the way it goes (axis x direction, as the
+    // engine's sums run), added on and scaled back to its speed.
     auto curl = [&](VmObject* mm, const Vec& axis, float by) {
         const Vec v = vec(mm, "Velocity");
         const float speed = length(v);
         if (speed <= 0)
             return;
         const Vec d = normal(v);
-        const Vec c{d[1] * axis[2] - d[2] * axis[1], d[2] * axis[0] - d[0] * axis[2], d[0] * axis[1] - d[1] * axis[0]};
+        const Vec c{axis[1] * d[2] - axis[2] * d[1], axis[2] * d[0] - axis[0] * d[2], axis[0] * d[1] - axis[1] * d[0]};
         setv(mm, "Velocity", mul(normal(add(v, mul(c, by))), speed));
     };
     // The explosions' smoke textures (CTVE_EXP_Smoke's Tex, FadeTex,
@@ -1237,14 +1239,30 @@ void ScriptLevel::fallenPhysics(VmObject* a, int physics, float dt) {
         return;
     case kPhysExpTrail:
         // An explosion's trail flies by its velocity and acceleration,
-        // through everything.
+        // through everything, then curls (its copies' base: Angle the
+        // trail's torque, Acceleration the axis, which its scripts change):
+        // the axis crossed with the way it goes, by dt x Angle x 2500,
+        // kept to its speed.
         v = add(v, mul(accel, dt));
-        vm_.setVector(*velocityValue, v[0], v[1], v[2]);
         {
             const Vec l = add(Vm::vectorOf(*loc), mul(v, dt));
             vm_.setVector(*loc, l[0], l[1], l[2]);
             updateRegion(a);
         }
+        if (const Value* head = prop(a, "MultiMesh"); head && head->asObject()) {
+            VmObject* base = head->asObject();
+            const Value* torque = prop(base, "Angle");
+            const float speed = length(v);
+            if (torque && torque->asFloat() != 0 && speed > 0) {
+                const Vec axis = prop(base, "Acceleration") ? Vm::vectorOf(*prop(base, "Acceleration")) : Vec{};
+                const Vec d = normal(v);
+                const Vec c{axis[1] * d[2] - axis[2] * d[1], axis[2] * d[0] - axis[0] * d[2], axis[0] * d[1] - axis[1] * d[0]};
+                v = add(v, mul(c, dt * torque->asFloat() * 2500));
+                if (length(v) > 0)
+                    v = mul(normal(v), speed);
+            }
+        }
+        vm_.setVector(*velocityValue, v[0], v[1], v[2]);
         return;
     case kPhysInterpolating:
     case kPhysCtveInterpolating:

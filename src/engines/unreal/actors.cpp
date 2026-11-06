@@ -311,6 +311,7 @@ std::vector<SpriteActor> findSpriteActors(const PackageSet& packages, const Pack
         props.vector("Location", a.location);
         props.vector("PrePivot", a.prePivot);
         a.scaleGlow = props.number("ScaleGlow", 1);
+        props.vector("ColorFilter", a.colorFilter);
         a.style = props.byte("Style", kStyleNormal);
         a.vertical = drawType == kDrawVerticalSprite;
         a.unlit = props.boolean("bUnlit");

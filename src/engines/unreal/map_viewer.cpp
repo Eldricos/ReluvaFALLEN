@@ -644,8 +644,10 @@ void MapViewer::load(int index) {
             for (float& c : light)
                 c = std::min(c, kMaxLight);
         }
+        // Tinted as a live one is (spriteTint: its ColorFilter and glow).
+        const std::array<float, 3> tint = spriteTint({a.colorFilter[0], a.colorFilter[1], a.colorFilter[2]}, a.scaleGlow);
         for (size_t k = 0; k < 3; ++k)
-            d.color[k] = light[k] * a.scaleGlow * kExposure;
+            d.color[k] = light[k] * tint[k];
         sprites_.push_back(d);
     }
     {

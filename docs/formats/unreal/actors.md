@@ -117,8 +117,8 @@ taken as it is. A MultiMesh copy (`DrawActorSpriteMM`) puts its own
 `ColorFilter`, glow, texture, style and place on the actor for that
 one draw. 71 of the game's classes set `ColorFilter`: steam, smoke,
 sparks, projectiles' trails and others. Reluva drew them all untinted
-until November 2026. The sprites placed in the maps and drawn before
-the scripts run are still drawn untinted.
+until November 2026. The sprites placed in the maps, drawn before the
+scripts run, are tinted the same way.
 
 Most actors are sprites by default (Engine.Actor's `DrawType`), but
 those only the editor shows are `bHidden`, or hide themselves when the

@@ -492,7 +492,7 @@ the rest are Reluva's reading of what the scripts set and leave undone.
 | Particle | No gravity: its velocity changed by its acceleration (a ship lifting off, debris settled), moved through everything, with no events. One that makes copies stays where its scripts put it. |
 | Newtonian | Free flight by momentum. A pawn (the Vulture, the Wraith, the Arachnid): `calcVelocity` with no friction (its velocity steered toward its acceleration, at most `AccelRate`, up to `AirSpeed` times `DesiredSpeed` if not a player); an actor (a thrown drum) keeps its velocity, which only its scripts change. On a wall a pawn steps up a low one; else the wall is told (`processHitWall`) and it slides, a second wall told and the move bent along both. A pawn's velocity is then what it moved. |
 | Fish | As an AI swimmer (kept in the water), then pulled on toward its `Destination` when that's over 20 away (`AccelRate`; the pull also kept in `LastSeenPos`), held to `WaterSpeed` and facing the way it swims with no roll; its velocity not what it moved. |
-| EXP_Trail | An explosion's trail: by its velocity and acceleration, through everything. |
+| EXP_Trail | An explosion's trail: by its velocity and acceleration, through everything; then curling (its copies' base: `Angle` the torque, `Acceleration` the axis its scripts change), the axis crossed with the way it goes by dt x Angle x 2500, kept to its speed. |
 | The rest | Only their copies move (see Effects). |
 
 Walls are told as the engine's `processHitWall`: nothing for a pawn
@@ -1256,7 +1256,9 @@ known.
     last.
   - Particle: pushed by the generator's `Forces` and `WindForce`
     (whatever `bIsWindy` says, and on top of the `Acceleration` its
-    scripts set), slowed by `DeltaSpeed`, growing by `DeltaSize`; in
+    scripts set, which `CTVE_Generator.Generate` makes `Forces`: so twice
+    `Forces`, as physSmoke too adds the copy's `Acceleration` and the
+    generator's `Forces` and wind), slowed by `DeltaSpeed`, growing by `DeltaSize`; in
     its last second shrinking (`bFadeSize`) and fading to nothing from
     `MaxScaleGlow` (`bFadeGlow`). Without a generator both fades.
   - Smoke: pushed by `Forces` and wind, fading in its last second
@@ -1311,7 +1313,9 @@ known.
     back up) and EXP_Column (growing by its `Phase`, at least 0.3) the
     same.
   - EXP_Cinder, EXP_Particle: flickering between the base's colours and
-    in brightness, curling about their `Vect2` (the base's `Angle`),
+    in brightness, curling about their `Vect2` (the base's `Angle`: the
+    axis crossed with the way it goes, kept to its speed; the order read
+    from the opcodes, `fsubp st(1),st0`),
     each leaving a trail of embers; cinders jostled now and then.
   - PlasmaThrower: drawn onto the thrower's axis until 50 short of what
     it hits (`MMEventLocation`), then bounced off it (`WindDir`, the
