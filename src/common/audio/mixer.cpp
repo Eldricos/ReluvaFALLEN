@@ -230,21 +230,32 @@ void Mixer::mix(int16_t* out, int frames) {
             // smpl), else all of it.
             const bool ownLoop = c.loop && s.loopEnd > s.loopStart;
             const double loopFrom = ownLoop ? double(s.loopStart) : 0, loopTo = ownLoop ? double(s.loopEnd) : double(n);
+            // Ended (not looping): done, or with a reverb its tail first,
+            // the reverb fed silence.
+            bool silent = false;
             if (c.position >= (c.loop ? loopTo : double(n))) {
                 if (!c.loop) {
-                    c.done = true;
-                    break;
+                    if (c.reverb && c.tailLeft < 0)
+                        c.tailLeft = std::floor(double(c.reverb->params.tail) * double(outputRate_));
+                    if (!c.reverb || c.tailLeft < 1) {
+                        c.done = true;
+                        break;
+                    }
+                    c.tailLeft -= 1;
+                    silent = true;
+                } else {
+                    c.position = loopFrom + std::fmod(c.position - loopFrom, loopTo - loopFrom);
                 }
-                c.position = loopFrom + std::fmod(c.position - loopFrom, loopTo - loopFrom);
             }
             // Linear interpolation towards the next frame (the loop's
             // start, when looping past its end; else the last holds).
-            const size_t f = size_t(c.position);
-            const size_t g = ownLoop ? (double(f + 1) < loopTo ? f + 1 : s.loopStart)
-                                     : (f + 1 < n ? f + 1 : (c.loop ? 0 : f));
-            const double t = c.position - double(f);
-            double l = sample(f, 0) * (1 - t) + sample(g, 0) * t;
-            double r = ch > 1 ? sample(f, 1) * (1 - t) + sample(g, 1) * t : l;
+            const size_t f = silent ? 0 : size_t(c.position);
+            const size_t g = silent ? 0
+                             : ownLoop ? (double(f + 1) < loopTo ? f + 1 : s.loopStart)
+                                       : (f + 1 < n ? f + 1 : (c.loop ? 0 : f));
+            const double t = silent ? 0 : c.position - double(f);
+            double l = silent ? 0 : sample(f, 0) * (1 - t) + sample(g, 0) * t;
+            double r = silent ? 0 : ch > 1 ? sample(f, 1) * (1 - t) + sample(g, 1) * t : l;
             if (muffled) { // one pole: each output moves part way to the input
                 c.lowL += k * (l - c.lowL);
                 c.lowR += k * (r - c.lowR);
@@ -258,13 +269,19 @@ void Mixer::mix(int16_t* out, int frames) {
                 l = c.biquad.run(0, l);
                 r = ch > 1 ? c.biquad.run(1, r) : l;
             }
+            // Its volume and side.
+            l *= double(gainL) / 65536.0;
+            r *= double(gainR) / 65536.0;
             if (c.reverb) {
-                // Its input (the sound mono; a stereo one's sides summed),
-                // delayed, damped, through the combs side by side, then
-                // the all-passes in turn (the second's input a quarter of
-                // the first's output on the left, 0.15 on the right).
+                // As Miles' reverb filter on a sample: fed what the sample
+                // mixes, its two sides summed (a sound in the middle twice
+                // as strongly as one at a side), delayed, damped, through
+                // the combs side by side, then the all-passes in turn (the
+                // second's input a quarter of the first's output on the
+                // left, 0.15 on the right); out, the dry part less the
+                // wet's share and the wet.
                 Channel::ReverbState& rv = *c.reverb;
-                double x = ch > 1 ? l + r : l;
+                double x = l + r;
                 const double delayed = rv.pre[rv.preAt];
                 rv.pre[rv.preAt] = x;
                 rv.preAt = (rv.preAt + 1) % rv.pre.size();
@@ -291,8 +308,8 @@ void Mixer::mix(int16_t* out, int frames) {
                 l = l * (1 - mixWet) + wetL * mixWet;
                 r = r * (1 - mixWet) + wetR * mixWet;
             }
-            accumulator_[size_t(i) * 2] += int32_t(std::lround(l * double(gainL) / 65536.0));
-            accumulator_[size_t(i) * 2 + 1] += int32_t(std::lround(r * double(gainR) / 65536.0));
+            accumulator_[size_t(i) * 2] += int32_t(std::lround(l));
+            accumulator_[size_t(i) * 2 + 1] += int32_t(std::lround(r));
             c.position += step;
         }
     }

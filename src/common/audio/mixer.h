@@ -62,8 +62,10 @@ public:
     // A reverb on it (a Schroeder reverb: four combs, two all-passes),
     // `mix` of it wet (0 none): `seconds` for its tail to fall 60 dB,
     // the wet sound low-passed at `dampHz`, after `predelay` seconds.
+    // `tail`: how long it goes on through silence once the sound has
+    // ended (not looping), its echoes dying away.
     struct Reverb {
-        float mix = 0, seconds = 3, dampHz = 5000, predelay = 0;
+        float mix = 0, seconds = 3, dampHz = 5000, predelay = 0, tail = 0;
     };
     void setReverb(SoundHandle handle, const Reverb& reverb);
     // Moves it to `frame` of its own frames (past the end: it ends, or
@@ -111,6 +113,7 @@ private:
             size_t pass1At = 0, pass2At[2] = {};
         };
         std::shared_ptr<ReverbState> reverb; // none: dry
+        double tailLeft = -1;                // output frames of reverb tail still to go (-1: not begun)
     };
     void setUpReverb(Channel& c, const Reverb& r) const;
     Channel* find(SoundHandle handle);

@@ -55,6 +55,10 @@ private:
     // listener's taken off), mixed flat (`flat`: the driver's own) or
     // positional (its 3D provider's).
     float doppler(const Vec3f& at, const Vec3f& velocity, bool flat) const;
+    Vec3f listenerSpace(const Vec3f& at) const;
+    int positionalPan(const Vec3f& at) const;
+    float behind(const Vec3f& at) const;
+    static float reverbTail(const audio::Sound& sound);
 
     LevelPlay::Room room_;            // where the listener is
     audio::Mixer::Reverb reverb_;     // that room's reverb on a positional sound
@@ -65,8 +69,8 @@ private:
     const PackageSet& packages_;
     std::map<std::pair<const Package*, int>, std::shared_ptr<const audio::Sound>> sounds_; // null: unreadable
 
-    Vec3f listener_{}, right_{0, 1, 0}, forward_{1, 0, 0};
-    bool stereo_ = true, reverse_ = false;
+    Vec3f listener_{}, right_{0, 1, 0}, forward_{1, 0, 0}, up_{0, 0, 1};
+    bool stereo_ = true, reverse_ = false, surround_ = false;
     int channels_ = 16;
     float musicSetting_ = 1; // MusicVolume / 255
 
@@ -81,6 +85,7 @@ private:
         bool filtered = false; // mixed flat (2D), not positional (3D)
         bool speech = false;   // a voice: no Doppler
         float obstruction = 0, pitch = 1;
+        float tail = 0; // its reverb's tail once it has ended (seconds)
         ObjectRef sound;
     };
     std::vector<Playing> playing_;

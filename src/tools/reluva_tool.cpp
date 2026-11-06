@@ -5883,6 +5883,16 @@ int cmdUeCheck(int argc, char** argv) {
                 if (err)
                     err.message = pkg->path(int32_t(i) + 1) + ": " + err.message;
                 record(from.empty() ? "sounds" : "sounds (streamed from mp3/)", err);
+                // What Miles' positional provider refuses (stereo, not
+                // PCM: only ever played flat), and the 8-bit ones.
+                if (!err && from.empty()) {
+                    if (s.channels == 2)
+                        ++tallies["sounds in stereo"].ok;
+                    if (s.format != 1)
+                        ++tallies["sounds not PCM (IMA ADPCM)"].ok;
+                    if (s.sourceBits == 8)
+                        ++tallies["sounds of 8 bits"].ok;
+                }
                 // A WAV's own loop (its smpl chunk, with a loop in it).
                 if (EmbeddedFile f; !readEmbeddedFile(*pkg, int(i), f) && f.data.size() > 12) {
                     for (size_t at = 12; at + 8 <= f.data.size();) {

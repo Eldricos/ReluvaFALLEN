@@ -53,11 +53,55 @@ audio::Mixer::Reverb reverbOf(const LevelPlay::Room& room) {
 
 } // namespace
 
+// Where a sound is as the driver hands it to its 3D provider: in the
+// listener's axes (x right, y up, z ahead), x the other way with
+// ReverseStereo, z made positive without UseSurround (all ahead), x and
+// y nothing without UseStereo.
+Vec3f LevelAudio::listenerSpace(const Vec3f& at) const {
+    const Vec3f d{at[0] - listener_[0], at[1] - listener_[1], at[2] - listener_[2]};
+    Vec3f p{dot(d, right_) * (reverse_ ? -1.0f : 1.0f), dot(d, up_), dot(d, forward_)};
+    if (!surround_)
+        p[2] = std::fabs(p[2]);
+    if (!stereo_)
+        p[0] = p[1] = 0;
+    return p;
+}
+
+// The 3D provider's side for a positional sound (Miles' fast 2D
+// positional): x over the whole distance (height pulls it to the middle
+// too), through its table of 127 - acos(...) x 127 / pi, as Miles' pan
+// 0..127; then Miles' pan law, the near side full and the far side
+// 2 x pan / 128 up to the middle. As the mixer's pan.
+int LevelAudio::positionalPan(const Vec3f& at) const {
+    const Vec3f p = listenerSpace(at);
+    const float len = std::sqrt(dot(p, p));
+    int pan = 64;
+    if (len * 0.01905f > 0.0001f) {
+        const float d = std::clamp(p[0] / len, -1.0f, 1.0f);
+        const int i = int(std::lround((d + 1) * 1024));
+        const double a = std::acos(double(i) / 1024 - 1);
+        pan = std::clamp(127 - int(std::ceil(a * 127 / 3.14159265358979)), 0, 127);
+    }
+    auto t = [](int i) { return i <= 62 ? 2 * i : 128; };
+    const float left = float(t(127 - pan)) / 128, right = float(t(pan)) / 128;
+    if (right < 1)
+        return -int(std::lround((1 - right) * audio::kMaxPan));
+    if (left < 1)
+        return int(std::lround((1 - left) * audio::kMaxPan));
+    return 0;
+}
+
+// The 3D provider's: a sound behind the listener at 71% (only with
+// UseSurround: without it the driver puts every sound ahead).
+float LevelAudio::behind(const Vec3f& at) const { return listenerSpace(at)[2] < 0 ? 0.71f : 1.0f; }
+
 // Doppler, as the driver has it for a sound it mixes flat: 1 - the
 // sound's speed toward the listener / DopplerSpeed, within 0.5 to 2.
 // For a positional one its 3D provider's (Miles' fast 2D positional):
 // the whole speed (not along the line), a sound of 0.355 / 5.715e-6
-// units a second (about 62,100), lower moving away, higher toward.
+// units a second (about 62,100), lower moving away, higher toward,
+// unclamped; away or toward from where it's handed the sound (ahead,
+// without UseSurround) and its velocity in the listener's axes.
 float LevelAudio::doppler(const Vec3f& at, const Vec3f& velocity, bool flat) const {
     const Vec3f d{at[0] - listener_[0], at[1] - listener_[1], at[2] - listener_[2]};
     const float speed2 = dot(velocity, velocity);
@@ -69,9 +113,20 @@ float LevelAudio::doppler(const Vec3f& at, const Vec3f& velocity, bool flat) con
             return 1;
         return std::clamp(1 - dot(d, velocity) / len / dopplerSpeed_, 0.5f, 2.0f);
     }
-    const Vec3f after{d[0] + velocity[0], d[1] + velocity[1], d[2] + velocity[2]};
-    const float s = std::sqrt(speed2) * 5.715e-6f * (dot(after, after) > dot(d, d) ? 1.0f : -1.0f);
+    const Vec3f p = listenerSpace(at);
+    const Vec3f v{dot(velocity, right_), dot(velocity, up_), dot(velocity, forward_)};
+    const Vec3f after{p[0] + v[0], p[1] + v[1], p[2] + v[2]};
+    const float s = std::sqrt(speed2) * 5.715e-6f * (dot(after, after) > dot(p, p) ? 1.0f : -1.0f);
     return 0.355f / std::max(0.355f + s, 0.01f);
+}
+
+// How long the provider keeps a sound's reverb going once its data has
+// run out: it streams it in 32 KB buffers (of the sound as 16-bit
+// stereo, 8-bit for an 8-bit one), padding with silence until its sixth
+// refill: about five buffers.
+float LevelAudio::reverbTail(const audio::Sound& s) {
+    const int bytes = s.sourceBits == 8 ? 1 : 2;
+    return s.rate > 0 ? 5 * 32768.0f / (float(s.rate) * 2 * float(bytes)) : 0;
 }
 
 LevelAudio::LevelAudio(audio::Mixer& mixer, const PackageSet& packages) : mixer_(mixer), packages_(packages) {}
@@ -203,12 +258,14 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
     const float pitch = float(facing.pitch) * 6.2831853f / 65536;
     right_ = {-std::sin(yaw), std::cos(yaw), 0};
     forward_ = {std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), std::sin(pitch)};
+    up_ = {-std::sin(pitch) * std::cos(yaw), -std::sin(pitch) * std::sin(yaw), std::cos(pitch)};
     auto flag = [&](const char* key, bool otherwise) {
         const std::string v = play.audioSetting(key);
         return v.empty() ? otherwise : (v == "1" || v == "True" || v == "true" || v == "TRUE");
     };
     stereo_ = flag("UseStereo", true);
     reverse_ = flag("ReverseStereo", false);
+    surround_ = flag("UseSurround", false);
     {
         const std::string v = play.audioSetting("DopplerSpeed");
         dopplerSpeed_ = v.empty() ? 35000 : std::strtof(v.c_str(), nullptr);
@@ -292,7 +349,8 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
         const float loud = p.everywhere ? float(std::min(100, int(p.volume * 100))) / 127
                                         : loudness(p.at, p.radius, p.volume);
         p.handle = mixer_.play(sound, r.speech ? audio::SoundType::Speech : audio::SoundType::Effects, volumeOf(loud),
-                               p.everywhere ? 0 : panOf(p.at, p.radius), r.loop);
+                               p.everywhere ? 0 : p.filtered ? panOf(p.at, p.radius) : positionalPan(p.at), r.loop);
+        p.tail = r.loop ? 0 : reverbTail(*sound);
         if (p.handle == audio::kNoSound)
             continue;
         if (r.pitch != 1)
@@ -312,11 +370,14 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
     // Those playing follow their actors (one gone is heard where it was),
     // quietened by their ObstructionFactor when the level's walls stand
     // between them and the listener. A positional one: in the room's
-    // reverb, at 71% from behind the listener (its 3D provider's), its
-    // Doppler the provider's; a flat one's the driver's.
+    // reverb, its side, Doppler and 71% from behind (with UseSurround) the
+    // 3D provider's; a flat one's side and Doppler the driver's.
     for (Playing& p : playing_) {
-        if (!p.filtered)
-            mixer_.setReverb(p.handle, reverb_);
+        if (!p.filtered) {
+            audio::Mixer::Reverb rv = reverb_;
+            rv.tail = p.tail;
+            mixer_.setReverb(p.handle, rv);
+        }
         if (p.everywhere)
             continue;
         if (p.actor && !play.locationOf(p.actor, p.at))
@@ -324,11 +385,10 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
         float loud = loudness(p.at, p.radius, p.volume);
         if (p.obstruction > 0 && loud > 0 && play.wallBetween(listener_, p.at))
             loud *= 1 - p.obstruction;
-        const Vec3f d{p.at[0] - listener_[0], p.at[1] - listener_[1], p.at[2] - listener_[2]};
-        if (!p.filtered && dot(d, forward_) < 0)
-            loud *= 0.71f;
+        if (!p.filtered)
+            loud *= behind(p.at);
         mixer_.setVolume(p.handle, volumeOf(loud));
-        mixer_.setPan(p.handle, panOf(p.at, p.radius));
+        mixer_.setPan(p.handle, p.filtered ? panOf(p.at, p.radius) : positionalPan(p.at));
         mixer_.setPitch(p.handle, p.pitch * doppler(p.at, relative(p.actor, p.speech), p.filtered));
     }
 
@@ -399,14 +459,12 @@ void LevelAudio::update(LevelPlay& play, const Vec3f& listener, const Rotator& f
         const bool positional = !am.music && !am.streamed;
         float doppled = 1;
         if (positional) {
-            const Vec3f d{a.at[0] - listener_[0], a.at[1] - listener_[1], a.at[2] - listener_[2]};
-            if (dot(d, forward_) < 0)
-                loud *= 0.71f;
+            loud *= behind(a.at);
             doppled = doppler(a.at, relative(a.actor, false), false);
         }
         mixer_.setReverb(am.handle, positional ? reverb_ : audio::Mixer::Reverb{});
         mixer_.setVolume(am.handle, volumeOf(loud));
-        mixer_.setPan(am.handle, am.music ? 0 : panOf(a.at, a.radius));
+        mixer_.setPan(am.handle, am.music ? 0 : positional ? positionalPan(a.at) : panOf(a.at, a.radius));
         mixer_.setPitch(am.handle, a.pitch * doppled);
     }
     // Ambient music faded out, or whose actor is gone.

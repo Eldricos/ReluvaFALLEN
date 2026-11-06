@@ -1189,8 +1189,15 @@ per-frame `Update`), as read from them; the code is Reluva's own.
   - **Loudness:** its volume × (1 − distance / `Radius`), in hundredths of
     the driver's 127, at most 100; nothing beyond `Radius`. The SFX or
     speech volume (a sound named `DIALOG`) and the master go over it.
-  - **Side:** the angle off where the camera faces (one behind heard as
-    if in front), less within a tenth of the radius, as Miles' 0..127.
+  - **Side:** a flat sound's, the driver's: the angle off where the
+    camera faces (one behind heard as if in front), less within a tenth
+    of the radius, as Miles' 0..127. A positional one's, its 3D
+    provider's: where the driver hands it the sound (in the camera's
+    axes, x the other way with `ReverseStereo`; without `UseSurround`,
+    the default, every sound ahead), its x over its whole distance
+    (height pulls it to the middle too) through a table of 127 −
+    acos(...) × 127 / π; then Miles' pan law, the near side full and the
+    far side 2 × pan / 128 toward the middle.
   - **Following:** it's heard from where its actor is; one destroyed is
     heard where it was.
   - **Looping:** a sound whose name has `LOOPING` (the `Looping` groups)
@@ -1207,24 +1214,28 @@ per-frame `Update`), as read from them; the code is Reluva's own.
     doesn't decide it.)
   - **Walls:** either kind is quietened by its actor's
     `ObstructionFactor` (Pawn 0.4, CTVE_Pawn 0.7) while the level's walls
-    stand between it and the camera. A positional one behind the camera
-    is at 71% (the provider's; fairly sure). The provider's own distance
-    falloff never comes in (the driver sets its near and far both to
-    twice the radius).
+    stand between it and the camera. With `UseSurround` (off by
+    default), a positional one behind the camera is at 71% (the
+    provider's; without it the driver hands every sound over as ahead).
+    The provider's own distance falloff never comes in (the driver sets
+    its near and far both to twice the radius).
   - **Doppler:** its actor's `Velocity` less the listener's (the
     player's `ViewTarget`'s, else the player's); none for a voice. A
     flat sound's pitch is the driver's: times 1 − its speed toward the
     camera / `DopplerSpeed` (35,000), within 0.5 to 2. A positional
     one's is the provider's: the whole speed, not along the line, over
     a speed of sound of about 62,100 a second (0.355 / (0.355 ± speed ×
-    5.715e-6), lower moving away), unclamped.
+    5.715e-6), lower moving away), unclamped; away or toward judged
+    from where it's handed the sound (ahead, without `UseSurround`).
   - **Reverb** (`UseReverb`): the room where the camera is: in a water
     zone room 22 (Underwater) at 0.5, else the zone's `ZoneRoomType` at
     its `ZoneRoomFactor` (which the zone's script caps at 0.2; room 0
     none). Every positional sound goes through Miles' reverb filter
     (`Reverb3.flt`) with that room's settings, its wet share the zone's
-    level of the room's own mix: a Schroeder reverb, the sound (a
-    stereo one's sides summed) low-passed at the room's damping (of a
+    level of the room's own mix: a Schroeder reverb, fed what the sound
+    mixes once its volume and side are on (the two sides summed: one in
+    the middle twice as strongly as one at a side), low-passed at the
+    room's damping (of a
     quarter of 22,050 Hz, at least 200), through four combs side by side
     (29.7, 37.1, 41.1, 43.7 ms, each fed back at 0.001^(delay / the
     room's time)), then all-passes of 5 ms and 1.7 ms (0.7), the second
@@ -1232,7 +1243,23 @@ per-frame `Update`), as read from them; the code is Reluva's own.
     rooms are EAX 1's 26 (Room: 0.417 wet, 0.4 s; Hangar: 0.5, 10 s;
     Underwater: 1, 1.5 s, all damped). The zones' `bReverbZone`,
     `MasterGain`, `CutoffHz`, `Delay` and `Gain` aren't read. A flat
-    sound and the music have none. `ue-play`'s `sounds` says the room.
+    sound and the music have none. Once a sound's data has run out its
+    reverb goes on through silence: the provider streams it in 32 KB
+    buffers and pads with silence until the sixth refill, about five
+    buffers (1.9 s for a 22,050 Hz sound, twice that at 11,025 or for one
+    of 8 bits). `ue-play`'s `sounds` says the room.
+  - **The provider** (read from Miles.dll): with `Use3DHardware` the
+    driver tries the `AudioProvider` named, then two it knows, then
+    every 3D provider in the install's `redist\win32`, taking the first
+    that opens; none, and every sound plays flat. The install puts only
+    Miles' fast 2D positional provider (`Mssfast.m3d`) there (the
+    hardware ones, EAX, A3D, DirectSound 3D, are in `redist\win32\Extras`,
+    which Miles doesn't look in), so that's the one: Reluva's.
+    `UseFilter` does nothing (the filters always open), and the driver
+    always mixes at 22,050 Hz whatever `OutputRate` says. The provider
+    is read to refuse sounds in stereo; the game has none (`ue-check`:
+    of 2,868 sounds, none stereo, 2,836 IMA ADPCM, which it plays, so
+    they reach it decoded).
   - **The AI hears it** unless `bNoHearNoise`, or the sound is played
     from a function declared `simulated` (the function calling, not
     the actor's `Role`; state code isn't one), or on a network client

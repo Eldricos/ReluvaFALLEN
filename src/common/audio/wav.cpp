@@ -120,6 +120,7 @@ Error decodeWav(const std::vector<uint8_t>& d, Sound& out) {
         for (size_t i = 0; i + 1 < dataSize; i += 2)
             out.samples.push_back(int16_t(u16(d, data + i)));
     } else if (out.format == 1 && bits == 8) {
+        out.sourceBits = 8;
         for (size_t i = 0; i < dataSize; ++i)
             out.samples.push_back(int16_t((int(d[data + i]) - 128) << 8));
     } else if (out.format == 0x11 && bits == 4) {

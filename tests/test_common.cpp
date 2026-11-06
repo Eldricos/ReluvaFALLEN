@@ -263,8 +263,18 @@ static void testMixer() {
     int echoes = 0;
     for (size_t k = 2 * 640; k < tail.size(); k += 2)
         echoes += tail[k] != 0;
-    CHECK(echoes > 100 && tail[2 * 700] != tail[2 * 700 + 1]); // left and right differ
+    CHECK(echoes > 100 && tail[2 * 655] != tail[2 * 655 + 1]); // left and right differ
     m.stopAll();
+    // Its tail: once a short sound has ended, the reverb goes on through
+    // silence for the tail's time, then the sound is done.
+    std::vector<int16_t> blip(10, 0);
+    blip[0] = 10000;
+    const SoundHandle tb = m.play(make(22050, 1, blip), SoundType::Effects);
+    m.setReverb(tb, {0.5f, 1.5f, 5000, 0, 0.1f});
+    m.mix(tail.data(), 1000);
+    CHECK(m.isPlaying(tb) && tail[2 * 655] != 0);
+    m.mix(tail.data(), 2000);
+    CHECK(!m.isPlaying(tb));
     // Nothing to play.
     CHECK(m.play(nullptr, SoundType::Effects) == kNoSound && m.play(make(22050, 1, {}), SoundType::Effects) == kNoSound);
 }
