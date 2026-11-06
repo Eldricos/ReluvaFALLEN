@@ -154,6 +154,18 @@ Value* VmObject::find(Vm& vm, std::string_view property) {
     return p && size_t(p->slot) < values.size() ? &values[size_t(p->slot)] : nullptr;
 }
 
+Value* VmObject::findLiteral(Vm& vm, const char* property, size_t length) {
+    if (!cls)
+        return nullptr;
+    const Vm::LiteralKey key{cls, property};
+    auto it = vm.literalSlots.find(key);
+    if (it == vm.literalSlots.end()) {
+        VmProperty* p = cls->findProperty(vm.name(std::string_view(property, length)));
+        it = vm.literalSlots.emplace(key, p ? p->slot : -1).first;
+    }
+    return it->second >= 0 && size_t(it->second) < values.size() ? &values[size_t(it->second)] : nullptr;
+}
+
 const std::string& NativeCall::s(size_t k) const {
     static const std::string empty;
     return k < args.size() ? args[k].s : empty;

@@ -35,6 +35,8 @@
 //           Up/Down move through its exports (PageUp/PageDown, Home/End),
 //           Enter shows the selected export's properties.
 
+#include <unordered_set>
+
 #include "engines/unreal/actors.h"
 #include "engines/unreal/games.h"
 #include "engines/unreal/level_audio.h"
@@ -271,6 +273,61 @@ private:
     float time_ = 0, yaw_ = 0, pitch_ = 0.3f, distance_ = 200;
     int lastX_ = 0, lastY_ = 0;
     uint64_t lastMs_ = 0;
+};
+
+// The renderer as the Maps page draws with it, noting which textures its
+// draws used since asked last (UE1 ticks a procedural texture only as it's
+// drawn: UTexture::Get calls Update, which ticks it by the time since it
+// was last updated).
+class TextureUseRecorder : public gfx::Renderer3D {
+public:
+    explicit TextureUseRecorder(gfx::Renderer3D& to) : to_(to) {}
+    std::unordered_set<gfx::TextureId>& used() { return used_; }
+
+    Error createTexture(int width, int height, const uint8_t* rgba, const gfx::TextureParams& params,
+                        gfx::TextureId& out) override {
+        return to_.createTexture(width, height, rgba, params, out);
+    }
+    void destroyTexture(gfx::TextureId id) override { to_.destroyTexture(id); }
+    Error updateTextures(const std::vector<gfx::TextureRegion>& regions) override { return to_.updateTextures(regions); }
+    Error createMesh(const std::vector<gfx::Vertex>& vertices, const std::vector<uint32_t>& indices,
+                     gfx::MeshId& out) override {
+        return to_.createMesh(vertices, indices, out);
+    }
+    Error createIndexedMesh(gfx::MeshId vertices, const std::vector<uint32_t>& indices, gfx::MeshId& out) override {
+        return to_.createIndexedMesh(vertices, indices, out);
+    }
+    Error setMeshIndices(gfx::MeshId id, const std::vector<uint32_t>& indices) override {
+        return to_.setMeshIndices(id, indices);
+    }
+    void destroyMesh(gfx::MeshId id) override { to_.destroyMesh(id); }
+    int width() const override { return to_.width(); }
+    int height() const override { return to_.height(); }
+    std::string deviceName() const override { return to_.deviceName(); }
+    void beginFrame(const gfx::Mat4& viewProj, const gfx::Vec3& eye, Color clear) override {
+        to_.beginFrame(viewProj, eye, clear);
+    }
+    void draw(const gfx::DrawCall& call) override {
+        if (call.texture)
+            used_.insert(call.texture);
+        to_.draw(call);
+    }
+    void setView(const gfx::Mat4& viewProj, const gfx::Vec3& eye) override { to_.setView(viewProj, eye); }
+    void setDynamicLights(const std::vector<gfx::DynamicLight>& lights) override { to_.setDynamicLights(lights); }
+    void setVolumeLights(const std::vector<gfx::DynamicLight>& lights) override { to_.setVolumeLights(lights); }
+    void setViewport(int x, int y, int w, int h) override { to_.setViewport(x, y, w, h); }
+    void setDepthRange(float maxDepth) override { to_.setDepthRange(maxDepth); }
+    void clearDepth() override { to_.clearDepth(); }
+    void clearDepthAndStencil() override { to_.clearDepthAndStencil(); }
+    bool hasStencil() const override { return to_.hasStencil(); }
+    void setStencilMode(StencilMode mode, uint8_t level = 1) override { to_.setStencilMode(mode, level); }
+    void setMirrored(bool mirrored) override { to_.setMirrored(mirrored); }
+    void setGamma(float gamma) override { to_.setGamma(gamma); }
+    void endFrame(const Surface* overlay) override { to_.endFrame(overlay); }
+
+private:
+    gfx::Renderer3D& to_;
+    std::unordered_set<gfx::TextureId> used_;
 };
 
 class MapViewer : public Page {
@@ -585,6 +642,8 @@ private:
     // Fire, water, wet, ice and FLC textures, playing.
     void updateAnimatedTextures(float dt);
     std::vector<std::pair<gfx::TextureId, std::unique_ptr<AnimatedTexture>>> animatedTextures_;
+    std::vector<float> animatedSince_; // each one's time since it was last ticked
+    std::unique_ptr<TextureUseRecorder> recorder_; // renderer_ while shown: what's drawn
 
     // Fly camera, in the renderer's world: Unreal's axes with Y negated
     // (so right-handed), Z up; yaw 0 looks along +X.

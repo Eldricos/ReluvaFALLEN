@@ -211,6 +211,13 @@ struct VmObject {
     bool timerLoop = false;
 
     Value* find(Vm& vm, std::string_view property);
+    // A property named by a string literal: its slot found once per class
+    // and remembered by the literal's address (the per-frame readings).
+    template <size_t N>
+    Value* find(Vm& vm, const char (&property)[N]) {
+        return findLiteral(vm, property, N - 1);
+    }
+    Value* findLiteral(Vm& vm, const char* property, size_t length);
 };
 
 inline VmObject* Value::asObject() const { return type == VType::Object && o && !o->deleted ? o : nullptr; }
@@ -383,6 +390,22 @@ private:
         size_t operator()(std::string_view s) const { return std::hash<std::string_view>{}(s); }
     };
     std::unordered_map<std::string, NameId, NameHash, std::equal_to<>> nameIds_;
+
+public:
+    // VmObject::find's literals: (class, the literal's address) to a slot, -1 none.
+    struct LiteralKey {
+        const VmClass* cls;
+        const char* text;
+        bool operator==(const LiteralKey& o) const { return cls == o.cls && text == o.text; }
+    };
+    struct LiteralHash {
+        size_t operator()(const LiteralKey& k) const {
+            return std::hash<const void*>()(k.cls) * 31 ^ std::hash<const void*>()(k.text);
+        }
+    };
+    std::unordered_map<LiteralKey, int, LiteralHash> literalSlots;
+
+private:
     std::map<std::pair<const Package*, int>, std::unique_ptr<VmStruct>> structs_;
     using IniFile = std::map<std::string, std::map<std::string, std::string>>; // section, key (lower case): value
     std::map<std::string, IniFile> iniFiles_;

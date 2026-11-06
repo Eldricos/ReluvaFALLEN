@@ -804,13 +804,23 @@ private:
         ++parity_;
         // The rows of this step's parity: half their diagonal neighbours'
         // sum less their own value, rounded down, and up by one below flat.
+        // (Rows and columns wrap; the rows above and below aren't this
+        // step's, so they're read as they were.)
+        const size_t fw = size_t(fw_);
         for (int r = parity_ & 1; r < h_; r += 2) {
             const int left = r & 1 ? 0 : -1; // the neighbours' first cell, from c
+            uint8_t* row = &field_[size_t(r) * fw];
+            const uint8_t* up = &field_[size_t((r + h_ - 1) % h_) * fw];
+            const uint8_t* down = &field_[size_t((r + 1) % h_) * fw];
             for (int c = 0; c < fw_; ++c) {
-                const int sum = at(r - 1, c + left) + at(r - 1, c + left + 1) + at(r + 1, c + left) +
-                                at(r + 1, c + left + 1);
-                const int i = sum - 2 * at(r, c) + 512; // 2-1532
-                at(r, c) = uint8_t(std::clamp(i / 2 + (i < 768 ? 1 : 0) - 256, 0, 255));
+                int a = c + left, b = a + 1;
+                if (a < 0)
+                    a += fw_;
+                if (b >= fw_)
+                    b -= fw_;
+                const int sum = up[a] + up[b] + down[a] + down[b];
+                const int i = sum - 2 * row[c] + 512; // 2-1532
+                row[c] = uint8_t(std::clamp(i / 2 + (i < 768 ? 1 : 0) - 256, 0, 255));
             }
         }
     }
@@ -823,12 +833,21 @@ private:
         const bool drawn = (r & 1) != (parity_ & 1);
         const int first = drawn ? r : r - 1; // the row whose cells' columns these are
         auto sum = [&](int c) { return drawn ? 2 * at(r, c) : at(r - 1, c) + at(r + 1, c); };
-        auto across = [&](int c) { return 2 * ((sum(c + 1) - sum(c - 1)) >> 1); };
+        // Each cell's difference across once (they wrap), then per pixel.
+        sums_.resize(size_t(fw_));
+        for (int c = 0; c < fw_; ++c)
+            sums_[size_t(c)] = sum(c);
+        across_.resize(size_t(fw_) + 1);
+        for (int c = 0; c < fw_; ++c)
+            across_[size_t(c)] = 2 * ((sums_[size_t((c + 1) % fw_)] - sums_[size_t((c + fw_ - 1) % fw_)]) >> 1);
+        across_[size_t(fw_)] = across_[0];
         const int offset = 1 + (((first % h_) + h_) % h_ & 1);
         out.resize(size_t(w_));
         for (int x = 0; x < w_; ++x) {
             const int k = (((x - offset) % w_) + w_) % w_;
-            out[size_t(x)] = k % 2 == 0 ? across(k / 2) : (across(k / 2) + across(k / 2 + 1)) / 2;
+            const int cell = (k / 2) % fw_;
+            out[size_t(x)] = k % 2 == 0 ? across_[size_t(cell)]
+                                        : (across_[size_t(cell)] + across_[size_t(cell) + 1]) / 2;
         }
     }
 
@@ -857,6 +876,7 @@ private:
     image::Image source_;
     const char* kind_;
     std::vector<uint8_t> field_;
+    std::vector<int> sums_, across_; // slopes' working rows
     std::array<uint8_t, 1024> table_{}; // the slope + 512: a wave's palette index, a wet's shift (signed)
     uint8_t parity_ = 0;
     bool masked_ = false;

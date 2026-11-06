@@ -146,6 +146,7 @@ void MapViewer::unload() {
     swappedSerial_ = -1;
     animatedLightmaps_.clear();
     animatedTextures_.clear();
+    animatedSince_.clear();
     changingLights_.clear();
     lightmapPages_.clear();
     textureCache_.clear();
@@ -158,7 +159,8 @@ void MapViewer::unload() {
 }
 
 void MapViewer::activate() {
-    if (Error err = ctx_.sys.init3D(kFrameW, kFrameH, renderer_)) {
+    gfx::Renderer3D* device = nullptr;
+    if (Error err = ctx_.sys.init3D(kFrameW, kFrameH, device)) {
         renderer_ = nullptr;
         ctx_.sys.initGraphics(ctx_.screen.w, ctx_.screen.h, PixelFormat::RGBA32);
         clear(16, 18, 24);
@@ -168,6 +170,8 @@ void MapViewer::activate() {
         setTitle("3D rendering not available");
         return;
     }
+    recorder_ = std::make_unique<TextureUseRecorder>(*device);
+    renderer_ = recorder_.get();
     overlay_.create(kFrameW, kFrameH, PixelFormat::RGBA32);
     load(index_);
 }
@@ -1474,11 +1478,25 @@ void MapViewer::drawSprites(const std::vector<SpriteDraw>& sprites, const gfx::V
 
 // Moves the fire, water, wet, ice and FLC textures on, uploading those that
 // changed.
+// Fire, water and the rest tick as UE1's do: only those drawn (since the
+// last time here), each by the time since it last ticked, so one unseen a
+// while takes that time at once. Their own pace allows one step for it.
 void MapViewer::updateAnimatedTextures(float dt) {
     std::vector<gfx::TextureRegion> regions;
-    for (const auto& [id, anim] : animatedTextures_)
-        if (anim->advance(dt))
+    animatedSince_.resize(animatedTextures_.size(), 0);
+    const std::unordered_set<gfx::TextureId>* used = recorder_ ? &recorder_->used() : nullptr;
+    for (size_t i = 0; i < animatedTextures_.size(); ++i) {
+        const auto& [id, anim] = animatedTextures_[i];
+        animatedSince_[i] += dt;
+        if (used && !used->count(id))
+            continue;
+        const float since = animatedSince_[i];
+        animatedSince_[i] = 0;
+        if (anim->advance(since))
             regions.push_back({id, 0, 0, anim->image().w, anim->image().h, anim->image().rgba.data()});
+    }
+    if (recorder_)
+        recorder_->used().clear();
     if (!regions.empty())
         renderer_->updateTextures(regions);
 }
