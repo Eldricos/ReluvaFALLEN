@@ -104,8 +104,20 @@ differs only in that way, Reluva follows its own scripts.
   Reluva drew sprites without their `ColorFilter`, so the puffs, piled
   up, came out white. Render.dll's `DrawActorSprite` takes the filter
   times the glow (actors.md). Now the glow is green-yellow, as in the
-  recording. The recording's is a little wider, as the puffs' sizes and
-  places are random.
+  recording.
+  - Since the steam's physics was read from Engine.dll (puffs at full
+    glow until their last half second), Reluva's glow is hotter at the
+    middle than the recording's: across it, green 255 over about 100
+    pixels, falling to half by 50 to each side, where the recording's is
+    a flat 200 to 240 over about 250. The puffs are made by the jet's own
+    scripts (`CTVE_Generator.Generate`, `DS9_SteamJet.SetUpMultiMesh`:
+    12 alive, growing 4 a second, `MaxScaleGlow` 1) and moved as the
+    engine does, and Render.dll adds translucent sprites to what's behind
+    (`DrawActorSprite`, its colour `ColorFilter` x glow). Twelve puffs
+    of the smoke texture (at most 91 grey) added up saturate the middle;
+    the recording's flat top looks like a renderer that doesn't add them
+    up so, as its other differences (the transporter skin) suggest. To
+    settle with footage of the original's own renderer.
 - **Across the levels after the lighting changes** (November 2026):
   every chapter's level was shot again 0.3, 2.3, 7.3 and 15.3 s after
   its start, and set against the shots from before and the recording.
@@ -129,8 +141,15 @@ differs only in that way, Reluva follows its own scripts.
     plain solid brushes, and Render.dll's actor lighting line-checks
     such a light from it to the actor (`UModel::LineCheck`, no extent).
     The recording shows the suit warm-white from the front, red from
-    behind, so a light Reluva doesn't give it yet still lights it there.
-    Open.
+    behind. Looked at again: no light gives that. Nothing between the
+    suit and the warm light is open (solid rock all the way), the zone
+    has no ambient light, the cut scene's camera is no light (its
+    distance fog effect with no `LightType`), and the transporter has
+    none. The warm-white frames are the beam-in's last second, while
+    the suit's skin fades in (`MultiTextureOneScaleGlow` 0.57 to 1): the
+    recording's renderer draws that skin as if unlit, full bright, as it
+    draws it solid from the start (the transporter skin, above). Once
+    the beam-in is over both light the suit red.
   - M11_WorfL1: Worf's suit is green now, from the two green lights 250
     across beside him, both in plain view. The recording plays the Ops
     cut scene there, so it can't say.
