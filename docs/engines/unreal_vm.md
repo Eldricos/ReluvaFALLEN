@@ -1942,6 +1942,21 @@ Not done:
     "before the layers": the solve is always after them.
   - A skeleton with no chains of its own or borrowed keeps Reluva's
     earlier two-bone solve. No other script sets IK.
+  - **A turn from another actor** (`C3DSetIkTargetOrientation(IkChain,
+    Target, RelRotation, ..)`): the native only stores the request (the
+    target by name, the rotator, the weight); each frame the engine
+    makes the target's `Rotation` into the character's space and
+    multiplies the axes of `RelRotation` (`GMath.UnitCoords /
+    RelRotation`, rows copied as they are) on before it, row-vector
+    style. So `RelRotation` is turned within the target's own axes, as
+    Reluva does (`inFrame`): no other axes or order (read at
+    0x1032ac30).
+  - **The feet** (`CTV_Player.ApplyFeetAlignment`): standing still
+    across a step, the player is lowered to the lower foot
+    (`FeetPivotZ`, `LocationOffset.Z`) and the higher leg's chain lifts
+    its foot back onto the step. Seen on M01_SiskoL1A across the
+    20-unit step at (960, 380): lowered by 19.9, the left knee bent with
+    its foot on the step, the right leg straight down to the floor.
 - Points from the origin are in the skeleton's units
   ([mesh.md](../formats/unreal/mesh.md), `reluva-tool ue-points`). With them, Kira holds the phaser rifle at
   her hip, the right hand on its grip at the back and the left under the

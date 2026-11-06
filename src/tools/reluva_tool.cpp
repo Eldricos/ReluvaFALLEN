@@ -5448,8 +5448,8 @@ int cmdUeTrace(int argc, char** argv) {
 // (115 to 160 up): each with the place to stand (Unreal's coordinates)
 // and the way to face, for trying them with ue-play's teleport.
 int cmdUeLedges(int argc, char** argv) {
-    if (argc != 4 && argc != 5) {
-        std::fprintf(stderr, "usage: reluva-tool ue-ledges <game folder> <map> [max]\n");
+    if (argc < 4 || argc > 6) {
+        std::fprintf(stderr, "usage: reluva-tool ue-ledges <game folder> <map> [max | ladders | lights <effect>]\n");
         return 2;
     }
     using namespace reluva::unreal;
@@ -5486,6 +5486,38 @@ int cmdUeLedges(int argc, char** argv) {
         const int z = zv.zoneAt(p, &solid);
         return !solid && z >= 0 && z < 64 && ((water >> z) & 1);
     };
+    // "lights <effect>": the level's lights with that LightEffect.
+    if (argc == 6 && std::string(argv[4]) == "lights") {
+        const int want = std::atoi(argv[5]);
+        const LevelLights lights = gatherLights(set, *pkg, model);
+        int count = 0;
+        for (const LightSource& l : lights.unique)
+            if (l.effect == want) {
+                ++count;
+                std::printf("light %s at %.1f %.1f %.1f radius %.0f colour %.2f %.2f %.2f%s\n",
+                            l.ref > 0 ? pkg->path(l.ref).c_str() : "?", double(l.position[0]), double(l.position[1]),
+                            double(l.position[2]), double(l.radius), double(l.color[0]), double(l.color[1]),
+                            double(l.color[2]), l.isStatic ? "" : ", not static");
+            }
+        // Any actor set so, lit or not (LightType 0 lights nothing).
+        for (size_t i = 0; i < pkg->exports().size(); ++i) {
+            std::vector<uint8_t> data;
+            if (pkg->readExport(int(i), data))
+                continue;
+            Reader r(data, size_t(pkg->exports()[i].serialOffset));
+            PropertyList props;
+            if (beginObject(*pkg, int(i), r, props))
+                continue;
+            const Property* e = props.find("LightEffect");
+            if (e && !e->data.empty() && e->data[0] == want) {
+                const Property* t = props.find("LightType");
+                std::printf("actor %s (%s): LightType %d\n", pkg->path(int(i) + 1).c_str(), pkg->className(int(i) + 1).c_str(),
+                            t && !t->data.empty() ? t->data[0] : 0);
+            }
+        }
+        std::printf("%d found\n", count);
+        return 0;
+    }
     // "ladders": each upright polygon with a ladder texture (TexTag
     // TT_Ladder), its width along the wall.
     if (argc == 5 && std::string(argv[4]) == "ladders") {
@@ -5529,7 +5561,9 @@ int cmdUeLedges(int argc, char** argv) {
         std::printf("%d found\n", count);
         return 0;
     }
-    const int most = argc == 5 ? std::atoi(argv[4]) : 40;
+    // "steps": low steps (8 to 24 up) to stand across instead.
+    const bool steps = argc == 5 && std::string(argv[4]) == "steps";
+    const int most = argc == 5 && !steps ? std::atoi(argv[4]) : 40;
     LevelCollision col(model);
     const float R = 17, H = 49.5f;
     const Vec3f stand{R, R, H};
@@ -5596,6 +5630,14 @@ int cmdUeLedges(int argc, char** argv) {
                 std::printf("swim %.1f %.1f %.1f yaw %d rise %.1f over water %.1f%s\n", double(foot[0]), double(foot[1]),
                             double(foot[2]), d * 45, double(rise), double(top.location[2] - surface),
                             open ? "" : " (no room over the water)");
+                continue;
+            }
+            if (steps) {
+                if (rise >= 8 && rise <= 24 && seen.insert(std::make_tuple(int(foot[0] / 64), int(foot[1] / 64), 300 + d)).second) {
+                    ++found;
+                    std::printf("step %.1f %.1f %.1f yaw %d rise %.1f wall at %.1f %.1f\n", double(foot[0]), double(foot[1]),
+                                double(foot[2]), d * 45, double(rise), double(wall.location[0]), double(wall.location[1]));
+                }
                 continue;
             }
             const bool clamber = rise > 30 && rise < 110, hang = rise > 115 && rise < 160;

@@ -170,7 +170,12 @@ Meshes are lit at each vertex, as the original's renderer does:
     (the rest are still looked at).
   - **Seen:** a light that isn't `bMovable` must see the actor: a line
     through the BSP from the actor's `Location` to the light (the
-    engine looks again for each light 1 frame in 16).
+    engine looks again for each light 1 frame in 16). A light with the
+    distance fog effect (`LE_DistanceFog`, 20) is taken without one. No
+    light in the game is such a one: of all the maps' actors only the
+    cut scenes' cameras (`CTVE_Camera`, by its class's defaults) have
+    that effect, with no `LightType`, so they light nothing, and no
+    script sets it.
   - **Fading:** each light fades in as it's taken and out as it isn't,
     a full fade in a third of a second (768 of 255 a second), and still
     lights the actor as it fades out. Seen walking the player across
@@ -180,7 +185,8 @@ Meshes are lit at each vertex, as the original's renderer does:
     a fade, as the code gives.
 - **No cylinder case**: the vertex lighting treats a cylinder light as
   any other, from where it is (only distance fog, `LE_DistanceFog`, is
-  set aside, to scale the light by the height below it).
+  set aside, to scale the light by the height below it; Reluva leaves
+  that out, as no light in the game has the effect).
 - **The vertex normals** are made each frame from the triangles' winding
   alone (DrawMesh, DrawLodMesh): per triangle `(p1 - p0) x (p2 - p0)` in
   the mesh's placed space, made one long, summed at its three vertices,

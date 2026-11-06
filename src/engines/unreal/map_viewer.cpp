@@ -2487,7 +2487,9 @@ void MapViewer::actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLi
         float was = fade && fade->lights.count(c.key) ? fade->lights[c.key] : 0;
         bool taken = false;
         if (c.importance >= threshold && (c.isStatic ? still : total) < 3) {
-            const bool sees = c.moves || !play_ || !play_->wallBetween(at, c.l->position);
+            // A distance fog light (LightEffect 20) needs no line to the
+            // actor (no light in the game is one).
+            const bool sees = c.moves || c.l->effect == 20 || !play_ || !play_->wallBetween(at, c.l->position);
             if (sees) {
                 taken = true;
                 ++total;
