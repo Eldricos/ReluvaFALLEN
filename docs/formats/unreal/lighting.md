@@ -150,18 +150,30 @@ being cut to 5 bits, if anything brighter). Not found yet.
 
 Meshes are lit at each vertex, as the original's renderer does:
 
-- **Its lights**: those whose radius reaches the actor by the straight
-  distance from the light to the actor's `Location` (Render.dll's light
-  list keeps a light whose radius squared is more than the distance
-  squared; a cylinder light is no different: a sky light far above lights
-  no actor), special lit ones only for a special lit actor, gathered from
-  the actor's cached list, its zone's lights and the dynamic ones; most
-  important first, importance (1 - distance / radius) x
-  `LightBrightness` (x 1024, as an integer); down to an eighth of the
-  first's; at most three that stay put (`bStatic`), and lights that move
-  only while it has fewer than three. A light that stays put must see
-  the actor's `Location`, no wall between (Reluva's: where the cached
-  list comes from isn't read).
+- **Its lights** (Render.dll's `SetupForActor`, read November 2026):
+  - **The candidates, in order:**
+    - the lights it was lit by last frame, which a cache keeps per actor
+      to fade them;
+    - the level's lights permeating its BSP leaf (`Leaves[Region.iLeaf]`
+      into the model's light list, made when the level's lighting was
+      built);
+    - the lights that move.
+  - **Kept:** a light whose radius squared is more than the straight
+    distance squared (a cylinder light is no different: a sky light far
+    above lights no actor), special lit ones only for a special lit
+    actor.
+  - **Weighed:** (1 - distance / radius) x `LightBrightness` (x 1024, as
+    an integer), most important first.
+  - **Taken:** at most three that stay put (`bStatic`), and lights that
+    don't stay put only while fewer than three are taken in all. One
+    under an eighth of the first *taken* light's weight is passed over
+    (the rest are still looked at).
+  - **Seen:** a light that isn't `bMovable` must see the actor: a line
+    through the BSP from the actor's `Location` to the light (the
+    engine looks again for each light 1 frame in 16).
+  - **Fading:** each light fades in as it's taken and out as it isn't,
+    a full fade in a third of a second (768 of 255 a second), and still
+    lights the actor as it fades out.
 - **No cylinder case**: the vertex lighting treats a cylinder light as
   any other, from where it is (only distance fog, `LE_DistanceFog`, is
   set aside, to scale the light by the height below it).

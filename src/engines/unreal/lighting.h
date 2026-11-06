@@ -79,6 +79,7 @@ struct LightSource {
     // runs (a TriggerLight and the like, or one a trigger can name by its
     // Tag): such a light's lightmaps follow the live actor.
     int32_t ref = 0;
+    const void* key = nullptr; // a moving light's own actor (the viewer's fades)
     uint8_t brightness = 64;
     bool scripted = false;
     bool startsOff = false; // its scripts put it out at the start (lit only once they turn it on)

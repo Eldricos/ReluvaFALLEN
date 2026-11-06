@@ -456,6 +456,15 @@ private:
     // the level's own lights), each frame; given to the renderer too.
     void gatherDynamicLights(const gfx::Vec3& eye);
     std::vector<LightSource> dynamic_;
+    // Each lit actor's lights as they fade (Render.dll keeps them in its
+    // cache from frame to frame): by the light's actor, the moving ones
+    // with the top bit set; and when it was last lit.
+    struct ActorFade {
+        std::map<uint64_t, float> lights;
+        float time = -1;
+    };
+    mutable std::unordered_map<const void*, ActorFade> actorFades_;
+    mutable std::unordered_map<int32_t, const LightSource*> uniqueByRef_; // lights_.unique by their actor
     std::set<int32_t> staticLightRefs_; // the level's own lights (in its lightmaps)
     std::vector<ScriptLevel::LitActor> litScratch_;
     // A light's share of its brightness now (its level, if it changes).
@@ -544,8 +553,8 @@ private:
     LevelLights lights_; // the level's, for lighting what moves
     // `actor`: an actor's look (its ScaleGlow, AmbientGlow, Specular), lit
     // per vertex as the original lights actors; without, a mover's.
-    MeshLight meshLightAt(const Vec3f& location, const LevelPlay::Look* actor = nullptr) const;
-    void actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLight& light) const;
+    MeshLight meshLightAt(const Vec3f& location, const LevelPlay::Look* actor = nullptr, const void* who = nullptr) const;
+    void actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLight& light, const void* who = nullptr) const;
     void drawActorMesh(const GpuMesh& gpu, const gfx::Mat4& placement, const MeshPose& pose,
                        const std::vector<gfx::TextureId>& skins, const MeshLight& light, const LevelPlay::Look& look);
     // The level's lights with a volume, in fog zones (drawVolumes).

@@ -147,6 +147,8 @@ void MapViewer::unload() {
     animatedLightmaps_.clear();
     animatedTextures_.clear();
     animatedSince_.clear();
+    uniqueByRef_.clear();
+    actorFades_.clear();
     changingLights_.clear();
     lightmapPages_.clear();
     textureCache_.clear();
@@ -1893,6 +1895,7 @@ void MapViewer::gatherDynamicLights(const gfx::Vec3& eye) {
         // As the level's lights: the original lights with them the same way.
         const Vec3f c = lightColor(a.hue, a.saturation, a.brightness, lights_.levelBrightness);
         l.color = {c[0] * level, c[1] * level, c[2] * level};
+        l.key = a.actor;
         dynamic_.push_back(l);
     }
     const Vec3f e{eye[0], -eye[1], eye[2]};
@@ -2027,8 +2030,14 @@ std::pair<gfx::TextureId, std::array<int, 2>> MapViewer::textureOf(const ObjectR
 
 // The lights reaching where an actor stands: some all round, the rest
 // from their average direction.
-MeshLight MapViewer::meshLightAt(const Vec3f& at, const LevelPlay::Look* actor) const {
+MeshLight MapViewer::meshLightAt(const Vec3f& at, const LevelPlay::Look* actor, const void* who) const {
     MeshLight light;
+    if (actor) {
+        // A live actor is lit by its lights per vertex (actorLights), all
+        // round only by the zone's ambient and its glow.
+        actorLights(at, *actor, light, who);
+        return light;
+    }
     Vec3f total{}, toward{};
     // The level's lights as bright as they are now (pulsing, flickering,
     // turned off by scripts), then the lights that move and change.
@@ -2079,8 +2088,6 @@ MeshLight MapViewer::meshLightAt(const Vec3f& at, const LevelPlay::Look* actor) 
         light.directed[k] = std::min((1 - 0.3f * spread) * total[k], std::max(0.0f, kMaxLight - light.ambient[k]));
     }
     light.direction = len > 0 ? toWorld(Vec3f{toward[0] / len, toward[1] / len, toward[2] / len}) : gfx::Vec3{0, 0, 1};
-    if (actor)
-        actorLights(at, *actor, light);
     return light;
 }
 
@@ -2376,54 +2383,108 @@ void MapViewer::drawActorMesh(const GpuMesh& gpu, const gfx::Mat4& placement, co
 // ambient through the engine's colour curve plus AmbientGlow / 255 (255:
 // pulsing, 0.25 + 0.2 sin 8t). Each vertex then adds 1.4 x ScaleGlow x
 // its lights (gfx::DrawCall::vertexLights), at most 1.
-void MapViewer::actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLight& light) const {
+void MapViewer::actorLights(const Vec3f& at, const LevelPlay::Look& look, MeshLight& light, const void* who) const {
+    // As Render.dll's light manager for an actor (SetupForActor): the
+    // candidates are the lights it was lit by last frame (kept to fade
+    // out), then the level's lights permeating its BSP leaf, then the
+    // lights that move. Each is kept if its radius passes the straight
+    // distance (a cylinder light's too) and weighed (1 - distance /
+    // radius) x LightBrightness. In that order of weight, at most three
+    // that stay put (bStatic), and lights that don't while fewer than
+    // three are taken in all; under an eighth of the first taken's weight,
+    // passed over. A light that doesn't move must see the actor (a line
+    // through the BSP; the engine looks again 1 frame in 16). Each fades
+    // in as it's taken and out as it isn't, a full fade in a third of a
+    // second (768 of 255 a second), lighting it as it fades out.
     struct Candidate {
         const LightSource* l;
         float level, importance;
-        bool moves;
+        bool isStatic, moves;
+        uint64_t key;
     };
     std::vector<Candidate> found;
-    auto consider = [&](const LightSource& l, float level, bool moves) {
-        if (level <= 0 || l.specialLit || l.radius <= 0)
+    std::set<uint64_t> listed;
+    auto consider = [&](const LightSource& l, float level, bool moves, uint64_t key) {
+        if (level <= 0 || l.specialLit || l.radius <= 0 || !listed.insert(key).second)
             return;
-        // By the straight distance, a cylinder light's too: Render.dll's
-        // actor light list keeps a light whose radius squared passes the
-        // distance squared, and weighs it (1 - distance / radius) x
-        // LightBrightness. (A sky light far above lights no actor.)
         const float dx = l.position[0] - at[0], dy = l.position[1] - at[1], dz = l.position[2] - at[2];
         const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (dist >= l.radius)
             return;
-        found.push_back({&l, level, (1 - dist / l.radius) * float(l.brightness) * level, moves});
+        found.push_back({&l, level, (1 - dist / l.radius) * float(l.brightness), l.isStatic, moves, key});
     };
-    for (const LightSource& l : lights_.unique)
-        consider(l, levelOf(l), !l.isStatic);
+    ActorFade* fade = nullptr;
+    bool fresh = true;
+    float step = 1;
+    if (who) {
+        ActorFade& f = actorFades_[who];
+        fresh = f.time < 0;
+        step = fresh ? 1 : std::clamp((lightTime_ - f.time) * 768 / 255, 0.0f, 1.0f);
+        f.time = lightTime_;
+        fade = &f;
+    }
+    // The level's lights by their actor (ref); those that move by theirs.
+    const int leaf = zones_.leafAt(at);
+    std::map<int32_t, const LightSource*> byRef;
+    if (leaf >= 0 && size_t(leaf) < leafLights_.size() && leafLights_[size_t(leaf)] >= 0)
+        for (size_t i = size_t(leafLights_[size_t(leaf)]); i < lights_.sources.size() && lights_.sources[i].ref; ++i)
+            byRef[lights_.sources[i].ref] = &lights_.sources[i];
+    if (uniqueByRef_.empty())
+        for (const LightSource& u : lights_.unique)
+            if (u.ref)
+                uniqueByRef_.emplace(u.ref, &u);
+    auto level = [&](int32_t ref, uint64_t key) {
+        if (auto it = uniqueByRef_.find(ref); it != uniqueByRef_.end())
+            consider(*it->second, levelOf(*it->second), false, key);
+    };
+    if (fade)
+        for (const auto& [key, f] : fade->lights) {
+            (void)f;
+            if (!(key >> 63)) // a moving light is found below if still near
+                level(int32_t(key), key);
+        }
+    for (const auto& [ref, l] : byRef) {
+        (void)l;
+        level(ref, uint64_t(ref));
+    }
     for (const LightSource& l : dynamic_)
-        consider(l, 1, true);
+        consider(l, 1, true, (uint64_t(1) << 63) | uint64_t(uintptr_t(l.key)));
     std::stable_sort(found.begin(), found.end(),
                      [](const Candidate& a, const Candidate& b) { return a.importance > b.importance; });
     int total = 0, still = 0;
+    float threshold = -1;
+    std::map<uint64_t, float> next;
     for (const Candidate& c : look.unlit ? std::vector<Candidate>{} : found) {
-        if (c.importance < found.front().importance / 8)
-            break;
-        if (c.moves ? total >= 3 : still >= 3)
+        float was = fade && fade->lights.count(c.key) ? fade->lights[c.key] : 0;
+        bool taken = false;
+        if (c.importance >= threshold && (c.isStatic ? still : total) < 3) {
+            const bool sees = c.moves || !play_ || !play_->wallBetween(at, c.l->position);
+            if (sees) {
+                taken = true;
+                ++total;
+                if (c.isStatic)
+                    ++still;
+                if (threshold < 0)
+                    threshold = c.importance / 8;
+            }
+        }
+        const float now = taken ? (fresh ? 1.0f : std::min(1.0f, was + step)) : std::max(0.0f, was - step);
+        if (now <= 0)
             continue;
-        if (!c.moves && play_ && play_->wallBetween(at, c.l->position))
-            continue;
-        ++total;
-        if (!c.moves)
-            ++still;
+        if (next.size() < 16)
+            next[c.key] = now;
         gfx::VertexLight v;
         // Shaded as a point light, a cylinder light too (Render.dll's actor
         // lighting has no cylinder case).
-        const Vec3f from = c.l->position;
-        v.position = toWorld(from);
+        v.position = toWorld(c.l->position);
         v.radius = c.l->radius;
         // The lightmaps' colours are doubled (lightColor); actors' aren't.
         for (size_t k = 0; k < 3; ++k)
-            v.color[k] = c.l->color[k] * c.level / 2;
+            v.color[k] = c.l->color[k] * c.level / 2 * (who ? now : 1.0f);
         light.lights.push_back(v);
     }
+    if (fade)
+        fade->lights = std::move(next);
     const int zone = zones_.zoneAt(at);
     const Vec3f zoneAmbient = zone >= 0 && size_t(zone) < lights_.zoneActorAmbient.size()
                                   ? lights_.zoneActorAmbient[size_t(zone)]
@@ -2979,7 +3040,7 @@ void MapViewer::drawLiveActor(VmObject* a, std::vector<SpriteDraw>& sprites, con
         }
         play_->drawn(a);
         const gfx::Mat4 placement = meshPlacement(look.location, look.rotation, look.drawScale, look.prePivot);
-        const MeshLight light = meshLightAt(look.location, &look);
+        const MeshLight light = meshLightAt(look.location, &look, a);
         lastMesh_ = {};
         if ((look.layers.empty() && look.adjust.empty() && look.faces.empty()) || !mesh.bones ||
             !drawLayered(look, at, placement, skins, light))
