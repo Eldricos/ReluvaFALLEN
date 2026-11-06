@@ -770,11 +770,24 @@ void ScriptLevel::updateTouching(VmObject* a) {
 // in the same plane (UnrealEd's coplanar nodes, linked by planeNode) whose
 // polygon holds the point.
 int ScriptLevel::surfaceAt(const Vec& start, const Vec& end) {
+    Vec at{};
+    const int node = nodeAt(start, end, at);
+    if (node < 0)
+        return -1;
+    const int32_t surf = model_.nodes[size_t(node)].surf;
+    return surf >= 0 && size_t(surf) < model_.surfs.size() ? surf : -1;
+}
+
+// The BSP node whose polygon a line from start to end hits (of the
+// coplanar nodes sharing the plane it stopped at, the one holding the hit
+// point), and where; -1 if none.
+int ScriptLevel::nodeAt(const Vec& start, const Vec& end, Vec& where) {
     if (!collision_)
         return -1;
     const LevelCollision::Hit hit = collision_->trace({start[0], start[1], start[2]}, {end[0], end[1], end[2]});
     if (!hit.hit() || hit.node < 0)
         return -1;
+    where = {hit.location[0], hit.location[1], hit.location[2]};
     const Vec3f& p = hit.location;
     auto holds = [&](const BspNode& n) {
         if (n.vertexCount < 3 || size_t(n.vertPool) + n.vertexCount > model_.verts.size())
@@ -811,8 +824,32 @@ int ScriptLevel::surfaceAt(const Vec& start, const Vec& end) {
             break;
         at = n.planeNode;
     }
-    const int32_t surf = model_.nodes[size_t(found)].surf;
-    return surf >= 0 && size_t(surf) < model_.surfs.size() ? surf : -1;
+    return found;
+}
+
+// GetNodeXOffsets: how far the polygon hit runs to either side of the hit
+// point along `side` (lo the nearer edge one way, as a negative distance;
+// hi the other way). False if nothing was hit.
+bool ScriptLevel::nodeSideExtent(const Vec& start, const Vec& end, const Vec& side, float& lo, float& hi) {
+    Vec at{};
+    const int node = nodeAt(start, end, at);
+    if (node < 0)
+        return false;
+    const BspNode& n = model_.nodes[size_t(node)];
+    lo = 1e30f, hi = -1e30f;
+    for (int k = 0; k < n.vertexCount; ++k) {
+        const size_t v = size_t(n.vertPool + k);
+        if (v >= model_.verts.size())
+            return false;
+        const int32_t pi = model_.verts[v].point;
+        if (pi < 0 || size_t(pi) >= model_.points.size())
+            return false;
+        const Vec3f& p = model_.points[size_t(pi)];
+        const float d = (p[0] - at[0]) * side[0] + (p[1] - at[1]) * side[1] + (p[2] - at[2]) * side[2];
+        lo = std::min(lo, d);
+        hi = std::max(hi, d);
+    }
+    return n.vertexCount >= 3;
 }
 
 // A surface's texture as it is now: swapped by the scripts, or its own.
@@ -1383,6 +1420,10 @@ void ScriptLevel::walkPlayer(VmObject* a, float dt) {
     }
     if (a->deleted || physicsOf(a) != kPhysWalking)
         return;
+    // Pushing on: the auto-duck's timer (Engine.dll's physWalking adds
+    // each frame's time; a fall or a real move sets it back to 0).
+    if (Value* t = prop(a, "PushToAutoDuckTimer"))
+        *t = Value::floatValue(t->asFloat() + dt);
     // Down onto the floor, for real.
     const Vec down{0, 0, -(stepHeight + 2)};
     MoveHit floor = moveActor(a, down);
@@ -1769,6 +1810,10 @@ void ScriptLevel::swimOrFly(VmObject* a, float dt, bool swim) {
     const Vec delta = mul(zoneMoves ? add(v, z.velocity) : v, dt);
     MoveHit h = moveActor(a, delta);
     if (a->deleted)
+        return;
+    // The player swimming into a wall: a ledge or ladder there, as
+    // walking (Engine.dll's physSwimming asks the same tests).
+    if (swim && h.hit() && climbBlocked(a, h.actor, h.normal, mul(delta, 1 - h.time)))
         return;
     if (h.hit()) {
         const Vec gravDir{0, 0, z.gravity[2] > 0 ? 1.0f : -1.0f};

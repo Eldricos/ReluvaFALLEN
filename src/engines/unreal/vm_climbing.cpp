@@ -234,6 +234,63 @@ bool ScriptLevel::testForLedge(VmObject* a, const Vec& hitNormal, const Vec& dir
            strongFooting(a, hitNormal, at) && handHold(a, hitNormal, at);
 }
 
+// ForceDuck: the player made to crouch where it is (its scripts' walking
+// state shrinks it to its ducked height and keeps it so while
+// CollisionHeightOverride is set and it's near ForceDuckLocation).
+void ScriptLevel::forceDuck(VmObject* a) {
+    const float height = climbFloat(a, "CollisionHeight", 49.5f);
+    const float duck = climbFloat(a, "DuckCollisionHeight", 32.5f);
+    if (Value* o = prop(a, "CollisionHeightOverride"); o && o->asFloat() == 0)
+        *o = Value::floatValue(height);
+    if (Value* f = prop(a, "ForceDuckLocation")) {
+        const Vec at = Vm::vectorOf(*prop(a, "Location"));
+        vm_.setVector(*f, at[0], at[1], at[2] + duck - height);
+    }
+    if (Value* c = prop(a, "bIsCrouching"))
+        *c = Value::boolValue(true);
+}
+
+// TestForLedge's ducking, for a walk blocked where no ledge is to be
+// climbed: standing, not ducking yet, and walking, with the ducked box
+// from the feet able to go on where the standing one can't. Pushed on for
+// over 0.3 s with no step there, it ducks under (auto-duck). A step it
+// would go up with too little room over it for its height (and not
+// crouching), it ducks to. True if it ducked (the move ends).
+bool ScriptLevel::duckUnder(VmObject* a, const Vec& dir) {
+    const Value* loc = prop(a, "Location");
+    const Vec f = flat(dir);
+    if (!loc || length(f) < 0.5f)
+        return false;
+    const Vec at = Vm::vectorOf(*loc);
+    const float radius = climbFloat(a, "CollisionRadius", 17), height = climbFloat(a, "CollisionHeight", 49.5f);
+    const float duck = climbFloat(a, "DuckCollisionHeight", 32.5f), step = climbFloat(a, "MaxStepHeight", 25);
+    const Value* duckStage = prop(a, "DuckStage");
+    const int physics = prop(a, "Physics") ? prop(a, "Physics")->asInt() : 0;
+    const bool crouching = prop(a, "bIsCrouching") && prop(a, "bIsCrouching")->asBool();
+    if (!(height > duck + 1 && (!duckStage || duckStage->asInt() == 0) && physics == kPhysWalking))
+        return false;
+    const float s = 2 * defaultRadius(a);
+    const Vec start{at[0], at[1], at[2] - height + duck + 1};
+    const Vec e{radius, radius, duck + 1};
+    Vec hit, normal;
+    const bool clearDucked = !trace(a, start, add(start, mul(f, s)), e, true, hit, normal);
+    const bool autoDuck = clearDucked && climbFloat(a, "PushToAutoDuckTimer", 0) > 0.3f;
+    const float r = testStepUp(a, step, height, start, mul(f, s), e);
+    const float rise = climbFloat(a, "LedgeHeight", 0) - (at[2] - height);
+    if (r <= 0 || rise <= 0.01f) {
+        if (!autoDuck)
+            return false;
+        forceDuck(a);
+        return true;
+    }
+    if (rise <= step + 1 && r * s > defaultRadius(a) * 0.4f && std::clamp(r * s / 3, 0.0f, 1.0f) > 0.99f && !crouching &&
+        climbFloat(a, "HeadRoom", height) < height) {
+        forceDuck(a);
+        return true;
+    }
+    return false;
+}
+
 // CheckClimbing: a ladder (its texture's TexTag TT_Ladder) 1.6 radii
 // ahead at the feet (4 over them), the chest and/or the head (4 under
 // it), as asked. With `snap`, ahead is into the wall met (upright, met
@@ -271,7 +328,14 @@ bool ScriptLevel::checkClimbing(VmObject* a, const Vec& wallNormal, const Vec& d
         moveActor(a, ahead);
         if (a->deleted)
             return false;
-        setLocation(a, add(Vm::vectorOf(*prop(a, "Location")), mul(wallNormal, 2)));
+        // 2 units off it, and kept 12 inside the ladder polygon's edges
+        // (GetNodeXOffsets).
+        const Vec now = Vm::vectorOf(*prop(a, "Location"));
+        const Vec side{-wallNormal[1], wallNormal[0], 0};
+        float lo = 0, hi = 0, o = 0;
+        if (nodeSideExtent(now, add(now, mul(wallNormal, -(radius + 8))), side, lo, hi))
+            o = lo > -12 ? lo + 12 : hi < 12 ? hi - 12 : 0;
+        setLocation(a, add(add(now, mul(wallNormal, 2)), mul(side, o)));
     }
     return true;
 }
@@ -299,6 +363,8 @@ bool ScriptLevel::climbBlocked(VmObject* a, VmObject* by, const Vec& hitNormal, 
         return false;
     if (testForLedge(a, hitNormal, left))
         return askClimb(a, hitNormal, kPhysClambering) || true;
+    if (duckUnder(a, left))
+        return true;
     if (checkClimbing(a, hitNormal, left, true, false, true, true))
         return askClimb(a, hitNormal, kPhysClimbing);
     return false;

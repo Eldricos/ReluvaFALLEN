@@ -527,12 +527,26 @@ the player to face into the wall before asking its scripts'
     least 4 deep and flat. There must be room to get there, a hang
     ledge over it (`TestForHangLedge`) and a hand hold. Then `Hanging`,
     and the player is put there with the box's top at the ledge.
-- **Not done here:**
-  - Engine.dll's ducking under a low ledge (`ForceDuck`,
-    `CollisionHeightOverride`) and its auto-duck timer.
-  - The tests against the BSP node a hit came from (`TestHitIntegrity`).
-  - Keeping 12 units inside a ladder's edges (`GetNodeXOffsets`).
-  - Swimming's ledge and ladder tests.
+- **Ducking under** (`TestForLedge`'s other branch, `ForceDuck`): the
+  player is standing, not ducking yet, and walking. The ducked box (from
+  the feet, `DuckCollisionHeight` + 1 high) can go on where the standing
+  one is stopped. Pushing on for over 0.3 s with no step there, the player
+  ducks under it. The same happens at a step with less room over it than
+  the player's height (and not crouching).
+  - `PushToAutoDuckTimer` grows by each walking frame's time, as
+    Engine.dll's `physWalking` adds it. It goes back to 0 on a fall or a
+    real move (over 10 a second). Reluva had only ever set it to 0.
+  - Ducking sets `CollisionHeightOverride` (to the standing height, if
+    unset), `ForceDuckLocation` (the place, its feet at the ducked
+    height) and `bIsCrouching`. The scripts' walking state then shrinks
+    the player and keeps it down until it has moved 20 away.
+- **Ladders' edges:** put against a ladder, the player is kept 12 units
+  inside its polygon's left and right edges (`GetNodeXOffsets`).
+- **Swimming** into a wall tries a ledge and a ladder as walking does
+  (`physSwimming` asks the same tests).
+- **The hit's node** (`TestHitIntegrity`): Reluva's collision already
+  gives each hit its BSP plane's own normal and node, which the
+  engine's test exists to make sure of.
 - **Seen:** on M01_KiraL2, walking into the ladder under
   `CTVE_LadderTop2` climbs it at 120 a second, pulls up over the top
   and walks on.

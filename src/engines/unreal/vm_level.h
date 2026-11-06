@@ -500,6 +500,9 @@ public:
     // The texture of the level's surface a line from start to end meets
     // first; null if it meets none (GetSurfaceTexture: what's underfoot).
     VmObject* surfaceTexture(const std::array<float, 3>& start, const std::array<float, 3>& end);
+    int nodeAt(const std::array<float, 3>& start, const std::array<float, 3>& end, std::array<float, 3>& where);
+    bool nodeSideExtent(const std::array<float, 3>& start, const std::array<float, 3>& end,
+                        const std::array<float, 3>& side, float& lo, float& hi);
     // That surface's index in the level's model; -1 if none.
     int surfaceAt(const std::array<float, 3>& start, const std::array<float, 3>& end);
     // Textures the scripts have swapped (SetSurfaceTexture): one surface's,
@@ -573,6 +576,8 @@ public:
     bool checkClimbing(VmObject* a, const std::array<float, 3>& wallNormal, const std::array<float, 3>& dir, bool snap,
                        bool feet, bool chest, bool head);
     bool askClimb(VmObject* a, const std::array<float, 3>& wallNormal, int physics);
+    void forceDuck(VmObject* a);
+    bool duckUnder(VmObject* a, const std::array<float, 3>& dir);
     // A player's walk blocked by a wall: a ledge or ladder there taken.
     bool climbBlocked(VmObject* a, VmObject* by, const std::array<float, 3>& hitNormal, const std::array<float, 3>& left);
     void climbCheck(VmObject* a, bool falling, float dt);
