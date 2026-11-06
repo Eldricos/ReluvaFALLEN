@@ -5431,6 +5431,14 @@ int cmdUeTrace(int argc, char** argv) {
     std::printf("hit %d startSolid %d time %.4f at %.2f %.2f %.2f normal %.3f %.3f %.3f node %d; start solid box %d, end %d\n",
                 h.hit(), h.startSolid, double(h.time), double(h.location[0]), double(h.location[1]), double(h.location[2]),
                 double(h.normal[0]), double(h.normal[1]), double(h.normal[2]), h.node, col.solid(a, e), col.solid(b, e));
+    // The node hit: its flags, and its surface's polygon flags and brush.
+    if (h.node >= 0 && size_t(h.node) < model.nodes.size()) {
+        const BspNode& n = model.nodes[size_t(h.node)];
+        const bool surf = n.surf >= 0 && size_t(n.surf) < model.surfs.size();
+        std::printf("node %d: flags %02x, surface %d, poly flags %08x, brush %s\n", h.node, unsigned(n.flags), n.surf,
+                    surf ? model.surfs[size_t(n.surf)].polyFlags : 0u,
+                    surf && model.surfs[size_t(n.surf)].actor > 0 ? pkg->path(model.surfs[size_t(n.surf)].actor).c_str() : "-");
+    }
     return 0;
 }
 

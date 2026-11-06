@@ -119,6 +119,21 @@ differs only in that way, Reluva follows its own scripts.
     something else: it arrives by travel, or plays a space scene first.
   - The scripts (`ue-run -all`) give 89 errors and 2,416 None accessed
     over all 74 maps, against 258 and 3,860 in October's run.
+- **Again, after the normals, IK, actor lighting and sprite colour
+  changes** (November 2026): the same 38 chapters' 152 frames against
+  the pass above. They moved little: 0.3 of 255 on average, at most 2.2.
+  The scripts give 7 errors and 1,342 None accessed over all 74 maps.
+  - M03_SiskoL1A: Sisko's EVA suit after the beam-in is lit only red
+    now; it had a warm light too. The strongest light by weight (warm,
+    under the floor 325 below) is cut off by the floor and a wall, both
+    plain solid brushes, and Render.dll's actor lighting line-checks
+    such a light from it to the actor (`UModel::LineCheck`, no extent).
+    The recording shows the suit warm-white from the front, red from
+    behind, so a light Reluva doesn't give it yet still lights it there.
+    Open.
+  - M11_WorfL1: Worf's suit is green now, from the two green lights 250
+    across beside him, both in plain view. The recording plays the Ops
+    cut scene there, so it can't say.
 
 - **Heads turning to the talker** (CM01a_SW, from 29.5 s): in the
   recording Sisko turns his head to Worf as he asks "Mister Worf, does
