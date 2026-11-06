@@ -92,6 +92,26 @@ differs only in that way, Reluva follows its own scripts.
   when the level was read, while it stays where it was. It now lies under
   the arm, lit, as in the recording (a little darker, as everything is).
 
+- **The Ke'el Tul flyby** (CM01a_SW, 14-17 s in; the recording's 227-230
+  s): the ship is now lit as in the recording, the same tan, about 1.35
+  times darker, as everything is (below). It came out dark before the
+  actor lighting took its lights by their full distance (Render.dll's
+  rule, above). The light behind it shows as a white corona in Reluva,
+  and as a softer green-yellow glow in the recording.
+- **Across the levels after the lighting changes** (November 2026):
+  every chapter's level was shot again 0.3, 2.3, 7.3 and 15.3 s after
+  its start, and set against the shots from before and the recording.
+  - Where the scenes match, the frames that changed most moved toward
+    the recording:
+    - M01_SiskoL1B: the big door, a mover, is now lit as there.
+    - M07_SiskoL1B: brighter, closer to the recording.
+    - M07_WorfL2A: a smaller corona; its mean is now 28 against the
+      recording's 26 (it was 43).
+  - The other large changes are frames where the recording shows
+    something else: it arrives by travel, or plays a space scene first.
+  - The scripts (`ue-run -all`) give 89 errors and 2,416 None accessed
+    over all 74 maps, against 258 and 3,860 in October's run.
+
 ## Open
 
 - **Overall brightness**: the recording runs brighter than Reluva by 1.2
@@ -120,9 +140,16 @@ differs only in that way, Reluva follows its own scripts.
   column is also lower and shorter (at most knee height, gone 0.5 s
   sooner); Reluva's spans the body, as the script's scale (twice the
   height over 80) and the quad mesh centred on its pivot (Z -200 to 200)
-  give. Not yet explained.
-- **The Ke'el Tul flyby** (CM01a_SW, about 18 s): the ship is lit in the
-  recording and dark in Reluva.
+  give. Render.dll has been read on it. Each MultiMesh copy's Location,
+  Rotation, AxisScale, DrawScale, Texture and glow stand in for the
+  actor's for one draw (`DrawActorSpriteMM`). The mesh is then placed as
+  any other: AxisScale times the mesh's Scale, about its pivot. There's
+  no case of its own for the height. So by the code the column runs from
+  the feet to 20 over the head as it appears, as Reluva draws it. As it
+  goes, its top falls to the feet, which would be knee high only near
+  the end. Still to settle from closer footage: whether the recording's
+  column is that falling end, or the beam texture (`FedTransBeam01`)
+  shows mostly near its bottom.
 - **The swarms**: SR-III's firefly swarms (`SR3_FireFlySwarm`, Size 0.05)
   are too small to see in the opening scenes, in either; Jeraddo's bugs
   appear only in play. Not compared.
