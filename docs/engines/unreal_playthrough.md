@@ -133,21 +133,21 @@ differs only in that way, Reluva follows its own scripts.
   scripted scenes (the cut scenes and level openings above) are what
   can be set against it, and those agree.
 
+- **The player's back** in M03_SiskoL2 (Sisko in the EVA suit, three
+  lamps ahead of him) is now lit as in the recording; it was nearly
+  black. Render.dll makes each vertex's normal from the triangles'
+  winding alone: `(p1 - p0) x (p2 - p0)`, each made one long, summed and
+  made one long again. Reluva had guessed which way was out from each
+  mesh's middle on its first frame, and for the EVA suit the guess
+  turned every normal inward, lighting its front from the lamps behind
+  it. The same suit's back in M01_SiskoL1B is lighter too; M03_SiskoL1B,
+  M06_SiskoL1C, M07_SiskoL2 and M07_SiskoL3A are as they were.
 ## Open
 
 - **Overall brightness**: the recording runs brighter than Reluva by 1.2
   to 2.3 times in mean level, varying by scene (a brightness setting, its
   renderer, or both). The first recording matched within 10-20%, so
   nothing was changed for this one.
-- **The player's back** in M03_SiskoL2 (Sisko in the EVA suit, three
-  lamps ahead of him) is bright in the recording and nearly black in
-  Reluva. The actor lighting (Render.dll's, read again: (cos + 1)^2 - 1.5,
-  linear falloff, zone ambient plus AmbientGlow, up to three static
-  lights) gives nothing to faces turned from the lights. Reversing the
-  meshes' normals matches this scene but changes little in the other
-  levels checked (M03_SiskoL1B, M06_SiskoL1C, M07_SiskoL2, M07_SiskoL3A,
-  the CM01a_SW bridge). Until Render.dll's mesh normals are read, it stays
-  as it is.
 - **The transporter's look.** In the recording the beamed-in body shows
   its own lit skin under the sparkle from the start; in Reluva it shows
   only the sparkle until the crossfade (2.2 s in). The script draws the

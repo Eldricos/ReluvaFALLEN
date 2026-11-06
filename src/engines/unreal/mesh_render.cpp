@@ -148,32 +148,24 @@ Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, const MeshTopology
     std::vector<gfx::Vertex> vertices;
     vertices.reserve(size_t(out.frameVertices) * size_t(out.frames));
     std::vector<Vec3f> positions(size_t(mesh.frameVerts)), normals(size_t(mesh.frameVerts));
-    // The triangles' winding isn't certain, so which way their normals
-    // point is decided by the mesh itself: outwards on the whole (frame 0).
-    float outward = 1;
+    // As Render.dll's DrawMesh and DrawLodMesh: each vertex's normal is the
+    // sum of its triangles' normals, each made one long first (so the
+    // triangles count alike, not by size), from the winding alone,
+    // (p1 - p0) x (p2 - p0) in the mesh's placed space. No turn of the
+    // import changes which way that points (they're all proper turns).
     for (int32_t f = 0; f < mesh.animFrames; ++f) {
         for (int32_t v = 0; v < mesh.frameVerts; ++v)
             positions[size_t(v)] = place(mesh.verts[size_t(f) * size_t(mesh.frameVerts) + size_t(v)]);
-        // Smooth normals: each vertex's triangles' normals, by their area.
         std::fill(normals.begin(), normals.end(), Vec3f{});
         for (const MeshTri& t : mesh.tris) {
             const Vec3f& a = positions[size_t(t.vertex[0])];
-            const Vec3f n = cross(sub(positions[size_t(t.vertex[1])], a), sub(positions[size_t(t.vertex[2])], a));
+            Vec3f n = cross(sub(positions[size_t(t.vertex[1])], a), sub(positions[size_t(t.vertex[2])], a));
+            const float inv = 1 / std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2] + 0.001f);
+            for (size_t k = 0; k < 3; ++k)
+                n[k] *= inv;
             for (int32_t v : t.vertex)
                 for (size_t k = 0; k < 3; ++k)
                     normals[size_t(v)][k] += n[k];
-        }
-        if (f == 0) {
-            Vec3f mid{};
-            for (const Vec3f& p : positions)
-                for (size_t k = 0; k < 3; ++k)
-                    mid[k] += p[k] / float(positions.size());
-            float sum = 0;
-            for (size_t v = 0; v < positions.size(); ++v) {
-                const Vec3f d = sub(positions[v], mid);
-                sum += d[0] * normals[v][0] + d[1] * normals[v][1] + d[2] * normals[v][2];
-            }
-            outward = sum < 0 ? -1.0f : 1.0f;
         }
         for (const auto& [vertex, uv] : corners) {
             gfx::Vertex gv{};
@@ -184,7 +176,7 @@ Error uploadMesh(gfx::Renderer3D& renderer, const Mesh& mesh, const MeshTopology
             const Vec3f& n = normals[size_t(vertex)];
             const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
             for (size_t k = 0; k < 3; ++k)
-                gv.normal[k] = len > 0 ? outward * n[k] / len : 0;
+                gv.normal[k] = len > 0 ? n[k] / len : 0;
             gv.color[0] = gv.color[1] = gv.color[2] = gv.color[3] = 255;
             vertices.push_back(gv);
         }

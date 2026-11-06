@@ -165,6 +165,11 @@ Meshes are lit at each vertex, as the original's renderer does:
 - **No cylinder case**: the vertex lighting treats a cylinder light as
   any other, from where it is (only distance fog, `LE_DistanceFog`, is
   set aside, to scale the light by the height below it).
+- **The vertex normals** are made each frame from the triangles' winding
+  alone (DrawMesh, DrawLodMesh): per triangle `(p1 - p0) x (p2 - p0)` in
+  the mesh's placed space, made one long, summed at its three vertices,
+  each sum made one long again. No flip for back faces, mirrors or
+  negative scales, and nothing decided from the mesh's shape.
 - **At each vertex**, for each light, with d the vector to it and N the
   vertex's normal: (max(0, (cos + 1)^2 - 1.5) + specular) x (1 - |d| /
   radius) x the light's colour (undoubled: half of a lightmap's), cos
