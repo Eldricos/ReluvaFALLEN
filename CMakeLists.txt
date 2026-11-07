@@ -69,6 +69,7 @@ add_library(reluva_common STATIC
     src/common/audio/decode.cpp
     src/common/audio/mixer.cpp
     src/common/audio/mp3.cpp
+    src/common/audio/tracker.cpp
     src/common/audio/wav.cpp
     src/common/font.cpp
     src/common/text.cpp
