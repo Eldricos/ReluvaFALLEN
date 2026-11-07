@@ -1590,7 +1590,8 @@ seconds in and loaded back comes back the same: the player where it
 was, in its state, with its weapon.
 
 Reluva's own format (its older saves; `reluvaFormat_` writes it) still
-loads. A file of it holds:
+loads (version 3 keeps a layer's whole state, its clears and what it's
+fading in over; version 2 reads). A file of it holds:
 The game's side is all script:
 - F6 (`QuickSave`) and the main menu's Save Game send `SaveGame`.
 - The Load Game list asks `DrawLoadGameList`, which hands the HUD each

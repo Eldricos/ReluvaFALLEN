@@ -54,11 +54,19 @@ file and dated by it.
   library's version); the mesh's name; an i32; the IK targets; an i32;
   then the animation groups (FullBody, LowerTorso, UpperTorso, then the
   face's channels sk3...): each its name and sequence (`NONACTIVE` for
-  none), an i32 source, the frame (f32), the type (1 playing, 2, 4 a face
-  channel), the state (a face channel's 5 while tweening), rate, weight,
-  the tween's from-frame and from-weight, elapsed, an f32, its length, an
-  f32, a pending tween (a sequence, frame, weight and time) and a string
-  (the bone a layer starts at) and three i32. Then the bones' adjustments,
+  none), an i32 source, the frame (f32), the type (a body group's `Boned`:
+  1 true, 2 false; 4 a face channel), the state (a body group's mode, as
+  Engine.dll keeps it: 0 held still, 1 playing once, 2 fading in to play
+  once, 3 looping, 4 fading in to loop, 5 tweening, 6 fading out; a face
+  channel's 5 while tweening), rate, weight, the tween's from-frame and
+  from-weight, the fade's time gone, an f32 (its time gone a tick
+  before), its length, an f32, a pending tween (a sequence, frame, weight
+  and time), its InheritBone (the bone its clears turn) and three i32:
+  by where they fall in the engine's group state, ClearYaw, ClearPitch
+  and ClearRoll (fairly sure: no save of the original's to hand has one
+  set). Reluva writes and reads a layer by these: a punch saved as it
+  fades in (UpperTorso's `MelRunPnchL`, a third in, all three clears)
+  comes back the same. Then the bones' adjustments,
   what's attached, the owner's name. Its strings are a 16-bit length and
   the letters; its arrays a count, the count again and a growth step.
 - **CTVE_MultiMesh** objects: the effects' particle pools (2,285 in the
