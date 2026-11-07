@@ -214,7 +214,8 @@ Error readMeshState(const Package& package, int exportIndex, MeshState& out) {
         g.pendingWeight = r.f32();
         g.pendingTween = r.f32();
         g.bone = str16();
-        r.skip(12);
+        for (int32_t& c : g.clear)
+            c = r.i32();
         out.groups.push_back(std::move(g));
     }
     return r.ok() ? Error::success() : Error::fail("a C3D mesh state cut short");

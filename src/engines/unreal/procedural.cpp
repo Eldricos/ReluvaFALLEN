@@ -828,24 +828,45 @@ private:
     // The slope at each pixel of pixel row y: field row y + 1 if it's one
     // drawn this step, else the two either side of it added; per cell, the
     // difference across it (even); between cells, the two either side's mean.
+    // (Each frame's every pixel goes through here: the wrapping is done
+    // with a step back or forward, not a remainder.)
     void slopes(int y, std::vector<int>& out) {
         const int r = y + 1;
         const bool drawn = (r & 1) != (parity_ & 1);
         const int first = drawn ? r : r - 1; // the row whose cells' columns these are
-        auto sum = [&](int c) { return drawn ? 2 * at(r, c) : at(r - 1, c) + at(r + 1, c); };
+        auto rowOf = [&](int row) {
+            row %= h_;
+            if (row < 0)
+                row += h_;
+            return &field_[size_t(row) * size_t(fw_)];
+        };
         // Each cell's difference across once (they wrap), then per pixel.
         sums_.resize(size_t(fw_));
-        for (int c = 0; c < fw_; ++c)
-            sums_[size_t(c)] = sum(c);
+        if (drawn) {
+            const uint8_t* mid = rowOf(r);
+            for (int c = 0; c < fw_; ++c)
+                sums_[size_t(c)] = 2 * mid[c];
+        } else {
+            const uint8_t* above = rowOf(r - 1);
+            const uint8_t* below = rowOf(r + 1);
+            for (int c = 0; c < fw_; ++c)
+                sums_[size_t(c)] = above[c] + below[c];
+        }
         across_.resize(size_t(fw_) + 1);
-        for (int c = 0; c < fw_; ++c)
-            across_[size_t(c)] = 2 * ((sums_[size_t((c + 1) % fw_)] - sums_[size_t((c + fw_ - 1) % fw_)]) >> 1);
+        for (int c = 0; c < fw_; ++c) {
+            const int next = c + 1 == fw_ ? 0 : c + 1, prev = c == 0 ? fw_ - 1 : c - 1;
+            across_[size_t(c)] = 2 * ((sums_[size_t(next)] - sums_[size_t(prev)]) >> 1);
+        }
         across_[size_t(fw_)] = across_[0];
         const int offset = 1 + (((first % h_) + h_) % h_ & 1);
         out.resize(size_t(w_));
         for (int x = 0; x < w_; ++x) {
-            const int k = (((x - offset) % w_) + w_) % w_;
-            const int cell = (k / 2) % fw_;
+            int k = x - offset;
+            while (k < 0)
+                k += w_;
+            int cell = k / 2;
+            if (cell >= fw_)
+                cell %= fw_;
             out[size_t(x)] = k % 2 == 0 ? across_[size_t(cell)]
                                         : (across_[size_t(cell)] + across_[size_t(cell) + 1]) / 2;
         }
@@ -853,17 +874,24 @@ private:
 
     void render() {
         image_.rgba.resize(size_t(w_) * size_t(image_.h) * 4);
-        std::vector<int> slope;
+        std::vector<int>& slope = slope_;
+        const bool wet = !source_.rgba.empty();
         for (int y = 0; y < image_.h; ++y) {
             slopes(y % h_, slope);
             uint8_t* p = image_.pixel(0, y);
+            const uint8_t* src = wet ? source_.pixel(0, y) : nullptr;
             for (int x = 0; x < w_; ++x, p += 4) {
-                const uint8_t v = table_[size_t(std::clamp(512 + slope[size_t(x)], 0, 1023))];
-                if (!source_.rgba.empty()) {
-                    const int ux = (((x + int8_t(v)) % w_) + w_) % w_;
-                    std::copy_n(source_.pixel(ux, y), 4, p);
+                const int i = std::clamp(512 + slope[size_t(x)], 0, 1023);
+                const uint8_t v = table_[size_t(i)];
+                if (wet) {
+                    int ux = x + int8_t(v);
+                    while (ux < 0)
+                        ux += w_;
+                    while (ux >= w_)
+                        ux -= w_;
+                    std::memcpy(p, src + size_t(ux) * 4, 4);
                 } else {
-                    std::copy_n(palette_.rgba.data() + size_t(v) * 4, 3, p);
+                    std::memcpy(p, palette_.rgba.data() + size_t(v) * 4, 3);
                     p[3] = masked_ && v == 0 ? 0 : 255;
                 }
             }
@@ -876,7 +904,7 @@ private:
     image::Image source_;
     const char* kind_;
     std::vector<uint8_t> field_;
-    std::vector<int> sums_, across_; // slopes' working rows
+    std::vector<int> sums_, across_, slope_; // slopes' working rows
     std::array<uint8_t, 1024> table_{}; // the slope + 512: a wave's palette index, a wet's shift (signed)
     uint8_t parity_ = 0;
     bool masked_ = false;

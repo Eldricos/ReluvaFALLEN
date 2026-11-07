@@ -882,6 +882,18 @@ std::string MapViewer::describeActor(const std::string& name) {
                           int(num("LightSaturation")), int(num("LightRadius")), int(num("LightEffect")));
             out += light;
         }
+        // Its layers (C3DPlayAnim): group, sequence, frame, weight and its
+        // change a second, rate; loop, held at its end, clears.
+        if (const auto* layers = play_->level().layersOf(a))
+            for (const auto& [group, l] : *layers) {
+                char layer[256];
+                std::snprintf(layer, sizeof layer, "; layer %s: %s at %.2f, weight %.2f (%+.2f/s), rate %.2f%s%s%s%s%s",
+                              vm.nameText(group).c_str(), l.sequence ? vm.nameText(l.sequence).c_str() : "none",
+                              double(l.frame), double(l.weight), double(l.weightRate), double(l.rate),
+                              l.loop ? ", looping" : "", l.finished ? ", at its end" : "", l.clear[0] ? ", clear yaw" : "",
+                              l.clear[1] ? ", clear pitch" : "", l.clear[2] ? ", clear roll" : "");
+                out += layer;
+            }
         return out;
     }
     return "no such actor";
@@ -1203,7 +1215,9 @@ void MapViewer::update(uint64_t nowMs) {
     lastMs_ = nowMs;
 
     if (play_) {
+        const auto playFrom = std::chrono::steady_clock::now();
         updatePlay(dt);
+        frameTimes_.play = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - playFrom).count();
         // Its sounds, heard from the game's camera.
         if (ctx_.mixer && !audio_)
             audio_ = std::make_unique<LevelAudio>(*ctx_.mixer, ctx_.packages);
@@ -1317,7 +1331,9 @@ void MapViewer::update(uint64_t nowMs) {
     drawOverlay(nowMs);
     if (play_)
         drawPlayHud();
+    const auto endFrom = std::chrono::steady_clock::now();
     renderer_->endFrame(&overlay_);
+    frameTimes_.endFrame = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - endFrom).count();
 }
 
 // The game's own HUD, over the world: the player's PreRender and

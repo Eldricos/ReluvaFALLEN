@@ -496,6 +496,18 @@ private:
     uint64_t zonesSeen_ = ~uint64_t(0);
     bool zoneCulling_ = true;
     void seeZonesFrom(const gfx::Vec3& eye, const gfx::Mat4& viewProj, bool mainView);
+public:
+    // The last frame's times (ms): the level's ticks (its scripts, physics,
+    // animation, posing for the scripts) and the renderer's endFrame
+    // (submitting, presenting); the rest of update is preparing and
+    // handing over the draws. For RELUVA_BENCH.
+    struct FrameTimes {
+        double play = 0, endFrame = 0;
+    };
+    const FrameTimes& frameTimes() const { return frameTimes_; }
+
+private:
+    FrameTimes frameTimes_;
     // What goes with the player into the next level started (travel).
     std::string pendingTravel_;
     float pendingPlayedTime_ = -1;

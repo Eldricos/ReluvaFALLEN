@@ -18,7 +18,12 @@
 #include "engines/unreal/package_set.h"
 #include "engines/unreal/viewers.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
+#include <sstream>
 
 namespace reluva {
 
@@ -80,8 +85,28 @@ public:
             if (!intro)
                 page = first;
         }
+        // RELUVA_BENCH="<map> <seconds>": straight into that map, played
+        // (no intro), its frames timed, then out: each frame's own work
+        // (the page's update: the level's ticks, posing, the draws handed
+        // to the renderer) and the presenting apart.
+        std::string benchMap;
+        double benchSeconds = 0;
+        if (const char* bench = std::getenv("RELUVA_BENCH")) {
+            std::istringstream in(bench);
+            in >> benchMap >> benchSeconds;
+            if (benchMap.empty() || benchSeconds <= 0)
+                benchMap.clear();
+        }
+        if (!benchMap.empty()) {
+            intro = false;
+            page = 0;
+        }
         if (!intro)
             pages[page]->activate();
+        if (!benchMap.empty())
+            static_cast<MapViewer*>(pages[0].get())->travel(benchMap);
+        std::vector<double> benchUpdate, benchPresent, benchPlay, benchEnd;
+        const auto benchStart = std::chrono::steady_clock::now();
         auto switchTo = [&](size_t next) -> Error {
             const bool was3D = pages[page]->uses3D();
             pages[page]->deactivate();
@@ -111,7 +136,9 @@ public:
                 }
                 pages[page]->handleEvent(ev);
             }
+            const auto t0 = std::chrono::steady_clock::now();
             pages[page]->update(sys_.getMillis());
+            const auto t1 = std::chrono::steady_clock::now();
             if (intro && !moviePage->playing()) {
                 intro = false;
                 if (page == moviePageIndex && page != first)
@@ -119,6 +146,33 @@ public:
                         return err;
             }
             sys_.updateScreen(screen_);
+            if (!benchMap.empty()) {
+                const auto t2 = std::chrono::steady_clock::now();
+                benchUpdate.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+                benchPresent.push_back(std::chrono::duration<double, std::milli>(t2 - t1).count());
+                const MapViewer::FrameTimes& ft = static_cast<MapViewer*>(pages[0].get())->frameTimes();
+                benchPlay.push_back(ft.play);
+                benchEnd.push_back(ft.endFrame);
+                if (std::chrono::duration<double>(t2 - benchStart).count() >= benchSeconds) {
+                    auto report = [](const char* what, std::vector<double> v) {
+                        std::sort(v.begin(), v.end());
+                        double sum = 0;
+                        for (double x : v)
+                            sum += x;
+                        std::printf("%s: mean %.2f ms, median %.2f, 95%% %.2f, max %.2f\n", what,
+                                    v.empty() ? 0.0 : sum / double(v.size()), v.empty() ? 0.0 : v[v.size() / 2],
+                                    v.empty() ? 0.0 : v[v.size() * 95 / 100], v.empty() ? 0.0 : v.back());
+                    };
+                    std::printf("bench %s: %zu frames in %.1f s\n", benchMap.c_str(), benchUpdate.size(),
+                                std::chrono::duration<double>(t2 - benchStart).count());
+                    report("frame's own work", benchUpdate);
+                    report("  the level's ticks", benchPlay);
+                    report("  renderer's endFrame", benchEnd);
+                    report("presenting", benchPresent);
+                    std::fflush(stdout);
+                    return Error::success();
+                }
+            }
             // 3D pages are paced by presenting (vsync); the rest needn't spin.
             if (!pages[page]->uses3D())
                 sys_.delayMillis(10);

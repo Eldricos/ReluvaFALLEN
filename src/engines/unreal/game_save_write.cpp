@@ -518,6 +518,7 @@ void ScriptLevel::writeMeshGroups(ByteWriter& b, VmObject* a) {
         std::string pending;
         float pendingFrame = 0, pendingWeight = 0, pendingTween = 0;
         std::string bone;
+        std::array<int32_t, 3> clear{};
     };
     std::vector<G> groups;
     G full;
@@ -538,16 +539,32 @@ void ScriptLevel::writeMeshGroups(ByteWriter& b, VmObject* a) {
         g.group = part;
         if (layers)
             if (auto it = layers->find(vm_.name(part)); it != layers->end() && it->second.sequence) {
+                // Its mode as the engine keeps it, and a fade's time gone
+                // and length.
                 const AnimLayer& l = it->second;
                 g.sequence = vm_.nameText(l.sequence);
                 g.source = 1;
                 g.type = 1;
-                g.state = 1;
+                if (l.weightRate < 0)
+                    g.state = 6;
+                else if (l.weightRate > 0)
+                    g.state = l.rate == 0 && !l.loop ? 5 : l.loop ? 4 : 2;
+                else if (l.finished)
+                    g.state = 0;
+                else
+                    g.state = l.loop ? 3 : 1;
                 g.frame = std::max(0.0f, l.frame);
                 g.rate = l.rate;
                 g.weight = l.weight;
                 g.duration = 0.1f;
+                if (l.weightRate != 0 && std::fabs(l.weightRate) < 1e5f) {
+                    g.duration = 1 / std::fabs(l.weightRate);
+                    const float done = l.weightRate > 0 ? l.weight : 1 - l.weight;
+                    g.elapsed = std::clamp(done, 0.0f, 1.0f) * g.duration;
+                }
                 g.bone = l.bone ? vm_.nameText(l.bone) : "";
+                for (size_t k = 0; k < 3; ++k)
+                    g.clear[k] = l.clear[k] ? 1 : 0;
             }
         groups.push_back(g);
     }
@@ -597,9 +614,8 @@ void ScriptLevel::writeMeshGroups(ByteWriter& b, VmObject* a) {
         b.f32(g.pendingWeight);
         b.f32(g.pendingTween);
         str16(g.bone);
-        b.i32(0);
-        b.i32(0);
-        b.i32(0);
+        for (int32_t c : g.clear)
+            b.i32(c);
     }
 }
 

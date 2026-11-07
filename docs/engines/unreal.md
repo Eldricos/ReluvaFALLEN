@@ -96,8 +96,24 @@ What's left is mostly checking against the original, and speed:
    drawing. M03_KiraL2 takes about 5 (November 2026). The scripts alone
    (`ue-run -all`) take at most 2.9 s for a map's 20 s, and 128 s for
    all 74 maps. What's left most is posing and lighting the characters
-   for drawing, the HUD's scripts and the viewer's own text. Drawing on a
-   GPU isn't measured yet.
+   for drawing, the HUD's scripts and the viewer's own text.
+   - **The GPU path** (November 2026): `RELUVA_BENCH="<map> <seconds>"`
+     starts `reluva <target>` straight into that map, plays it, and
+     prints each frame's times: all of the page's update, the level's
+     ticks within it, and the renderer's `endFrame` (submitting and
+     waiting). Run in this container on Mesa's software Vulkan
+     (lavapipe, `SDL_VIDEO_DRIVER=offscreen`), so `endFrame` there is a
+     CPU doing the GPU's work; what's Reluva's own is the rest. Over 20 s:
+     M04_KiraL1 46 ms a frame, of it 5.5 ms the ticks, 35.5 ms
+     `endFrame`, 5.3 ms preparing the draws; M03_KiraL2 89 (11, 71, 7);
+     M10_WorfL1A 219 (34, 161, 24). The ticks per frame grow with slow
+     frames (several ticks each); per second of play they're about
+     2.6 ms of every 60th. So on a real GPU Reluva's own work is about
+     11 ms a frame on M04, about 30 on M10.
+   - Water and wet textures (`Water::render`, a quarter of M10's frame
+     work in `ue-play`) now wrap with a step rather than a remainder per
+     pixel: the same frames (74 textures hashed over 40 steps each),
+     about 6% off M10's 20 s in `ue-play`.
    - Since then (M04_KiraL1, the rifle drawn, 9 s): a character's pose,
      IK and all, is kept in its mesh's poser (the last 8, by everything
      it's made from), and the drawing poses with the level's poser, so

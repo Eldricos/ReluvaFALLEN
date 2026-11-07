@@ -29,7 +29,15 @@ namespace reluva::unreal {
 
 namespace {
 
-constexpr char kMagic[8] = {'R', 'L', 'V', 'S', 'A', 'V', 'E', '2'}; // 2: with the ghosts
+// 2: with the ghosts; 3: a layer's whole state (its clears, least rate and
+// what it's fading in over). 2 still reads.
+constexpr char kMagic[8] = {'R', 'L', 'V', 'S', 'A', 'V', 'E', '3'};
+// The version a file is (its magic's last byte), 0 if it isn't one.
+int saveVersion(const char* magic) {
+    if (std::memcmp(magic, kMagic, 7) != 0 || (magic[7] != '2' && magic[7] != '3'))
+        return 0;
+    return magic[7] - '0';
+}
 
 class Out {
 public:
@@ -158,7 +166,7 @@ Error ScriptLevel::readSaveInfo(const std::filesystem::path& file, SaveInfo& out
     }
     std::ifstream f(file, std::ios::binary);
     char magic[8] = {};
-    if (!f.read(magic, 8) || std::memcmp(magic, kMagic, 8) != 0)
+    if (!f.read(magic, 8) || !saveVersion(magic))
         return Error::fail(file.string() + ": not a saved game of Reluva's");
     std::string head(4096, '\0');
     f.read(head.data(), std::streamsize(head.size()));
@@ -400,6 +408,13 @@ Error ScriptLevel::saveGame(const std::string& slot) {
             out.u8(l.finished);
             out.f32(l.weight);
             out.f32(l.weightRate);
+            out.f32(l.minRate);
+            for (bool c : l.clear)
+                out.u8(c);
+            name(l.fromSequence);
+            out.f32(l.fromFrame);
+            out.f32(l.fromWeight);
+            out.u8(l.fromLoop);
         }
     });
     keyed(skins_, [&](const SkinChannels& channels) {
@@ -537,7 +552,8 @@ Error ScriptLevel::saveGame(const std::string& slot) {
 // paused).
 Error ScriptLevel::restore(const std::filesystem::path& file) {
     std::string data = readFile(file);
-    if (data.size() < 8 || std::memcmp(data.data(), kMagic, 8) != 0)
+    const int version = data.size() < 8 ? 0 : saveVersion(data.data());
+    if (!version)
         return Error::fail(file.string() + ": not a saved game of Reluva's");
     In in(data.substr(8));
     if (in.str() != map_.name())
@@ -736,6 +752,15 @@ Error ScriptLevel::restore(const std::filesystem::path& file) {
             l.finished = in.u8() != 0;
             l.weight = in.f32();
             l.weightRate = in.f32();
+            if (version >= 3) {
+                l.minRate = in.f32();
+                for (bool& c : l.clear)
+                    c = in.u8() != 0;
+                l.fromSequence = name();
+                l.fromFrame = in.f32();
+                l.fromWeight = in.f32();
+                l.fromLoop = in.u8() != 0;
+            }
             layers_[o][group] = l;
         }
     });
@@ -1036,14 +1061,28 @@ VmObject* ScriptLevel::resumeSavedGame(const std::string& playerName, std::strin
                     c.pendingTween = g.pendingTween;
                 }
                 skins_[a].push_back({vm_.name(g.group), c});
-            } else if (active && g.type == 1 && fs::toLower(g.group) != "fullbody") {
+            } else if (active && (g.type == 1 || g.type == 2) && fs::toLower(g.group) != "fullbody") {
+                // A body group, by its mode: looping or not, held, a tween,
+                // fading in or out (its time gone of its length).
                 AnimLayer l;
                 l.sequence = vm_.name(g.sequence);
                 l.bone = g.bone.empty() ? 0 : vm_.name(g.bone);
                 l.rest = fs::toLower(g.group) == "lowertorso";
                 l.frame = g.frame;
-                l.rate = g.rate;
+                l.rate = g.state == 5 ? 0 : g.rate;
+                l.loop = g.state == 3 || g.state == 4;
+                l.finished = g.state == 0;
+                const float fade = g.duration > 0 ? std::clamp(g.elapsed / g.duration, 0.0f, 1.0f) : 1;
                 l.weight = 1;
+                if (g.state == 2 || g.state == 4 || g.state == 5) {
+                    l.weight = fade;
+                    l.weightRate = g.duration > 0 ? 1 / g.duration : 1e6f;
+                } else if (g.state == 6) {
+                    l.weight = 1 - fade;
+                    l.weightRate = g.duration > 0 ? -1 / g.duration : -1e6f;
+                }
+                for (size_t k = 0; k < 3; ++k)
+                    l.clear[k] = g.clear[k] != 0;
                 layers_[a][vm_.name(g.group)] = l;
             }
         }

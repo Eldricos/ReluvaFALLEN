@@ -12,6 +12,7 @@
 #include "common/types.h"
 #include "engines/unreal/package.h"
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -46,13 +47,17 @@ struct MeshStateGroup {
     std::string group, sequence;
     int32_t source = 0;
     float frame = 0;  // seconds into the sequence (a face channel's), or the body's 0-1
-    int32_t type = 0; // 1 playing, 2, 4 a face channel
-    int32_t state = 0; // a face channel's: 0 held, 5 tweening
+    int32_t type = 0; // a body group's Boned (1 true, 2 false); 4 a face channel
+    // The group's mode (Engine.dll's): 0 held still, 1 playing once, 2
+    // fading in to play once, 3 looping, 4 fading in to loop, 5 tweening
+    // (C3DTweenAnim), 6 fading out. A face channel's: 0 held, 5 tweening.
+    int32_t state = 0;
     float rate = 1, weight = 1;
     float fromFrame = 0, fromWeight = 0, elapsed = 0, duration = 1;
     std::string pendingSequence;
     float pendingFrame = 0, pendingWeight = 0, pendingTween = 0;
-    std::string bone; // the bone a layer is played from
+    std::string bone; // its InheritBone: what its clears turn
+    std::array<int32_t, 3> clear{}; // ClearYaw, ClearPitch, ClearRoll (fairly sure)
 };
 struct MeshState {
     std::string mesh;
