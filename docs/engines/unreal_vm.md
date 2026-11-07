@@ -571,19 +571,27 @@ smooth move's second wall is told as it is.
 
 **Out of the world** (zone 0: the BSP's last node's zone for the side
 the point is on, as `UModel::PointRegion` has it), checked before each
-move as Engine.dll's physics does: a pawn walking, or anything falling,
-is told `FellOutOfWorld` (an actor's script destroys it, a pawn's dies,
-`'Fell'`); a pawn flying or Newtonian that collides with the world is
-destroyed ("flew out of the world"), a player's only doesn't move; any
-other Newtonian actor colliding with the world is destroyed, and a
-projectile whatever. Over all 74 maps' first 20 seconds it happens once:
-M07_WorfL1's player is a pawn saved in the map (`DS9_WorfBeaten0`, which
-`GameInfo.Login` reuses, as it does any player pawn with no player) at
-(928, 531, 1059), behind a wall, inside solid: walking there, Worf dies
-at once. Before, he stood stuck in the wall. Nothing in Engine.dll
-moves, hides or removes such a pawn, and the level's start
-(`DS9_PlayerStart0`, at (1, 571, 1046)) isn't used for one reused, so
-what the original does there is open.
+move as Engine.dll's physics does: an AI pawn walking, or anything but
+The Fallen's player falling, is told `FellOutOfWorld` (an actor's script
+destroys it, a pawn's dies, `'Fell'`); a pawn flying or Newtonian that
+collides with the world is destroyed ("flew out of the world"), a
+player's only doesn't move; any other Newtonian actor colliding with the
+world is destroyed, and a projectile whatever. The Fallen's player has
+walking and falling of its own (`ACTVE_PlayerPawn::physWalking`,
+`physFalling`), which don't look at the zone.
+
+That matters on M07_WorfL1: its player is a pawn saved in the map
+(`DS9_WorfBeaten0`, which `GameInfo.Login` takes up, as it does any
+player pawn with no player) parked inside the wall at (928, 531, 1059)
+(the editor's own saved `Region` there is zone 0, no leaf) while the
+opening plays with a stand-in (`CIN_WorfBeaten`): the camera chain, the
+Jem'Hadar's lines (the last, KAR's "Leave him here...", sends
+`GCM07_JemExit`), the chain that starts, whose commander sends
+`GCM07_WorfGetup`, and that chain's last commander, at its end, sends
+`WorfPlaystart`: a one-point spline (`CTVE_Spline0`, its `MoveActorTag`
+the pawn's tag, which the pawn hooks itself to in `PreBeginPlay`) puts
+the player at the start, (−2.5, 582, 1059), about 110 seconds in. From
+there Worf walks.
 
 **Finding a ledge or a ladder**, as Engine.dll does. Each search turns
 the player to face into the wall before asking its scripts'

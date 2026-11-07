@@ -1153,6 +1153,11 @@ bool ScriptLevel::outOfWorld(VmObject* a, int physics) {
     if (!region || region->fields.size() < 3 || region->fields[2].asInt() != 0)
         return false;
     const bool pawn = vm_.isA(a, "Pawn");
+    // The Fallen's player has walking and falling of its own
+    // (ACTVE_PlayerPawn::physWalking, physFalling), which don't look at the
+    // zone: no FellOutOfWorld for it.
+    if ((physics == kPhysWalking || physics == kPhysFalling) && vm_.isA(a, "CTVE_PlayerPawn"))
+        return false;
     auto log = [&](const char* what) {
         if (vm_.logger)
             vm_.logger(vm_.objectName(a) + what);
