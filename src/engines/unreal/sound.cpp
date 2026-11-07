@@ -6,6 +6,7 @@
 #include "engines/unreal/properties.h"
 
 #include "common/audio/decode.h"
+#include "common/audio/tracker.h"
 #include "common/fs.h"
 
 #include <cctype>
@@ -46,6 +47,16 @@ bool EmbeddedFile::isPlaceholder() const {
 Error decodeEmbeddedSound(const EmbeddedFile& file, audio::Sound& out) {
     if (file.isPlaceholder())
         return Error::fail("a placeholder with no sound in it (" + std::to_string(file.data.size()) + " bytes)");
+    // A Music object's tracker module (IT, S3M, XM, MOD): played through
+    // from its first order, at 44,100 Hz, to where it loops back (at most
+    // ten minutes), its loop the sound's own.
+    const std::string fmt = fs::toLower(file.format);
+    if (fmt == "it" || fmt == "s3m" || fmt == "xm" || fmt == "mod") {
+        audio::TrackerModule module;
+        if (Error err = audio::loadTrackerModule(file.data, module))
+            return Error::fail("format " + file.format + ": " + err.message);
+        return audio::renderTrackerModule(module, 44100, 0, 600, out);
+    }
     if (Error err = audio::decodeSound(file.data, out)) {
         std::string head;
         for (size_t i = 0; i < file.data.size() && i < 8; ++i) {

@@ -5909,8 +5909,15 @@ int cmdUeCheck(int argc, char** argv) {
                     }
                 }
             } else if (cls == "music") {
+                // Read, and played through (the tracker player) to its loop.
                 EmbeddedFile f;
-                record("music", readEmbeddedFile(*pkg, int(i), f));
+                reluva::Error err = readEmbeddedFile(*pkg, int(i), f);
+                reluva::audio::Sound s;
+                if (!err)
+                    err = decodeEmbeddedSound(f, s);
+                if (err)
+                    err.message = pkg->path(int32_t(i) + 1) + ": " + err.message;
+                record("music", err);
             } else if (cls == "palette") {
                 Palette p;
                 record("palettes", readPalette(*pkg, int(i), p));

@@ -171,6 +171,14 @@ std::vector<std::string> browsedPackages(const PackageSet& packages, const char*
     return out;
 }
 
+// The sound packages, then the music ones (.umx), then the rest.
+std::vector<std::string> soundPackages(const PackageSet& packages) {
+    std::vector<std::string> out = browsedPackages(packages, ".uax");
+    std::vector<std::string> music = packages.names(".umx");
+    out.insert(out.begin() + std::ptrdiff_t(packages.names(".uax").size()), music.begin(), music.end());
+    return out;
+}
+
 } // namespace
 
 // --- ObjectBrowser ----------------------------------------------------------------------
@@ -356,10 +364,14 @@ void TextureViewer::draw() {
 // --- SoundViewer ------------------------------------------------------------------------
 
 namespace {
-bool isSoundClass(std::string_view c) { return fs::toLower(c) == "sound"; }
+// Sounds and Music (a tracker module, rendered to play: other UE1 games').
+bool isSoundClass(std::string_view c) {
+    const std::string l = fs::toLower(c);
+    return l == "sound" || l == "music";
+}
 } // namespace
 
-SoundViewer::SoundViewer(ViewerContext& ctx) : Page(ctx), browser_(ctx.packages, browsedPackages(ctx.packages, ".uax"), isSoundClass) {}
+SoundViewer::SoundViewer(ViewerContext& ctx) : Page(ctx), browser_(ctx.packages, soundPackages(ctx.packages), isSoundClass) {}
 
 SoundViewer::~SoundViewer() { deactivate(); }
 

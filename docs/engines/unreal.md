@@ -42,7 +42,7 @@ instruction, or kept in the repository.
 | Properties | tagged properties of every type, state frames ([package.md](../formats/unreal/package.md)) |
 | Textures | P8 with palettes (masked colour 0), DXT1, RGB8, RGBA8; all The Fallen's stored textures decode. Procedural ones play: fire, water, wave (lit as bumps), wet, ice, and The Fallen's FLC ones ([texture.md](../formats/unreal/texture.md)); the fire, wave and wet ones are Fire.dll's (byte for byte, run against it in an emulator), and so is every texture's pacing |
 | Sounds | the embedded WAV, played through `common/audio`; The Fallen's music streamed from `mp3/` in place of its placeholder Sounds ([sound.md](../formats/unreal/sound.md)) |
-| Music | The Fallen has no music modules: its music is the MP3s (above), which play. Other UE1 games' modules (`.umx`) are extracted (`ue-extract`) but not played: there's no tracker player yet |
+| Music | The Fallen has no music modules: its music is the MP3s (above), which play. Other UE1 games' modules (`.umx`: IT, S3M, XM, MOD) play on the Sounds page through Reluva's tracker player (`common/audio/tracker.cpp`), rendered from the first order to where the song loops back; `ue-check` plays each through. A level's `Song` isn't played: The Fallen's audio driver (Miles.dll) never reads it (no module player, `RegisterMusic` empty), and the drivers that do (Galaxy's) aren't to hand to read their transitions from |
 | Levels | all 74 of The Fallen's maps read and draw. The level's BSP model: points, vectors, nodes, surfaces, vertices ([model.md](../formats/unreal/model.md)); polygons drawn textured, with masked, translucent and modulated surfaces, and only the zones seen through the zone portals. Lit by lightmaps worked out from the shadow bits and light actors, with zone ambient ([lighting.md](../formats/unreal/lighting.md)): lights' types change their brightness (flicker, pulse) and their effects draw their patterns across the surfaces (a torch's waver, water's shimmer, waves rolling out), scripted lights follow their scripts, lights' coronas glow where they're seen, lit actors light what's near them as they move, and movers are lit where they are. Movers (doors, lifts) from their own brushes, moved by their scripts, and the sky from the level's sky zone ([actors.md](../formats/unreal/actors.md)). Lightmaps, movers, the sky and the light effects' patterns not yet compared with the original running |
 | Meshes | all The Fallen's Mesh and LodMesh exports read (455 and 6), with their animations ([mesh.md](../formats/unreal/mesh.md)): vertex animation, and characters posed from their skeletons with their own clips and the shared animation sets; layers on parts of the body, faces (blink, brows, mouth), tweens from the pose showing, and the scripts' bends and IK; attachment points, where held things go, checked against the meshes' own precomputed places (`reluva-tool ue-points`). Lit where they stand ([actors.md](../formats/unreal/actors.md)), casting shadows of their own shape onto the floor ([lighting.md](../formats/unreal/lighting.md)); a Meshes page |
 | Viewer | Maps (3D, fly camera from the PlayerStart; Enter plays the level), Meshes, Textures, Sounds, Movies, Packages (tables and properties) |
@@ -125,9 +125,10 @@ What's left is mostly checking against the original, and speed:
      the frames the same to the pixel.
    - The HUD is the game's own `PostRender` script once a frame (4%);
      only a faster VM makes it cheaper.
-3. **Other UE1 games.** A tracker player for music modules, and the
-   layouts other licensees changed, once there's a second game to check
-   against.
+3. **Other UE1 games.** The layouts other licensees changed, once
+   there's a second game to check against. Its music modules play
+   (above), checked only on modules the tests build: not yet on a real
+   song, nor its `Song` and transitions in a level.
 
 The game's own gap, which nothing here can fill: no dialogue table for
 mission 12.

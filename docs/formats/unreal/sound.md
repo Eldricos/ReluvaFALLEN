@@ -31,4 +31,15 @@ Sound and Music objects hold a whole file:
 | bytes | the file: a RIFF WAVE for sounds, decoded by `common/audio/wav.cpp` |
 
 Whether Music has exactly this layout in every version is to be checked
-(`reluva-tool ue-check` counts music objects read).
+(`reluva-tool ue-check` counts music objects read and played).
+
+A Music object's module plays through Reluva's tracker player
+(`common/audio/tracker.cpp`, written from the formats' public
+descriptions): MOD (M.K., FLTn, xCHN), S3M, XM (instruments, envelopes,
+delta samples) and IT (samples or instruments, envelopes, compressed
+samples). It renders the song from an order (a UE1 song section) at
+44,100 Hz to where it jumps back to an order already played, at most ten
+minutes, and that point is the sound's loop. Not done: new-note actions
+(a new note cuts the old), auto-vibrato, pitch and filter envelopes,
+tremor, panbrello, 15-sample MODs and S3M's ADPCM samples. The Fallen
+has no modules; checked on modules its tests build.
