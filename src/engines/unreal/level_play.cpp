@@ -644,7 +644,8 @@ bool LevelPlay::look(VmObject* a, Look& out) {
             if (l.fromSequence)
                 out.layers.push_back(
                     {vm.nameText(l.fromSequence), bone, l.rest, l.fromFrame, l.fromWeight, {}, l.fromLoop, vm.nameText(group)});
-            out.layers.push_back({vm.nameText(l.sequence), bone, l.rest, l.frame, l.weight, l.clear, l.loop, vm.nameText(group)});
+            out.layers.push_back({vm.nameText(l.sequence), bone, l.rest, l.frame, l.weight, l.clear, l.loop,
+                                  vm.nameText(group), l.weightRate != 0 ? l.shown : nullptr, l.weightRate < 0});
         }
     out.faces.clear();
     if (const auto* skins = level_->skinsOf(a))

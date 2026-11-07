@@ -167,6 +167,9 @@ public:
             std::array<bool, 3> clear{}; // its first bone keeps the actor's own yaw, pitch, roll
             bool loop = false;
             std::string group; // its animation group's name (FullBody, LowerTorso, UpperTorso)
+            // Fading: the pose showing when the fade began, and whether out.
+            std::shared_ptr<const std::vector<std::array<float, 12>>> from;
+            bool fadingOut = false;
         };
         std::vector<Layer> layers;
         // Its face's channels away from the neutral face (C3DSetSkinAnim:

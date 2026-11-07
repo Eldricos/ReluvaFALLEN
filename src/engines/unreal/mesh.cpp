@@ -2087,6 +2087,8 @@ bool LayeredPoser::Impl::locals(Anim baseAnim, float fraction, const std::vector
         key.push_back(l.loop ? 'L' : 'H');
         bytes(&l.group, sizeof l.group);
         bytes(&l.clearBone, sizeof l.clearBone);
+        bytes(&l.from, sizeof l.from); // the same pose while a fade lasts
+        key.push_back(l.fadingOut ? 'O' : 'I');
     }
     key.push_back(adjust ? 'A' : '-');
     if (adjust) {
@@ -2224,6 +2226,19 @@ bool LayeredPoser::Impl::localsUncached(Anim baseAnim, float fraction, const std
                 theirs = cleared(theirs, parentWorld, bindWorlds[i], layer.clear, layer.weight);
             }
             const float w = std::min(1.0f, layer.weight);
+            if (layer.from && i < layer.from->size()) {
+                // As Engine.dll fades: from the pose showing when the fade
+                // began, held there; in, toward the layer's; out, toward
+                // what's under it now (its weight falling 1 to 0).
+                const Mat43& shown = (*layer.from)[i];
+                if (layer.fadingOut)
+                    for (size_t k = 0; k < placed.size(); ++k)
+                        placed[k] += (shown[k] - placed[k]) * w;
+                else
+                    for (size_t k = 0; k < placed.size(); ++k)
+                        placed[k] = shown[k] + (theirs[k] - shown[k]) * w;
+                continue;
+            }
             for (size_t k = 0; k < placed.size(); ++k)
                 placed[k] += (theirs[k] - placed[k]) * w;
         }
@@ -2919,6 +2934,11 @@ std::vector<std::array<float, 12>> LayeredPoser::bindSkeleton() const {
 }
 
 int LayeredPoser::boneIndex(std::string_view name) const { return impl->indexOf(name); }
+
+bool LayeredPoser::locals(Anim base, float fraction, const std::vector<Layer>& layers,
+                          std::vector<std::array<float, 12>>& out) const {
+    return impl->locals(base, fraction, layers, out, nullptr);
+}
 
 int LayeredPoser::groupIndex(std::string_view name) const {
     for (size_t g = 0; g < impl->groupNames.size(); ++g)

@@ -187,6 +187,12 @@ public:
         // it. And the bone its clear is done on (its InheritBone; -1 none).
         int group = -1;
         int clearBone = -1;
+        // Fading (Engine.dll's way): the pose showing when the fade began
+        // (each bone in its parent), blended from: in, toward this layer's
+        // pose; out (`fadingOut`), toward what's under. None: crossfaded by
+        // weight from what's under now.
+        const std::vector<std::array<float, 12>>* from = nullptr;
+        bool fadingOut = false;
     };
     // Where the skeleton's axes go in the actor's space (as the mesh is
     // placed): for the layers' clear, which needs the actor's axes.
@@ -256,6 +262,10 @@ public:
     // ... and the face's channels over that.
     bool pose(Anim base, float fraction, const std::vector<Layer>& layers, std::vector<Vec3f>& out,
               const Adjust* adjust = nullptr, const std::vector<Face>* faces = nullptr) const;
+    // Each bone's place in its parent in that pose, before any adjusting
+    // (a fade's starting pose).
+    bool locals(Anim base, float fraction, const std::vector<Layer>& layers,
+                std::vector<std::array<float, 12>>& out) const;
     // Whether it has a face (clips of vertex keys) to pose.
     bool hasFace() const;
     // A bone's place in the same pose: its origin and axes (rows X, Y, Z),

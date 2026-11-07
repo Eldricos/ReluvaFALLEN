@@ -148,6 +148,21 @@ ScriptLevel::ActorMesh* ScriptLevel::actorMesh(VmObject* a) {
     return it->second.get();
 }
 
+std::shared_ptr<const std::vector<std::array<float, 12>>> ScriptLevel::shownPose(VmObject* a) {
+    ActorMesh* m = actorMesh(a);
+    const Value* seqValue = prop(a, "AnimSequence");
+    if (!m || !m->poser || !seqValue || !seqValue->i)
+        return nullptr;
+    const std::string seq = vm_.nameText(seqValue->i);
+    const Value* frameValue = prop(a, "AnimFrame");
+    std::vector<std::string> names;
+    const std::vector<LayeredPoser::Layer> layers = posedLayers(a, *m, names);
+    auto out = std::make_shared<std::vector<std::array<float, 12>>>();
+    if (!m->poser->locals({seq, pb(a, "bAnimLoop")}, frameValue ? frameValue->asFloat() : 0, layers, *out))
+        return nullptr;
+    return out;
+}
+
 // The actor's layered animations showing (C3DPlayAnim), as the poser takes
 // them; `names` keeps their animations' names while they're used.
 std::vector<LayeredPoser::Layer> ScriptLevel::posedLayers(VmObject* a, ActorMesh& m, std::vector<std::string>& names) {
@@ -183,7 +198,8 @@ std::vector<LayeredPoser::Layer> ScriptLevel::posedLayers(VmObject* a, ActorMesh
             layers.push_back({names.back(), l.fromFrame, &part->second, l.fromWeight, {}, l.fromLoop, groupIndex, -1});
         }
         names.push_back(vm_.nameText(l.sequence));
-        layers.push_back({names.back(), l.frame, &part->second, l.weight, l.clear, l.loop, groupIndex, clearBone});
+        layers.push_back({names.back(), l.frame, &part->second, l.weight, l.clear, l.loop, groupIndex, clearBone,
+                          l.weightRate != 0 ? l.shown.get() : nullptr, l.weightRate < 0});
     }
     return layers;
 }

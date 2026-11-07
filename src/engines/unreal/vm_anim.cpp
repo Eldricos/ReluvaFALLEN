@@ -411,10 +411,13 @@ void ScriptLevel::playLayer(VmObject* a, NameId group, NameId sequence, float ra
     }
     if (!newBone)
         bone = l.bone, clear = l.clear;
-    // Replacing one that shows: it stays as it is under this one, which
-    // fades in over it from nothing.
+    // Fading in, as Engine.dll does: from the pose showing now (whatever
+    // played on these bones, the layer it replaces too), held there.
+    // Without it, a layer it replaces stays as it is under this one,
+    // which fades in over it from nothing.
     l.fromSequence = 0;
-    if (tween > 0 && l.sequence && l.weight > 0 && (l.sequence != sequence || l.bone != bone)) {
+    l.shown = tween > 0 ? shownPose(a) : nullptr;
+    if (!l.shown && tween > 0 && l.sequence && l.weight > 0 && (l.sequence != sequence || l.bone != bone)) {
         l.fromSequence = l.sequence;
         l.fromFrame = std::max(0.0f, l.frame);
         l.fromWeight = l.weight;
@@ -459,6 +462,8 @@ void ScriptLevel::tweenOutLayer(VmObject* a, NameId group, float seconds) {
     auto l = it->second.find(group);
     if (l == it->second.end())
         return;
+    // From the pose showing now toward what's under, as Engine.dll fades.
+    l->second.shown = seconds > 0 ? shownPose(a) : nullptr;
     l->second.weightRate = seconds > 0 ? -1 / seconds : -1e6f;
     l->second.fromSequence = 0;
 }
@@ -520,6 +525,7 @@ void ScriptLevel::animateLayers(VmObject* a, float dt) {
         if (l.weightRate > 0 && l.weight >= 1) {
             l.weightRate = 0;
             l.fromSequence = 0; // faded in: what it replaced is gone
+            l.shown.reset();
         }
         if (l.finished)
             continue;

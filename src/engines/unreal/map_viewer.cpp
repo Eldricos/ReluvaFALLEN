@@ -3300,7 +3300,7 @@ bool MapViewer::drawLayered(VmObject* actor, const LevelPlay::Look& look, int at
         }
         if (!part->second.empty())
             layers.push_back({l.anim, l.frame, &part->second, l.weight, l.clear, l.loop, p.poser->groupIndex(l.group),
-                              l.bone.empty() ? -1 : p.poser->boneIndex(l.bone)});
+                              l.bone.empty() ? -1 : p.poser->boneIndex(l.bone), l.from.get(), l.fadingOut});
     }
     std::vector<LayeredPoser::Face> faces;
     if (p.poser->hasFace())

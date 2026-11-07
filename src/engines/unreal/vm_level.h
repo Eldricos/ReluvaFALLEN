@@ -324,6 +324,12 @@ public:
         NameId fromSequence = 0;
         float fromFrame = 0, fromWeight = 0;
         bool fromLoop = false;
+        // The pose showing when its fade (in or out) began, each bone in
+        // its parent, before IK: Engine.dll blends a fading part's bones
+        // from it, held there (in toward the layer, out toward what's
+        // under). None if it couldn't be had: then the layer it replaced
+        // is held under it instead (fromSequence).
+        std::shared_ptr<const std::vector<std::array<float, 12>>> shown;
     };
     // A face channel, as the engine keeps it (an AnimGroupState after the
     // mesh's own groups): its sequence, frame (seconds into it) and
@@ -766,6 +772,9 @@ private:
     const std::vector<Vec>* posedVertices(VmObject* actor, ActorMesh& mesh); // packed, as this tick has them
     const std::vector<std::array<float, 12>>* posedSkeleton(VmObject* actor, ActorMesh& mesh); // its bones, the same
     std::vector<LayeredPoser::Layer> posedLayers(VmObject* actor, ActorMesh& mesh, std::vector<std::string>& names);
+    // The pose an actor shows now, each bone in its parent, its layers on
+    // and before IK (a fade's start: AnimLayer::shown).
+    std::shared_ptr<const std::vector<std::array<float, 12>>> shownPose(VmObject* actor);
     bool attachFrame(VmObject* actor, ActorMesh& mesh, const MeshAttachPoint& point, Vec& at, std::array<Vec, 3>& axes,
                      std::array<Vec, 3>* raw = nullptr);
     void toWorld(VmObject* actor, Vec& at, std::array<Vec, 3>* axes);

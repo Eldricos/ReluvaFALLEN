@@ -1850,9 +1850,14 @@ natives:
   start until it's in. The rate is a plain multiplier of the
   sequence's own speed.
 - **Holding a pose:** `C3DTweenAnim` fades to the first frame.
-- **Replacing one:** a layer started on a group whose layer shows holds
-  the old one where it was, under the new one, until the new one has
-  faded in (a combo's right punch into the left).
+- **Fading, as Engine.dll does:** a layer fading in or out blends its
+  bones from the pose showing when the fade began (each bone in its
+  parent, before IK), held there: in, toward the layer's pose; out
+  (`C3DTweenOutAnim`), toward what's under it now, as its weight falls.
+  So a layer started over one that shows (a combo's right punch into the
+  left) fades from where the arm was, the old one with it. A saved game
+  loaded mid-fade has no such pose: that fade crossfades by weight from
+  what's under, the layer it replaced held there.
 - **Keeping the actor's turn:** `ClearYaw`, `ClearPitch` and `ClearRoll`
   act on the layer's InheritBone alone, as Engine.dll does: its turn
   from its bind pose in the skeleton's space, split into a turn about
@@ -2159,10 +2164,6 @@ Not done:
   the rotator carried through that swap, the actor's own turn left out
   (Reluva takes the swap from the mesh's placement, the same for The
   Fallen's meshes): all as Reluva has them.)
-- **Not as the engine:** a layer fading in or out crossfades by its
-  weight from what's under it (the replaced layer held there); the
-  engine blends each bone from the pose shown at the fade's start. The
-  same at the ends, not always midway.
 - **The IK, as Engine.dll's** (`C3DApplyIK` and its solver, read November
   2026):
   - **The chains are data.** Shared.u's `Male` keeps eight (the player
